@@ -29,12 +29,18 @@ Status: `todo` · `in-progress` · `waiting-on-you` · `done`
 
 | # | Item | Needs checks | Status |
 |---|---|---|---|
-| 2.1 | W1 Landing page + Training night tutorial | review, playtest, feel, player-test | in-progress |
-| 2.2 | W2 Recon (extended OSM features incl. schools, sports, tennis, forests, bus routes), mission matching (3 suggested missions), tactical map + minimap | review, map-check, playtest | in-progress |
-| 2.3 | W3 Animated zombies (procedural shader animation) + layered explosions, smoke, fires | review, playtest, feel | in-progress |
+| 2.1 | W1 Landing page + Training night tutorial | review, playtest, feel, player-test | done (PR, checked) |
+| 2.2 | W2 Recon (extended OSM features incl. schools, sports, tennis, forests, bus routes), mission matching (3 suggested missions), tactical map + minimap | review, map-check, playtest | done (PR, checked) |
+| 2.3 | W3 Animated zombies (procedural shader animation) + layered explosions, smoke, fires | review, playtest, feel | done (PR, checked) |
 | 2.4 | W4 Map detail: trees, parked cars, roof shapes, pools, field markings, lit windows | review, playtest | todo (after 2.2) |
 | 2.5 | W5 Music and voice (service choice pending) | feel, player-test | waiting-on-you |
 | 2.6 | "Last bus home" bus-route escort | — | later |
+| 2.8 | **Way in from the front page** (polish): "Try the sample town" opens recon; "Brief me" builds the typed address; plain-English errors; a staged loading readout; the front-page button no longer overlaps the recon title | review, playtest, player-test | todo |
+| 2.9 | **Small polish**: hide TIME and FRIENDLY FIRE in training; fade the map edge at the 105's view; vary "Other suggestions"; wording for bad coordinates | review, playtest | todo |
+| 2.10 | **Phone layout** (parked: the game is mouse-and-keyboard for now): HUD radio/sensor/minimap overlaps; coach card on short wide screens | playtest | parked |
+| 2.11 | **Grades and personal bests** (new feature; critic: replay 4/10) | — | waiting-on-you |
+| 2.12 | **Settings panel**: volume, mouse sensitivity, invert-Y, Reduce flicker toggle, key bindings (new feature) | — | waiting-on-you |
+| 2.13 | **Your street in the sky**: a "your address" pin on recon and minimap; one mission per map built on your home (new feature; privacy check needed) | — | waiting-on-you |
 | 2.7 | School evacuation missions (guardrails pending) | — | waiting-on-you |
 
 ### Earlier phase 2 notes
