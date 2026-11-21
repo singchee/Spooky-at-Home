@@ -1,4 +1,4 @@
-import type { MapData } from '../map/types';
+import type { MapData, V2 } from '../map/types';
 import { makeSampleTown } from '../map/sample';
 import { fetchOverpass, geocode, parseOverpass, type OverpassJson } from '../map/overpass';
 import { centroid } from '../map/geom';
@@ -22,6 +22,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   el('div', 'card-kicker', 'GUNSHIP · NIGHT SHIFT', card);
   el('h1', undefined, 'SPOOKY AT HOME', card);
   el('p', undefined, 'Circle your own neighbourhood at night. Get the survivors home. Mind the cold-blooded ones.', card);
+  el('p', 'small', 'Best with a mouse and keyboard.', card);
 
   let map: MapData | null = last?.map ?? null;
 
@@ -57,8 +58,10 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
     status.textContent = describe(m);
   };
   sampleBtn.addEventListener('click', () => setMap(makeSampleTown()));
+  let busy = false;
   const search = async () => {
-    if (!q.value.trim()) return;
+    if (busy || !q.value.trim()) return;
+    busy = true;
     searchBtn.disabled = true;
     try {
       status.textContent = 'Finding the place…';
@@ -69,11 +72,12 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
     } catch (e) {
       status.textContent = `Couldn't build that place: ${(e as Error).message}. Try again in a minute, or use the sample town.`;
     } finally {
+      busy = false;
       searchBtn.disabled = false;
     }
   };
   searchBtn.addEventListener('click', search);
-  q.addEventListener('keydown', (e) => e.key === 'Enter' && search());
+  q.addEventListener('keydown', (e) => e.key === 'Enter' && !e.repeat && search());
   file.addEventListener('change', async () => {
     const f = file.files?.[0];
     if (!f) return;
@@ -128,7 +132,17 @@ function trim(m: MapData): MapData {
 export function loadMapFile(data: unknown, filename: string): MapData {
   const d = data as Partial<MapData> & Partial<OverpassJson>;
   if (Array.isArray(d.buildings) && Array.isArray(d.roads) && typeof d.half === 'number') {
-    return { name: String(d.name ?? filename), half: d.half, buildings: d.buildings, roads: d.roads, areas: d.areas ?? [], pois: d.pois ?? [], attribution: d.attribution ?? 'Map data © OpenStreetMap contributors (ODbL)' };
+    if (!Number.isFinite(d.half) || d.half < 100 || d.half > 2000) throw new Error('map size out of range');
+    const okPts = (p: unknown, min: number) =>
+      Array.isArray(p) && p.length >= min && p.every((q) => q && Number.isFinite((q as V2).x) && Number.isFinite((q as V2).z));
+    const buildings = d.buildings.filter((b) => okPts(b?.pts, 3)).map((b) => ({ ...b, height: Number.isFinite(b.height) ? b.height : 7 }));
+    const roads = d.roads.filter((r) => okPts(r?.pts, 2)).map((r) => ({ ...r, width: Number.isFinite(r.width) ? r.width : 6 }));
+    const areas = (d.areas ?? []).filter((a) => okPts(a?.pts, 3));
+    const pois = (d.pois ?? []).filter((p) => p && Number.isFinite(p.p?.x) && Number.isFinite(p.p?.z));
+    if (!roads.length) throw new Error('no usable roads');
+    // The credit is fixed: a file can't remove or change it.
+    const sample = d.attribution === 'Procedurally generated sample town';
+    return trim({ name: String(d.name ?? filename).slice(0, 80), half: d.half, buildings, roads, areas, pois, attribution: sample ? d.attribution! : 'Map data © OpenStreetMap contributors (ODbL)' });
   }
   if (Array.isArray(d.elements)) {
     let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;

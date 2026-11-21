@@ -12,11 +12,11 @@ import { mulberry32 } from '../util/rng';
  */
 export type Sig = [number, number, number];
 export const SIG: Record<string, Sig> = {
-  ground: [0.2, 0.12, 0],
-  road: [0.33, 0.16, 0],
-  park: [0.195, 0.09, 0],
-  wood: [0.2, 0.06, 0],
-  water: [0.1, 0.04, 0],
+  ground: [0.2, 0.07, 0],
+  road: [0.33, 0.1, 0],
+  park: [0.19, 0.05, 0],
+  wood: [0.2, 0.035, 0],
+  water: [0.1, 0.02, 0],
   tree: [0.235, 0.07, 0],
 };
 
@@ -39,15 +39,17 @@ export function buildWorld(map: MapData, seed: number): World {
   const rng = mulberry32(seed ^ 0x5bd1e995);
   const group = new THREE.Group();
   const disposables: { dispose(): void }[] = [];
+  // Buildings are lit so their shapes read; flat surfaces are unlit so their sensor values are exact.
   const lit = new THREE.MeshLambertMaterial({ vertexColors: true });
-  disposables.push(lit);
+  const flat = new THREE.MeshBasicMaterial({ vertexColors: true });
+  disposables.push(lit, flat);
 
   // Ground
   const size = map.half * 2 + 1600;
   const groundGeo = new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2);
   groundGeo.deleteAttribute('uv');
   colorAttr(groundGeo, SIG.ground);
-  const ground = new THREE.Mesh(groundGeo, lit);
+  const ground = new THREE.Mesh(groundGeo, flat);
   group.add(ground);
   disposables.push(groundGeo);
 
@@ -65,7 +67,7 @@ export function buildWorld(map: MapData, seed: number): World {
       /* skip polygons three.js can't triangulate */
     }
   }
-  if (areaGeos.length) addMerged(areaGeos);
+  if (areaGeos.length) addMerged(areaGeos, flat);
 
   // Roads as flat ribbons
   const pos: number[] = [];
@@ -105,7 +107,8 @@ export function buildWorld(map: MapData, seed: number): World {
   for (const b of map.buildings) {
     if (b.pts.length < 3 || polygonArea(b.pts) < 4) continue;
     try {
-      const g = new THREE.ExtrudeGeometry(shapeOf(b.pts), { depth: Math.max(2.5, b.height), bevelEnabled: false });
+      const h = Number.isFinite(b.height) ? Math.max(2.5, b.height) : 7;
+      const g = new THREE.ExtrudeGeometry(shapeOf(b.pts), { depth: h, bevelEnabled: false });
       g.rotateX(-Math.PI / 2);
       g.deleteAttribute('uv');
       colorAttr(g, [0.25 + rng() * 0.1, 0.2 + rng() * 0.1, 0]);
@@ -175,10 +178,10 @@ export function buildWorld(map: MapData, seed: number): World {
     disposables.push(lg, lm);
   }
 
-  function addMerged(geos: THREE.BufferGeometry[]): THREE.Mesh {
+  function addMerged(geos: THREE.BufferGeometry[], material: THREE.Material = lit): THREE.Mesh {
     const merged = mergeGeometries(geos, false) ?? geos[0];
     geos.forEach((g) => g !== merged && g.dispose());
-    const mesh = new THREE.Mesh(merged, lit);
+    const mesh = new THREE.Mesh(merged, material);
     group.add(mesh);
     disposables.push(merged);
     return mesh;

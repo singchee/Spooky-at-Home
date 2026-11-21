@@ -69,7 +69,10 @@ const KIND_LABEL: Record<string, string> = {
   fire_station: 'the fire station', library: 'the library', place_of_worship: 'the church', clinic: 'the clinic',
 };
 
-const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+const fmtTime = (secs: number) => {
+  const s = Math.max(0, Math.ceil(secs));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
 
 function compass(from: V2, to: V2): string {
   const a = (Math.atan2(to.x - from.x, -(to.z - from.z)) * 180) / Math.PI; // 0 = north
@@ -165,7 +168,9 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
     const centres: V2[] = [];
     for (const c of candidates) {
       if (centres.length >= nHordes) break;
-      if (centres.every((o) => dist(o, c) > 130)) centres.push(grid.nearestFree(c));
+      const free = grid.nearestFree(c);
+      if (grid.isBlocked(free.x, free.z)) continue; // never put a horde inside a building
+      if (centres.every((o) => dist(o, free) > 130)) centres.push(free);
     }
     if (centres.length < 2) return { ok: false, reason: 'Could not find room for the hordes on this map.' };
     const per = 6 + 3 * d;
@@ -258,6 +263,13 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
 
   // defend
   const hold = 150 + 15 * d;
+  // The waves must be able to reach the building, or the mission can't be lost.
+  const perimeter = grid.perimeterCells(safehouse.poly);
+  const field = grid.flowField(perimeter);
+  const reachableSpawns = roadNodesWithin(g, map, 0.95).filter((i) => grid.fieldAt(field, g.nodes[i].x, g.nodes[i].z) > 0);
+  if (!perimeter.length || reachableSpawns.length < 5) {
+    return { ok: false, reason: `Zombies can't reach ${safehouse.name} on foot, so it can't be defended. Try another mission type or seed.` };
+  }
   const stragglerStarts = roadNodesWithin(g, map, 0.9).filter((i) => roadDist[i] > 110 && roadDist[i] < 220);
   const survivors: SurvivorPlan[] = [];
   if (stragglerStarts.length) {

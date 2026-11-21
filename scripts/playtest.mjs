@@ -58,6 +58,34 @@ try {
     if (errors.length) exitCode = 1;
     await page.close();
   }
+  // Photosensitivity: holding H (white/black-hot) must not strobe the screen.
+  {
+    const page = await browser.newPage({ viewport: { width: 640, height: 360 }, deviceScaleFactor: 1 });
+    await page.goto(`http://localhost:${PORT}/?autostart=1&type=clear&difficulty=1&seed=3`);
+    await page.waitForFunction(() => window.__spooky?.ready === true, null, { timeout: 30000 });
+    await page.waitForTimeout(1500);
+    const mean = () => page.evaluate(() => {
+      const c = document.querySelector('canvas');
+      const g = document.createElement('canvas'); g.width = 64; g.height = 36;
+      const x = g.getContext('2d'); x.drawImage(c, 0, 0, 64, 36);
+      const d = x.getImageData(0, 0, 64, 36).data; let s = 0;
+      for (let i = 0; i < d.length; i += 4) s += d[i];
+      return s / (d.length / 4);
+    });
+    const samples = [await mean()];
+    await page.keyboard.down('h');
+    for (let i = 0; i < 12; i++) { await page.waitForTimeout(80); samples.push(await mean()); }
+    await page.keyboard.up('h');
+    let flips = 0;
+    for (let i = 1; i < samples.length; i++) if (Math.abs(samples[i] - samples[i - 1]) > 40) flips++;
+    // One press = one gradual change; a strobe would show many large jumps.
+    const ok = flips <= 1;
+    results.push({ type: 'photosensitivity: hold H for 1 s', ok, largeJumps: flips, brightness: samples.map(Math.round), errors: ok ? [] : ['screen strobes while H is held'] });
+    if (!ok) exitCode = 1;
+    await page.close();
+  }
+  // Draw-call budget (G8)
+  for (const r of results) if (r.drawCalls > 150) { r.errors.push(`draw calls ${r.drawCalls} > 150`); exitCode = 1; }
   // Menu renders and has no errors
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: scale });
   const errors = [];

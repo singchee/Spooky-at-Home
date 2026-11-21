@@ -4,8 +4,9 @@ import type { Sim } from '../sim/sim';
 /** Draws zombies and survivors as instanced boxes. Colours are sensor values (heat, visible, near-IR). */
 const MAX_Z = 2500;
 const MAX_S = 32;
-const WARM = new THREE.Color(0.95, 0.36, 0);
-const COLD = new THREE.Color(0.205, 0.34, 0); // about the same heat as grass and ground
+const WARM = new THREE.Color(0.98, 0.36, 0);
+// Same heat as ground and grass (0.19-0.2), so they vanish there; darker than warm roads (0.33).
+const COLD = new THREE.Color(0.2, 0.34, 0);
 const SURVIVOR = new THREE.Color(0.9, 0.42, 0);
 const PANEL = new THREE.Color(0.0, 0.42, 0); // cold ID panel: a dark square on thermal
 const STROBE_ON = new THREE.Color(0, 0.05, 1); // near-IR: only night vision sees it
@@ -27,10 +28,11 @@ export class AgentsView {
 
   constructor() {
     const body = new THREE.BoxGeometry(1.2, 2.4, 0.8).translate(0, 1.2, 0);
-    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    // Unlit, so the heat value shows exactly (a lit material dims it by up to half).
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     this.zMesh = new THREE.InstancedMesh(body, mat, MAX_Z);
     this.sMesh = new THREE.InstancedMesh(body, mat, MAX_S);
-    const panelGeo = new THREE.BoxGeometry(1.1, 0.15, 1.1);
+    const panelGeo = new THREE.BoxGeometry(0.8, 0.15, 0.6);
     const basic = new THREE.MeshBasicMaterial({ color: 0xffffff });
     this.panel = new THREE.InstancedMesh(panelGeo, basic, MAX_S);
     const strobeGeo = new THREE.SphereGeometry(0.7, 8, 6);
@@ -61,7 +63,8 @@ export class AgentsView {
         this.q.setFromEuler(this.e);
         this.m.compose(this.v.set(z.x, 0.45, z.z), this.q, this.s.set(1, 1, 1));
         const cool = Math.min(1, (sim.t - z.diedAt) / 40);
-        this.c.setRGB(z.cold ? 0.2 : 0.9 - cool * 0.62, 0.22, 0);
+        // Fresh bodies start noticeably cooler than live zombies, then fade to ground temperature.
+        this.c.setRGB(z.cold ? 0.2 : 0.7 - cool * 0.45, 0.2, 0);
       }
       this.zMesh.setMatrixAt(k, this.m);
       this.zMesh.setColorAt(k, this.c);
@@ -71,7 +74,7 @@ export class AgentsView {
     this.flag(this.zMesh);
 
     let j = 0;
-    const blink = time % 1 < 0.15;
+    const blink = time % 1 < 0.3;
     for (const s of sim.survivors) {
       if (s.home || j >= MAX_S) continue;
       if (s.alive) {

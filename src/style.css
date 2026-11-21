@@ -33,32 +33,40 @@ button:disabled { opacity: 0.5; }
 .card h3 { margin: 20px 0 6px; color: var(--accent); font-size: 15px; }
 .card p { margin: 8px 0; }
 .card .row button { flex: 0 0 auto; }
-.card-kicker { color: var(--muted); font-size: 13px; letter-spacing: 0.14em; }
+.card-kicker { color: var(--muted); font-size: 14px; letter-spacing: 0.14em; }
 .card.won .card-kicker { color: var(--accent); }
 .card.lost .card-kicker { color: var(--danger); }
 .intel { border-left: 3px solid var(--accent); padding-left: 10px; }
 .small, .status, .attrib { color: var(--muted); font-size: 14px; }
 .toast { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--danger); padding: 10px 14px; border-radius: 6px; z-index: 20; max-width: calc(100% - 32px); }
-.hud { position: absolute; inset: 0; pointer-events: none; z-index: 5; text-shadow: 0 0 3px #000, 0 0 2px #000; font-size: 14px; }
+.hud { position: absolute; inset: 0; pointer-events: none; z-index: 5; font-size: 14px; }
+/* Dark backing panels keep HUD text readable on both white-hot and black-hot pictures. */
+.hud-weapons, .hud-mission, .hud-radio:not(:empty), .hud-sensor, .hud-keys, .hud-attrib, .hud-switching, .hud-marker { background: rgba(0, 0, 0, 0.62); border-radius: 4px; padding: 4px 8px; }
 .hud-weapons { position: absolute; left: 16px; top: 16px; }
-.hud-w { display: flex; gap: 12px; opacity: 0.6; padding: 2px 6px; border: 1px solid transparent; }
+.hud-w { display: flex; gap: 12px; opacity: 0.75; padding: 2px 6px; border: 1px solid transparent; }
 .hud-w.active { opacity: 1; border-color: var(--ink); }
 .hud-wname { width: 64px; }
 .hud-mission { position: absolute; right: 16px; top: 16px; text-align: right; }
 .hud-timer { font-size: 18px; margin-bottom: 4px; }
-.hud-radio { position: absolute; left: 16px; bottom: 44px; max-width: min(560px, calc(100% - 32px)); }
+.hud-radio { position: absolute; left: 16px; bottom: 52px; max-width: min(560px, calc(100% - 32px)); }
 .hud-radio div { margin-top: 2px; }
-.hud-sensor { position: absolute; right: 16px; bottom: 44px; }
+.hud-radio .alarm { color: #fff; background: #b3261e; padding: 0 4px; font-weight: 700; }
+.hud-sensor { position: absolute; right: 16px; bottom: 52px; }
 .hud[data-sensor=night] { color: #c8ffd0; }
 .hud-cross { position: absolute; left: 50%; top: 50%; width: 120px; height: 120px; transform: translate(-50%, -50%); color: var(--ink); }
-.hud-cross svg { width: 100%; height: 100%; filter: drop-shadow(0 0 1px #000); }
+.hud-cross svg { width: 100%; height: 100%; }
+.hud-cross.danger { color: #ff5a4e; }
+.hud-cross.danger::after { content: attr(data-label); position: absolute; top: 100%; left: 50%; transform: translateX(-50%); white-space: nowrap; background: #b3261e; color: #fff; padding: 2px 6px; border-radius: 4px; font-weight: 700; }
 .hud-switching { position: absolute; left: 50%; top: 32%; transform: translateX(-50%); letter-spacing: 0.2em; display: none; }
-.hud-marker { position: absolute; left: 0; top: 0; font-size: 13px; margin: -22px 0 0 -40px; width: 80px; text-align: center; }
-.hud-marker::after { content: ''; display: block; width: 8px; height: 8px; border: 1px solid currentColor; transform: rotate(45deg); margin: 2px auto 0; }
-.hud-attrib { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); font-size: 12px; opacity: 0.75; white-space: nowrap; }
-.hud-keys { position: absolute; left: 16px; bottom: 16px; font-size: 13px; opacity: 0.7; }
-@media (max-width: 640px) {
+.hud-marker { position: absolute; left: 0; top: 0; font-size: 14px; margin: -44px 0 0 -50px; width: 100px; text-align: center; }
+.hud-marker::after { content: ''; display: block; width: 8px; height: 8px; border: 1px solid currentColor; transform: rotate(45deg); margin: 4px auto 0; }
+.hud-attrib { position: absolute; right: 16px; bottom: 16px; font-size: 14px; }
+.hud-keys { position: absolute; left: 16px; bottom: 16px; font-size: 14px; max-width: calc(100% - 420px); }
+@media (max-width: 900px) {
   .hud-keys { display: none; }
-  .hud { font-size: 13px; }
-  .hud-attrib { white-space: normal; text-align: center; width: calc(100% - 32px); }
+}
+@media (max-width: 640px) {
+  .hud-attrib { left: 16px; right: 16px; text-align: center; }
+  .hud-radio, .hud-sensor { bottom: 64px; }
+  .card h1 { font-size: 28px; letter-spacing: 0.06em; }
 }

@@ -17,8 +17,8 @@ describe('loadMapFile', () => {
     const m = loadMapFile(
       {
         elements: [
-          { type: 'way', id: 1, tags: { building: 'yes' }, geometry: sq(-37.8, 145.0) },
-          { type: 'way', id: 2, tags: { highway: 'residential' }, geometry: [{ lat: -37.805, lon: 144.995 }, { lat: -37.795, lon: 145.005 }] },
+          { type: 'way', id: 1, tags: { building: 'yes' }, geometry: sq(-10.0, 100.0) },
+          { type: 'way', id: 2, tags: { highway: 'residential' }, geometry: [{ lat: -10.005, lon: 99.995 }, { lat: -9.995, lon: 100.005 }] },
         ],
       },
       'my-area.json',

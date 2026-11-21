@@ -25,6 +25,8 @@ export interface GameOptions {
 }
 
 type Screen = 'briefing' | 'playing' | 'paused' | 'ended';
+/** One audio context for the whole page; browsers limit how many can exist. */
+const sharedSfx = new Sfx();
 const STEP = 1 / 60;
 const SWITCH_TIME = 0.7;
 
@@ -40,7 +42,7 @@ export class Game {
   private agents = new AgentsView();
   private effects = new Effects();
   private hud: Hud;
-  private sfx = new Sfx();
+  private sfx = sharedSfx;
   private bot: Bot | null;
   private overlay: HTMLDivElement;
   private raycaster = new THREE.Raycaster();
@@ -48,6 +50,8 @@ export class Game {
   private weapon = '40';
   sensor: SensorId = 'thermal';
   private polarity = 0;
+  /** Displayed polarity eases toward the chosen one over ~0.25 s, so H never makes a hard full-screen flip. */
+  private polarityShown = 0;
   private zoom = false;
   private switchLeft = 0;
   private firing = false;
@@ -108,7 +112,7 @@ export class Game {
     el('h2', undefined, m.title, card);
     for (const line of m.briefing) el('p', undefined, line, card);
     for (const line of m.intel) el('p', 'intel', line, card);
-    el('p', 'small', 'Controls: mouse to aim (click to capture the pointer) · hold left click to fire · Q or 1/2/3 switch gun · V switch camera · H white-hot/black-hot · Z zoom · WASD nudge aim · Esc pause.', card);
+    el('p', 'small', 'Controls: mouse to aim (click to capture the pointer) · hold left click to fire · Q or 1/2/3 switch gun · V switch camera · H white-hot/black-hot · Z zoom · WASD nudge aim · M mute · Esc pause.', card);
     const go = el('button', 'primary', 'Start mission', card);
     go.addEventListener('click', () => {
       this.sfx.unlock();
@@ -131,6 +135,7 @@ export class Game {
     this.overlay.replaceChildren();
     const card = el('div', 'card', undefined, this.overlay);
     el('h2', undefined, 'Paused', card);
+    el('p', 'small', 'R restarts the mission.', card);
     const resume = el('button', 'primary', 'Resume', card);
     resume.addEventListener('click', () => {
       this.screen = 'playing';
@@ -204,21 +209,25 @@ export class Game {
       this.nudgeAim(me.movementX, me.movementY);
     });
     this.on(window, 'keydown', (e) => {
-      const k = (e as KeyboardEvent).key.toLowerCase();
+      const ke = e as KeyboardEvent;
+      const k = ke.key.toLowerCase();
       this.keys.add(k);
+      // Toggles fire once per press: holding a key must never strobe the screen (photosensitivity).
+      if (ke.repeat) return;
       if (this.screen === 'ended') {
         if (k === 'r') this.opts.onRetry();
         if (k === 'n') this.opts.onNext();
         return;
       }
       if (k === 'escape' && this.screen === 'playing') this.pause();
+      if (k === 'm') this.sfx.muted = !this.sfx.muted;
+      if (this.screen === 'paused' && k === 'r') this.opts.onRetry();
       if (this.screen !== 'playing') return;
       if (k === '1' || k === '2' || k === '3') this.weapon = WEAPONS[Number(k) - 1].id;
       if (k === 'q') this.weapon = WEAPONS[(WEAPONS.findIndex((w) => w.id === this.weapon) + 1) % WEAPONS.length].id;
-      if (k === 'v') this.setSensor(this.sensor === 'thermal' ? 'night' : 'thermal');
+      if (k === 'v' && this.switchLeft <= 0) this.setSensor(this.sensor === 'thermal' ? 'night' : 'thermal');
       if (k === 'h') this.polarity = 1 - this.polarity;
       if (k === 'z') this.zoom = !this.zoom;
-      if (k === 'r') this.opts.onRetry();
     });
     this.on(window, 'keyup', (e) => this.keys.delete((e as KeyboardEvent).key.toLowerCase()));
     this.on(window, 'blur', () => {
@@ -262,7 +271,7 @@ export class Game {
     this.raf = requestAnimationFrame(this.frame);
     const dt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
-    this.clock += dt;
+    if (this.screen === 'playing') this.clock += dt;
 
     if (this.screen === 'playing') {
       const kx = (this.keys.has('d') || this.keys.has('arrowright') ? 1 : 0) - (this.keys.has('a') || this.keys.has('arrowleft') ? 1 : 0);
@@ -308,7 +317,7 @@ export class Game {
           if (e.kills >= 5) this.radio(`Good effect on target, ${e.kills} down. That's a lot of former neighbours.`);
           break;
         case 'friendly-hit':
-          this.radio('CHECK FIRE! CHECK FIRE! Friendly down!');
+          this.radio('CHECK FIRE! CHECK FIRE! Friendly down!', true);
           break;
         case 'danger-close':
           this.radio('Danger close! Mind the friendlies.');
@@ -332,8 +341,8 @@ export class Game {
     }
   }
 
-  private radio(text: string): void {
-    this.hud.say(text, this.clock);
+  private radio(text: string, alarm = false): void {
+    this.hud.say(text, this.clock, alarm);
     this.sfx.radio();
   }
 
@@ -354,7 +363,7 @@ export class Game {
     this.camera.fov = fov;
     this.camera.position.set(ac.x, ac.y, ac.z);
     const sh = this.effects.shake;
-    this.camera.lookAt(this.aim.x + Math.sin(this.clock * 90) * sh * 2, 0, this.aim.z + Math.cos(this.clock * 77) * sh * 2);
+    this.camera.lookAt(this.aim.x + Math.sin(this.clock * 90) * sh * 8, 0, this.aim.z + Math.cos(this.clock * 77) * sh * 8);
     this.camera.updateProjectionMatrix();
 
     this.agents.update(this.sim, this.clock);
@@ -363,7 +372,8 @@ export class Game {
     const u = this.sensorPass.uniforms;
     u.time.value = this.clock;
     u.mode.value = this.sensor === 'night' ? 1 : 0;
-    u.polarity.value = this.polarity;
+    this.polarityShown += Math.sign(this.polarity - this.polarityShown) * Math.min(Math.abs(this.polarity - this.polarityShown), dt * 4);
+    u.polarity.value = this.polarityShown;
     u.washout.value = this.effects.washout;
     u.blank.value = this.switchLeft > 0 ? Math.min(1, this.switchLeft / SWITCH_TIME + 0.4) : 0;
     this.renderer.info.reset();
@@ -372,9 +382,15 @@ export class Game {
     this.hudTimer -= dt;
     if (this.hudTimer <= 0) {
       this.hudTimer = 0.1;
-      this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock);
+      this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose());
     }
     this.hud.setMarkers(this.markers());
+  }
+
+  /** True when the current gun would endanger a friendly at the aim point. */
+  private dangerClose(): boolean {
+    const r = weaponById(this.weapon).radius * 1.6 + 4;
+    return this.sim.survivors.some((s) => s.alive && !s.home && Math.hypot(s.x - this.aim.x, s.z - this.aim.z) < r);
   }
 
   private markers() {
@@ -421,6 +437,7 @@ export class Game {
     this.effects.dispose();
     this.composer.dispose();
     this.renderer.dispose();
+    this.renderer.forceContextLoss();
     this.renderer.domElement.remove();
     this.hud.dispose();
     this.overlay.remove();

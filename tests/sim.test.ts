@@ -138,7 +138,7 @@ describe('simulation (gate G6: win and loss both reachable)', () => {
     expect(sim.weaponReady('105')).toBe(true);
   });
 
-  it('budget: one step with ~1,000 zombies takes under 8 ms on average', () => {
+  it('budget (QUALITY §2): one step with ~1,000 zombies takes under 4 ms on average', () => {
     const sim = make('defend', 5, 1);
     for (let i = 0; i < 1000; i++) {
       const p = grid.nearestFree({ x: ((i * 37) % 900) - 450, z: ((i * 53) % 900) - 450 });
@@ -147,6 +147,18 @@ describe('simulation (gate G6: win and loss both reachable)', () => {
     const t0 = performance.now();
     for (let i = 0; i < 60; i++) sim.step(1 / 60);
     const ms = (performance.now() - t0) / 60;
-    expect(ms).toBeLessThan(8);
+    expect(ms).toBeLessThan(4);
   });
 });
+
+describe('committed fingerprint (gate G4 across machines and versions)', () => {
+  it('the sample-town escort mission at difficulty 3, seed 42 has not changed', () => {
+    const r = generateMission(map, graph, grid, { type: 'escort', difficulty: 3, seed: 42 });
+    const json = JSON.stringify(r);
+    let h = 2166136261;
+    for (let i = 0; i < json.length; i++) h = Math.imul(h ^ json.charCodeAt(i), 16777619);
+    // If this fails, missions changed for everyone: update the value only on purpose, and say so in the PR.
+    expect((h >>> 0).toString(16)).toBe(EXPECTED_FINGERPRINT);
+  });
+});
+const EXPECTED_FINGERPRINT = '94d6a80a';

@@ -69,11 +69,12 @@ export class WalkGrid {
   }
 
   /** Closest free spot to p (searching outward up to maxR metres), or p itself if none. */
-  nearestFree(p: V2, maxR = 30): V2 {
+  nearestFree(p: V2, maxR = 120): V2 {
     if (!this.isBlocked(p.x, p.z)) return { ...p };
     for (let r = this.cell; r <= maxR; r += this.cell) {
-      for (let a = 0; a < 16; a++) {
-        const q = { x: p.x + Math.cos((a / 16) * Math.PI * 2) * r, z: p.z + Math.sin((a / 16) * Math.PI * 2) * r };
+      const steps = Math.max(16, Math.ceil((2 * Math.PI * r) / this.cell));
+      for (let a = 0; a < steps; a++) {
+        const q = { x: p.x + Math.cos((a / steps) * Math.PI * 2) * r, z: p.z + Math.sin((a / steps) * Math.PI * 2) * r };
         if (!this.isBlocked(q.x, q.z)) return q;
       }
     }

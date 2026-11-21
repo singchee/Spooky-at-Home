@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { bboxAround, toLocal } from '../src/map/project';
 
 describe('toLocal', () => {
-  const origin = { lat: -37.8, lon: 145.0 };
+  // A point in the open ocean: test coordinates must never point at anyone's home.
+  const origin = { lat: -10.0, lon: 100.0 };
 
   it('puts the origin at 0,0', () => {
     const p = toLocal(origin, origin.lat, origin.lon);
@@ -14,8 +15,8 @@ describe('toLocal', () => {
     const north = toLocal(origin, origin.lat + 0.001, origin.lon);
     const east = toLocal(origin, origin.lat, origin.lon + 0.001);
     expect(north.z).toBeCloseTo(-110.6, 0);
-    expect(east.x).toBeGreaterThan(80);
-    expect(east.x).toBeLessThan(90); // cos(37.8°) ≈ 0.79
+    expect(east.x).toBeGreaterThan(105);
+    expect(east.x).toBeLessThan(112); // cos(10°) ≈ 0.985
   });
 
   it('bboxAround is symmetric and about the requested size', () => {

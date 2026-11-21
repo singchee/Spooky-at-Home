@@ -172,7 +172,7 @@ export class Sim {
     const w = weaponById(id);
     const s = this.weapons.find((x) => x.id === id)!;
     s.ammo--;
-    s.cooldown = w.interval;
+    s.cooldown += w.interval;
     if (s.ammo <= 0) s.reloading = w.reload;
     const from = this.aircraft();
     const g = gaussian(this.rng);
@@ -189,7 +189,8 @@ export class Sim {
     if (this.phase !== 'running') return;
     this.t += dt;
     for (const s of this.weapons) {
-      s.cooldown = Math.max(0, s.cooldown - dt);
+      // Keep the remainder (can go slightly negative) so rate of fire is exact at any step size.
+      s.cooldown = Math.max(-dt, s.cooldown - dt);
       if (s.reloading > 0) {
         s.reloading -= dt;
         if (s.reloading <= 0) {
