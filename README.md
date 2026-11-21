@@ -2,7 +2,7 @@
 
 A browser gunship game set over **your own neighbourhood**. Type an address, and the game downloads the streets and buildings from OpenStreetMap and builds a mission there. Circle overhead, switch between guns and camera sensors, and get the survivors home past the zombies.
 
-**Status:** phase 0 (scaffold) done; phase 1 (playable slice) next.
+**Status:** phase 1 (playable slice) built and in review. Try it: `npm install && npm run dev`, or open `/?autostart=1&type=escort&bot=1` to watch the bot play.
 
 | Document | What's in it |
 |---|---|
