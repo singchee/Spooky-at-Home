@@ -33,7 +33,7 @@ export function buildQuery(origin: LatLon, half: number): string {
   const bb = `${b.south.toFixed(6)},${b.west.toFixed(6)},${b.north.toFixed(6)},${b.east.toFixed(6)}`;
   const hw = Object.keys(ROAD_WIDTHS).join('|');
   const am = [...POI_AMENITIES, 'kindergarten', 'parking', 'bus_station'].join('|');
-  return `[out:json][timeout:30];
+  return `[out:json][timeout:60];
 (
   way["building"](${bb});
   way["highway"~"^(${hw})$"](${bb});
@@ -88,6 +88,15 @@ export interface OverpassElement {
 
 export interface OverpassJson {
   elements: OverpassElement[];
+  /** Overpass reports a query that ran out of time or memory here, with HTTP 200 and partial (or no) elements. */
+  remark?: string;
+}
+
+/** A 200 answer can still be a failed query: Overpass says so in `remark`. Throws for those. */
+export function checkOverpassAnswer(json: OverpassJson, url: string): OverpassJson {
+  if (!json || !Array.isArray(json.elements)) throw new Error(`${url} sent an answer with no map data`);
+  if (typeof json.remark === 'string' && /runtime error|timed out/i.test(json.remark)) throw new Error(`${url} could not finish the query (${json.remark.slice(0, 120)})`);
+  return json;
 }
 
 export async function fetchOverpass(origin: LatLon, half: number, signal?: AbortSignal): Promise<OverpassJson> {
@@ -102,7 +111,8 @@ export async function fetchOverpass(origin: LatLon, half: number, signal?: Abort
         signal,
       });
       if (!res.ok) throw new Error(`${url} answered ${res.status}`);
-      return (await res.json()) as OverpassJson;
+      // A timed-out or failed query still answers 200; try the next server instead.
+      return checkOverpassAnswer((await res.json()) as OverpassJson, url);
     } catch (e) {
       if (signal?.aborted) throw e;
       lastErr = e;

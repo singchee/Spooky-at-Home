@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { buildQuery, capFeatures, featureCategory, geocode, parseOverpass, type OverpassElement, type OverpassJson } from '../src/map/overpass';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { buildQuery, capFeatures, checkOverpassAnswer, featureCategory, fetchOverpass, geocode, parseOverpass, type OverpassElement, type OverpassJson } from '../src/map/overpass';
 import type { Feature, FeatureCategory } from '../src/map/types';
 
 // A point in the open ocean: test coordinates must never point at anyone's home.
@@ -203,5 +203,43 @@ describe('feature cap', () => {
     expect(m.features).toHaveLength(2000);
     const cats = m.features!.map((x) => x.category);
     for (const c of ['hospital', 'police', 'train_station', 'school', 'playground']) expect(cats, c).toContain(c);
+  });
+});
+
+describe('fetchOverpass: a failed query is a failure, even with HTTP 200', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  // Inline fixtures: what Overpass sends when a query runs out of time or memory.
+  const timedOut: OverpassJson = { elements: [], remark: 'runtime error: Query timed out in "query" at line 3 after 61 seconds.' };
+  const outOfMemory: OverpassJson = { elements: [], remark: 'runtime error: Query run out of memory using about 2048 MB of RAM.' };
+  const good: OverpassJson = { elements: [{ type: 'node', id: 6, lat: -10.0005, lon: 100.0005, tags: { amenity: 'hospital', name: 'Test Hospital' } }] };
+  const answer = (json: unknown) => ({ ok: true, status: 200, json: async () => json }) as unknown as Response;
+
+  it('asks for a 60 s server timeout', () => {
+    expect(buildQuery(origin, 500)).toMatch(/^\[out:json\]\[timeout:60\];/);
+  });
+
+  it('treats a "runtime error" or "timed out" remark as a failure', () => {
+    expect(() => checkOverpassAnswer(timedOut, 'a')).toThrow(/timed out/);
+    expect(() => checkOverpassAnswer(outOfMemory, 'a')).toThrow(/runtime error/);
+    expect(() => checkOverpassAnswer({ elements: [], remark: 'Query timed out' } as OverpassJson, 'a')).toThrow();
+    expect(checkOverpassAnswer(good, 'a')).toBe(good);
+    expect(checkOverpassAnswer({ ...good, remark: 'some harmless note' }, 'a').elements).toHaveLength(1);
+  });
+
+  it('moves on to the next server when the first one times out', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(url);
+      return answer(urls.length === 1 ? timedOut : good);
+    }));
+    const json = await fetchOverpass(origin, 500);
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).not.toBe(urls[1]);
+    expect(json.elements).toHaveLength(1);
+  });
+
+  it('fails clearly when every server times out', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => answer(timedOut)));
+    await expect(fetchOverpass(origin, 500)).rejects.toThrow(/Could not download map data.*timed out/);
   });
 });
