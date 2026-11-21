@@ -11,10 +11,12 @@ import { SensorShader } from '../render/sensors';
 import { AgentsView } from '../game/agentsView';
 import { Effects } from '../game/effects';
 import { el } from './dom';
+import { audio } from '../audio/engine';
 
 /**
  * The front door: a live thermal picture of the sample town slowly orbiting behind the title,
- * three steps that explain the idea, and three ways in. Render-only, silent, no HUD.
+ * three steps that explain the idea, and three ways in. Render-only, no HUD. The menu theme starts
+ * on the first click or key press (browsers need a gesture) and carries on into the menu.
  */
 export type LandingChoice = 'scout' | 'sample' | 'training';
 
@@ -74,11 +76,16 @@ export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) =>
     left = true;
     onChoose(c);
   };
+  audio.claim('menu');
+  const unlock = () => audio.unlock();
+  root.addEventListener('pointerdown', unlock);
+  window.addEventListener('keydown', unlock);
   scout.addEventListener('click', choose('scout'));
   sample.addEventListener('click', choose('sample'));
   training.addEventListener('click', choose('training'));
 
   return () => {
+    window.removeEventListener('keydown', unlock);
     backdrop?.dispose();
     backdrop = null;
     root.remove();

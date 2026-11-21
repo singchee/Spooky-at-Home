@@ -1,5 +1,5 @@
 // Headless browser playtest (gates G7, G8 and visual evidence).
-// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety]
+// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio]
 // Starts `vite preview`, loads each mission type with the bot playing, switches cameras,
 // takes screenshots, and records console errors and draw calls. Chromium is preinstalled.
 // It also runs the photosensitivity flash checks and survivor-kit screenshots (`--only safety`
@@ -114,7 +114,13 @@ try {
     await page.close();
   }
   // Photosensitivity flash counts (WCAG 2.3.1) and the survivor kit on every camera.
-  for (const r of await safetyChecks(browser)) {
+  for (const r of only === 'audio' ? [] : await safetyChecks(browser)) {
+    results.push(r);
+    if (r.errors.length) exitCode = 1;
+  }
+  // Sound: one shared AudioContext after a click, bounded nodes across restarts, mute silences the master.
+  if (!only || only === 'audio') {
+    const r = await audioChecks(browser);
     results.push(r);
     if (r.errors.length) exitCode = 1;
   }
@@ -664,4 +670,87 @@ async function safetyChecks(browser) {
   }
   for (const r of res) if ('ok' in r) r.ok = !r.errors.length; // errors added after judging count too
   return res;
+}
+
+// ---------- Sound ----------
+// Audio can't be listened to headless. Instead, through the test-only window.__spooky.audio() hook
+// (installed only under browser automation), check: no AudioContext before a gesture, exactly one
+// after a click and still one after 10 restarts, live sources bounded across those restarts,
+// gunfire ducks the music, M (the shared muted setting) silences the master gain, and quitting to
+// the menu frees the mission score and engine drone.
+async function audioChecks(browser) {
+  const errors = [];
+  const { page, errs } = await gamePage(browser, 'autostart=1&type=clear&difficulty=1&seed=3');
+  page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+  const read = () => page.evaluate(() => window.__spooky.audio?.() ?? null);
+  const playing = () => page.waitForFunction(() => window.__spooky?.ready === true && window.__spooky.info()?.screen === 'playing', null, { timeout: 30000 });
+  const out = { type: 'audio (context, restarts, mute)', errors };
+  try {
+    const before = await read();
+    if (!before) errors.push('no audio test hook');
+    else if (before.contexts !== 0) errors.push(`${before.contexts} AudioContext(s) before any gesture`);
+    await page.mouse.click(320, 180);
+    await page.waitForTimeout(1500);
+    const first = await read();
+    out.afterClick = first;
+    if (!first || first.contexts !== 1) errors.push(`expected 1 AudioContext after a click, got ${first?.contexts}`);
+    if (first?.state !== 'running') errors.push(`AudioContext is ${first?.state}, not running`);
+    if (first?.playing !== 'mission' || !first?.ambience) errors.push(`mission score/ambience not playing: ${JSON.stringify(first)}`);
+
+    // Gunfire ducks the music.
+    await page.evaluate(() => window.__spooky.holdFire(true));
+    await page.waitForTimeout(600);
+    const firing = await read();
+    await page.evaluate(() => window.__spooky.holdFire(false));
+    out.duckUnderFire = firing?.gains?.duck;
+    if (!(firing?.gains?.duck > 0.1)) errors.push(`music not ducked under fire (duck ${firing?.gains?.duck})`);
+
+    // Mute (M) silences the master; pressing it again brings it back.
+    await page.keyboard.press('m');
+    await page.waitForTimeout(500);
+    const muted = await read();
+    await page.keyboard.press('m');
+    await page.waitForTimeout(500);
+    const unmuted = await read();
+    out.masterMuted = muted?.gains?.master;
+    out.masterUnmuted = unmuted?.gains?.master;
+    if (!(muted?.gains?.master < 0.001)) errors.push(`muted, but master gain is ${muted?.gains?.master}`);
+    if (!(unmuted?.gains?.master > 0.1)) errors.push(`unmuted, but master gain is ${unmuted?.gains?.master}`);
+
+    // Ten restarts (Esc, R): still one context, and the number of live sources stays bounded.
+    const voices = [first?.voices];
+    for (let i = 0; i < 10; i++) {
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => window.__spooky.info()?.screen === 'paused', null, { timeout: 10000 });
+      await page.keyboard.press('r');
+      await playing();
+      await page.waitForTimeout(500);
+      voices.push((await read())?.voices);
+    }
+    await page.waitForTimeout(3000);
+    const after = await read();
+    voices.push(after?.voices);
+    out.voices = voices;
+    out.afterRestarts = after;
+    if (after?.contexts !== 1) errors.push(`${after?.contexts} AudioContexts after 10 restarts (must be 1)`);
+    const limit = Math.max(80, (first?.voices ?? 0) * 2);
+    if (voices.some((v) => !(v <= limit))) errors.push(`live sources not bounded across restarts: ${voices.join(', ')} (limit ${limit})`);
+    if (after?.fading > 0) errors.push(`${after.fading} score(s) still fading 3 s after the last restart`);
+
+    // Quit to the menu: the mission score and drone fade out and are freed; the menu theme plays.
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => window.__spooky.info()?.screen === 'paused', null, { timeout: 10000 });
+    await page.click('.overlay button:has-text("Quit to menu")');
+    await page.waitForSelector('.menu h1');
+    await page.waitForTimeout(4500);
+    const menu = await read();
+    out.menu = menu;
+    if (menu?.playing !== 'menu' || menu?.ambience || menu?.fading) errors.push(`after quitting to the menu: ${JSON.stringify(menu)}`);
+    if (!(menu?.voices < (after?.voices ?? 0))) errors.push(`mission sources not freed on quitting (${after?.voices} -> ${menu?.voices})`);
+  } catch (e) {
+    errors.push(String(e));
+  }
+  errors.push(...errs);
+  await page.close();
+  return out;
 }

@@ -14,6 +14,9 @@ import { Hud } from '../ui/hud';
 import { briefingMap } from '../ui/tacticalMap';
 import { el } from '../ui/dom';
 import { Sfx } from '../audio/sfx';
+import { audio } from '../audio/engine';
+import { measureThreat, threatIntensity } from '../audio/intensity';
+import { getSettings, updateSettings } from '../ui/settings';
 
 /** The browser game: renders the simulation, handles input, camera, sound and screens. */
 export interface GameOptions {
@@ -107,6 +110,7 @@ export class Game {
   private last = 0;
   private clock = 0;
   private hudTimer = 0;
+  private audioTimer = 0;
   private raf = 0;
   private disposed = false;
   private listeners: [EventTarget, string, EventListener][] = [];
@@ -154,6 +158,7 @@ export class Game {
     this.aim = m.route ? { ...m.route[0] } : m.safehouse ? { ...m.safehouse.centre } : { ...m.orbitCentre };
 
     this.bindInput();
+    audio.claim('mission'); // the mission score and engine drone (start on the first click or key)
     this.resize();
     if (opts.skipBriefing) this.start();
     else this.showBriefing();
@@ -301,6 +306,7 @@ export class Game {
       const ke = e as KeyboardEvent;
       const k = ke.key.toLowerCase();
       this.keys.add(k);
+      this.sfx.unlock();
       // Toggles fire once per press: holding a key must never strobe the screen (photosensitivity).
       if (ke.repeat) return;
       if (this.screen === 'ended') {
@@ -309,7 +315,7 @@ export class Game {
         return;
       }
       if (k === 'escape' && this.screen === 'playing') this.pause();
-      if (k === 'm') this.sfx.muted = !this.sfx.muted;
+      if (k === 'm') updateSettings({ muted: !getSettings().muted });
       if (this.screen === 'paused' && k === 'r') this.opts.onRetry();
       if (this.screen !== 'playing') return;
       const gun = this.weapon;
@@ -403,6 +409,12 @@ export class Game {
       this.switchLeft = Math.max(0, this.switchLeft - dt);
     }
     this.render(dt);
+    // The score follows the threat, about four times a second.
+    this.audioTimer -= dt;
+    if (this.audioTimer <= 0) {
+      this.audioTimer = 0.25;
+      audio.setIntensity(this.screen === 'playing' ? threatIntensity(measureThreat(this.sim)) : 0.1);
+    }
   };
 
   private sensorFromBot(): void {
@@ -469,6 +481,7 @@ export class Game {
           this.radio(e.text);
           break;
         case 'result':
+          audio.sting(e.won);
           this.showResult(e.won, e.reason);
           break;
       }
@@ -616,6 +629,7 @@ export class Game {
     const hooks = window.__spooky as TestHooks | undefined;
     if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
+    audio.release('mission');
     for (const [t, type, fn] of this.listeners) t.removeEventListener(type, fn);
     if (document.pointerLockElement) document.exitPointerLock?.();
     this.world.dispose();
