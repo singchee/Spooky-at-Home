@@ -191,8 +191,48 @@ button:disabled { opacity: 0.5; }
 
 .card.briefing { max-width: 1040px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); column-gap: 24px; align-items: start; }
 .card.briefing > * { grid-column: 1; }
-.card.briefing > .briefing-map { grid-column: 2; grid-row: 1 / span 30; }
+.card.briefing > .briefing-map, .card.briefing > .briefing-visuals { grid-column: 2; grid-row: 1 / span 30; }
 .card.briefing > button { justify-self: start; }
+/* Briefing diorama (3.5): the blocky 3D model beside the tactical map on wide screens; a Map / 3D toggle when narrow. */
+.card.briefing:has(> .briefing-visuals:not(.no-3d)) { max-width: 1260px; grid-template-columns: minmax(0, 1fr) minmax(0, 780px); }
+/* A briefing taller than the screen scrolls from its top instead of being cut off. */
+.overlay > .card.briefing { margin: auto; }
+.bv-panels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.briefing-visuals.no-3d .bv-panels { display: block; }
+.bv-toggle { display: none; gap: 6px; margin-bottom: 8px; }
+.bv-tab { flex: 1 1 0; min-height: 40px; }
+.bv-tab[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); background: rgba(184, 255, 138, 0.08); }
+.dio { position: relative; outline: none; }
+.dio:focus-visible .dio-stage { box-shadow: 0 0 0 2px var(--accent); }
+.dio-stage { position: relative; aspect-ratio: 1 / 1; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: radial-gradient(ellipse at 50% 38%, #1c2a24 0%, #0d1310 62%, #070908 100%); }
+.dio-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: pan-y; }
+.dio.dragging .dio-canvas { cursor: grabbing; }
+.dio-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.dio-label { position: absolute; left: 0; top: 0; visibility: hidden; white-space: nowrap; font-size: 14px; line-height: 18px; padding: 2px 6px; border-radius: 3px; border: 1px solid rgba(231, 239, 233, 0.35); background: rgba(9, 12, 11, 0.86); color: #dfe8e2; }
+.dio-label.on { visibility: visible; }
+.dio-pin.on { display: block; }
+.dio-label.north { padding: 2px 5px; font-weight: 700; color: var(--ink); border-color: var(--ink); }
+.dio-pin.north { background: var(--ink); }
+.dio-label::after { content: ''; position: absolute; background: currentColor; opacity: 0.75; }
+.dio-label[data-side='above']::after { left: 50%; top: 100%; width: 1px; height: var(--gap, 9px); }
+.dio-label[data-side='below']::after { left: 50%; bottom: 100%; width: 1px; height: var(--gap, 9px); }
+.dio-label[data-side='right']::after { right: 100%; top: 50%; width: var(--gap, 9px); height: 1px; }
+.dio-label[data-side='left']::after { left: 100%; top: 50%; width: var(--gap, 9px); height: 1px; }
+.dio-label.safe, .dio-label.home { color: var(--accent); border-color: var(--accent); font-weight: 700; letter-spacing: 0.06em; }
+.dio-label.hostile, .dio-label.wave { color: #ff8a7f; border-color: var(--danger); font-weight: 700; letter-spacing: 0.04em; }
+.dio-label.friendly { color: #8cc4ff; border-color: var(--tm-friendly); font-weight: 700; letter-spacing: 0.06em; }
+.dio-label.anchor { color: var(--ink); border-color: var(--accent); }
+.dio-pin { position: absolute; left: -4px; top: -4px; display: none; width: 8px; height: 8px; border-radius: 50%; background: #dfe8e2; border: 1.5px solid #0b0d0c; }
+.dio-pin.safe, .dio-pin.home, .dio-pin.anchor { background: var(--accent); }
+.dio-pin.hostile, .dio-pin.wave { background: var(--danger); }
+.dio-pin.friendly { background: var(--tm-friendly); }
+.dio-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; margin-top: 6px; color: var(--muted); font-size: 14px; }
+@media (max-width: 1179px) {
+  .card.briefing:has(> .briefing-visuals:not(.no-3d)) { max-width: 1040px; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); }
+  .bv-panels { display: block; }
+  .bv-toggle { display: flex; }
+  .briefing-visuals.show-3d .briefing-map, .briefing-visuals.show-map .dio { display: none; }
+}
 .tmap-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--muted); font-size: 14px; }
 .tl-item { display: inline-flex; align-items: center; gap: 6px; }
 .tl-key { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
@@ -213,7 +253,7 @@ button:disabled { opacity: 0.5; }
 @media (max-width: 900px) {
   .recon-grid, .recon-cards { grid-template-columns: minmax(0, 1fr); }
   .card.briefing { display: block; }
-  .card.briefing > .briefing-map { margin-bottom: 12px; }
+  .card.briefing > .briefing-map, .card.briefing > .briefing-visuals { margin-bottom: 12px; }
 }
 @media (max-width: 640px) {
   .hud-minimap { width: 120px; top: 108px; }

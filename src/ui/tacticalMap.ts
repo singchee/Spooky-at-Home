@@ -556,7 +556,7 @@ function scaleLength(span: number): number {
 }
 
 /** The square that frames a mission's area of operations (at least ~500 m across), inside the map. */
-function focusView(m: Mission, full: { x0: number; z0: number; span: number }): { x0: number; z0: number; span: number } {
+export function focusView(m: Mission, full: { x0: number; z0: number; span: number }): { x0: number; z0: number; span: number } {
   const pts: [V2, number][] = [];
   for (const h of m.hordes) pts.push([h.centre, 75]);
   if (m.safehouse) pts.push([m.safehouse.centre, m.waves && m.type === 'defend' ? m.waves.maxDist * 0.8 : 90]);
