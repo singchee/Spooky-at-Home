@@ -652,5 +652,6 @@ async function safetyChecks(browser) {
     res.push({ type: `survivor kit on ${ground} (25 mm zoomed)`, errors: errs, nightCentrePeaks: peaks.join(','), shots });
     await page.close();
   }
+  for (const r of res) if ('ok' in r) r.ok = !r.errors.length; // errors added after judging count too
   return res;
 }
