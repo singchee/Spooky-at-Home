@@ -29,6 +29,26 @@ describe('loadMapFile', () => {
     expect(Math.abs(m.roads[0].pts[0].x)).toBeLessThan(600);
   });
 
+  it('keeps recon data (features, bus routes, trees, lamps) and drops malformed entries', () => {
+    const m = makeSampleTown();
+    const raw = JSON.parse(JSON.stringify(m));
+    raw.features.push({ id: 'bad', category: 'volcano', p: { x: 0, z: 0 } }, { id: 'bad2', category: 'park', p: { x: 'x', z: 0 } });
+    raw.trees.push({ x: NaN, z: 1 });
+    const back = loadMapFile(raw, 'x.json');
+    expect(back.features).toHaveLength(m.features!.length);
+    expect(back.features!.find((f) => f.category === 'tennis')!.name).toBe('Orchard Tennis Club');
+    expect(back.busRoutes).toHaveLength(1);
+    expect(back.trees).toHaveLength(m.trees!.length);
+    expect(back.lamps).toHaveLength(m.lamps!.length);
+  });
+
+  it('still loads maps saved before phase 2 (no recon fields)', () => {
+    const { features: _f, busRoutes: _b, trees: _t, lamps: _l, ...old } = makeSampleTown();
+    const back = loadMapFile(JSON.parse(JSON.stringify(old)), 'old.json');
+    expect(back.features).toBeUndefined();
+    expect(back.buildings.length).toBe(old.buildings.length);
+  });
+
   it('rejects files that are not maps', () => {
     expect(() => loadMapFile({ hello: 'world' }, 'x.json')).toThrow();
     expect(() => loadMapFile({ elements: [] }, 'x.json')).toThrow();

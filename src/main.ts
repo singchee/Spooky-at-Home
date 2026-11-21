@@ -33,7 +33,7 @@ function play(choice: MenuChoice, opts: { bot?: boolean; skipBriefing?: boolean;
   game = null;
   let r: ReturnType<typeof createSim>;
   try {
-    r = createSim(choice.map, { type: choice.type, difficulty: choice.difficulty, seed: choice.seed });
+    r = createSim(choice.map, { type: choice.type, difficulty: choice.difficulty, seed: choice.seed, template: choice.template, anchor: choice.anchor });
   } catch (e) {
     r = { ok: false, reason: `Couldn't build a mission on this map (${(e as Error).message}).` };
   }
