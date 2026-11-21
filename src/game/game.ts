@@ -39,6 +39,8 @@ interface TestHooks {
   survivors?: () => V2[];
   /** Advance exactly `dt` game seconds per rendered frame (null: real time), so a slow test machine sees every frame a 60 fps player would. */
   fixedStep?: (dt: number | null) => void;
+  /** Hold or release the trigger, as holding the left button does (without needing pointer lock). */
+  holdFire?: (on: boolean) => void;
 }
 
 /** The OS asks for reduced motion (live: it can change while the page is open). */
@@ -154,6 +156,9 @@ export class Game {
       hooks.survivors = () => this.sim.survivors.filter((s) => s.alive && !s.home).map((s) => ({ x: s.x, z: s.z }));
       hooks.fixedStep = (dt) => {
         this.fixedDt = dt;
+      };
+      hooks.holdFire = (on) => {
+        this.firing = on && this.screen === 'playing';
       };
     }
   }
