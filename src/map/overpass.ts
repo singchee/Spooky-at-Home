@@ -137,8 +137,10 @@ const hasValue = (v: string | undefined, want: string) => !!v && v.split(';').ma
 
 /** Which recon category an OpenStreetMap object belongs to, if any. */
 export function featureCategory(tags: Record<string, string>): FeatureCategory | null {
+  // A tennis club is club=tennis, or a named tennis place. An unnamed court (leisure=pitch +
+  // sport=tennis) is just a sports ground: lone courts sit in backyards and school grounds.
   if (tags.club === 'tennis') return 'tennis';
-  if (hasValue(tags.sport, 'tennis') && (!tags.leisure || ['pitch', 'sports_centre'].includes(tags.leisure))) return 'tennis';
+  if (hasValue(tags.sport, 'tennis') && !!tags.name && (!tags.leisure || ['pitch', 'sports_centre'].includes(tags.leisure))) return 'tennis';
   switch (tags.amenity) {
     case 'school': return 'school';
     case 'kindergarten': return 'kindergarten';

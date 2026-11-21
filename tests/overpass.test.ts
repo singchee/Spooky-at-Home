@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildQuery, geocode, parseOverpass, type OverpassJson } from '../src/map/overpass';
+import { buildQuery, featureCategory, geocode, parseOverpass, type OverpassJson } from '../src/map/overpass';
 
 // A point in the open ocean: test coordinates must never point at anyone's home.
 const origin = { lat: -10.0, lon: 100.0 };
@@ -160,5 +160,18 @@ describe('parseOverpass: recon categories (phase 2)', () => {
     expect(q).toContain('"natural"="tree"');
     expect(q).toContain('"club"="tennis"');
     expect(q.match(/^out /gm)).toHaveLength(3);
+  });
+});
+
+describe('featureCategory: tennis', () => {
+  it('only club=tennis or a named tennis place is a tennis club', () => {
+    expect(featureCategory({ leisure: 'pitch', sport: 'tennis' })).toBe('pitch');
+    expect(featureCategory({ leisure: 'pitch', sport: 'tennis;basketball' })).toBe('pitch');
+    expect(featureCategory({ leisure: 'sports_centre', sport: 'tennis' })).toBe('sports_centre');
+    expect(featureCategory({ sport: 'tennis' })).toBe(null);
+    expect(featureCategory({ leisure: 'pitch', sport: 'tennis', name: 'Coral Courts' })).toBe('tennis');
+    expect(featureCategory({ leisure: 'sports_centre', sport: 'tennis', name: 'Reef Tennis Centre' })).toBe('tennis');
+    expect(featureCategory({ club: 'tennis' })).toBe('tennis');
+    expect(featureCategory({ club: 'tennis', leisure: 'pitch' })).toBe('tennis');
   });
 });
