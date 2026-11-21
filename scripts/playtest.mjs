@@ -772,7 +772,7 @@ async function audioChecks(browser) {
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => window.__spooky.info()?.screen === 'paused', null, { timeout: 10000 });
     await page.click('.overlay button:has-text("Quit to menu")');
-    await page.waitForSelector('.menu h1');
+    await page.waitForSelector('.menu h1:visible, .menu h2:visible');
     await page.waitForTimeout(4500);
     const menu = await read();
     out.menu = menu;
