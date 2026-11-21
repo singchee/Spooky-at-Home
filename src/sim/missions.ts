@@ -200,8 +200,7 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
     const per = 6 + 3 * d;
     const hordes: Horde[] = centres.map((c) => ({ centre: c, count: per, cold: Math.round(per * coldShare), label: placeLabel(map, c) }));
     const shelterAt = hordes[Math.floor(rng() * hordes.length)];
-    const ang = rng() * Math.PI * 2;
-    const shelterSpot = grid.nearestFree({ x: shelterAt.centre.x + Math.cos(ang) * 45, z: shelterAt.centre.z + Math.sin(ang) * 45 });
+    const shelterSpot = shelterSpotFor(grid, map, hordes, shelterAt, rng);
     const survivors: SurvivorPlan[] = [0, 1].map((k) => ({ start: { x: shelterSpot.x + k * 2, z: shelterSpot.z }, route: null, delay: 0 }));
     const orbit = centroid(centres);
     const coldPlaces = hordes.filter((h) => h.cold > 0).map((h) => h.label);
@@ -501,8 +500,7 @@ function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'c
     return { centre: p, count: per, cold: Math.round(per * (here ? coldHere : coldShare)), label: here ? name : placeLabel(map, p) };
   });
   const shelterAt = hordes[Math.floor(rng() * hordes.length)];
-  const ang = rng() * Math.PI * 2;
-  const shelterSpot = grid.nearestFree({ x: shelterAt.centre.x + Math.cos(ang) * 45, z: shelterAt.centre.z + Math.sin(ang) * 45 });
+  const shelterSpot = shelterSpotFor(grid, map, hordes, shelterAt, rng);
   const survivors: SurvivorPlan[] = [0, 1].map((k) => ({ start: { x: shelterSpot.x + k * 2, z: shelterSpot.z }, route: null, delay: 0 }));
   const timeLimit = 240 + 30 * d + (forest ? 30 : 0);
   const hereCount = hordes.filter((h) => h.label === name).length;
@@ -588,6 +586,28 @@ export function likelyWaveDirections(m: Mission, map: MapData, g: RoadGraph): Wa
       const from = { x: s.x / s.n, z: s.z / s.n };
       return { from, to: ref, compass: compass(ref, from), share: s.n / total };
     });
+}
+
+/** Sheltering friendlies sit at least this far from every horde's gathering point (hordes mill within ~30 m). */
+export const SHELTER_GAP = 70;
+
+/**
+ * Where the two sheltering friendlies wait in a Clear mission: near their named horde (that's the story),
+ * but at least SHELTER_GAP from every horde, so a player who hasn't found them yet can't lose in seconds.
+ */
+function shelterSpotFor(grid: WalkGrid, map: MapData, hordes: Horde[], near: Horde, rng: Rng): V2 {
+  const a0 = rng() * Math.PI * 2;
+  const ok = (p: V2) =>
+    !grid.isBlocked(p.x, p.z) && hordes.every((h) => dist(h.centre, p) >= SHELTER_GAP) && !nearChildPlace(map, p) && Math.abs(p.x) < map.half * 0.9 && Math.abs(p.z) < map.half * 0.9;
+  for (let r = SHELTER_GAP + 5; r <= 200; r += 15) {
+    for (let k = 0; k < 16; k++) {
+      const a = a0 + (k / 16) * Math.PI * 2;
+      const p = grid.nearestFree({ x: near.centre.x + Math.cos(a) * r, z: near.centre.z + Math.sin(a) * r }, 9);
+      if (ok(p)) return p;
+    }
+  }
+  // Fallback: the farthest free spot from all hordes along the search ring.
+  return grid.nearestFree({ x: near.centre.x + Math.cos(a0) * 120, z: near.centre.z + Math.sin(a0) * 120 });
 }
 
 const unique = <T>(a: T[]) => [...new Set(a)];

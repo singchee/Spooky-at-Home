@@ -118,6 +118,9 @@ export class Sim {
   private lastDangerClose = -99;
   /** Road nodes waves may not spawn at: near schools, kindergartens, playgrounds. Computed once. */
   private noSpawn: Uint8Array;
+  /** Seconds before zombies notice sheltering friendlies (longer on easy). */
+  private shelterGrace: number;
+  private lastUnderAttack = -99;
 
   constructor(mission: Mission, map: MapData, graph: RoadGraph, grid: WalkGrid) {
     this.mission = mission;
@@ -145,6 +148,7 @@ export class Sim {
     });
     if (mission.safehouse && mission.type === 'defend') this.safeField = grid.flowField(grid.perimeterCells(mission.safehouse.poly));
     if (mission.waves) this.waveTimer = 3; // first wave arrives quickly
+    this.shelterGrace = Math.max(15, 45 - 6 * mission.difficulty);
     this.noSpawn = new Uint8Array(graph.nodes.length);
     if (mission.waves) graph.nodes.forEach((n, i) => (this.noSpawn[i] = nearChildPlace(map, n, WAVE_CHILD_GAP) ? 1 : 0));
   }
@@ -267,6 +271,10 @@ export class Sim {
         if (d < nearest) nearest = d;
         if (d < 1.6) attackers++;
       }
+      if (!s.route && nearest < 12 && this.t - this.lastUnderAttack > 8) {
+        this.lastUnderAttack = this.t;
+        this.emit({ type: 'radio', text: 'FRIENDLIES UNDER ATTACK! Contacts closing on the sheltering friendlies.' });
+      }
       if (attackers) {
         s.hp -= 0.7 * attackers * dt;
         if (s.hp <= 0) {
@@ -365,6 +373,8 @@ export class Sim {
       let near: Survivor | null = null;
       let nd = 25;
       for (const s of active) {
+        // Sheltering friendlies stay hidden for the first moments, so the player has time to find them.
+        if (!s.route && this.t < this.shelterGrace) continue;
         const d = Math.hypot(s.x - z.x, s.z - z.z);
         if (d < nd) {
           nd = d;

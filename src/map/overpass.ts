@@ -356,7 +356,12 @@ let lastGeocode = 0;
 /** Accepts "lat, lon" directly, otherwise asks OpenStreetMap's Nominatim geocoder (max 1 request/second). */
 export async function geocode(query: string, signal?: AbortSignal): Promise<LatLon & { label: string }> {
   const m = query.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
-  if (m) return { lat: parseFloat(m[1]), lon: parseFloat(m[2]), label: `${parseFloat(m[1]).toFixed(4)}, ${parseFloat(m[2]).toFixed(4)}` };
+  if (m) {
+    const lat = parseFloat(m[1]);
+    const lon = parseFloat(m[2]);
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) throw new Error('Coordinates out of range: latitude must be -90 to 90 and longitude -180 to 180');
+    return { lat, lon, label: `${lat.toFixed(4)}, ${lon.toFixed(4)}` };
+  }
   // Nominatim's usage policy: at most one request per second from this client.
   const wait = lastGeocode + 1100 - Date.now();
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
