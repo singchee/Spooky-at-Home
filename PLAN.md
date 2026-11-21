@@ -1,4 +1,4 @@
-# Pylon Turn — build plan and architecture
+# Spooky at Home — build plan and architecture
 
 *A gunship game that builds its missions from a real neighbourhood map*
 
@@ -6,7 +6,7 @@
 
 You are the sensor and gun operator in a gunship circling above a neighbourhood at night. You see the ground through a black-and-white thermal camera (warm things show bright). You switch between three guns and complete missions against zombie hordes. **The main feature:** you type in an address, the game downloads that area's streets and buildings from OpenStreetMap (the free, volunteer-built world map), and it builds a mission from what is actually there: the local school becomes the safehouse, the park becomes where the horde gathers, and real street names appear in the briefing.
 
-"Pylon turn" is the name of the real flying manoeuvre: a constant-bank circle that keeps one side of the aircraft pointed at one spot on the ground. The game's name, art, user interface and missions are all our own. It belongs to the gunship genre but copies no existing game.
+**Name:** "Spooky" was the nickname of real US gunships (the AC-47, later an AC-130 variant); it also fits the zombies. "At Home" means your own neighbourhood. The tone is darkly comic, not grim: briefings and radio chatter can carry some humour. The aircraft flies a *pylon turn*, a constant-bank circle that keeps one side pointed at one spot on the ground. The game's art, user interface and missions are all our own. It belongs to the gunship genre but copies no existing game.
 
 ## 2. Key decisions (ranked, with reasons)
 
@@ -70,6 +70,7 @@ World builder  Road network        Walk grid               Mission generator
 | `src/game/` | Game loop, weapons, agents, effects, mission generator, scoring |
 | `src/ui/` | Menu, HUD, briefing and debrief screens |
 | `src/audio/` | Sound effects made in code (later: recorded crew voice lines) |
+| `src/sim/` | **The game rules with no graphics**: mission state, agents, weapons, scoring. Runs in Node, so agents and tests can play thousands of missions without a browser. Never imports three.js or the DOM. |
 | `tests/` | Rule-based tests: coordinate conversion, route finding, and that every mission type can be won on the sample map at every difficulty |
 
 **Rule-based vs AI-generated parts.** All of version 1 is rule-based and repeatable. If an AI briefing writer is added later, it gets the finished mission as input and may only return text. A checker rejects any output that names streets or places not in the mission. If it fails or times out, the game uses the template text.
@@ -131,7 +132,7 @@ Each camera answers one question well and others badly. No single camera is enou
 
 | Phase | What you get | Done when |
 |---|---|---|
-| **0. Scaffold** *(in progress)* | Repo, build tooling, tests, map loader, sample town | `npm test` passes; sample map loads |
+| **0. Scaffold** *(done)* | Repo, build tooling, tests, map loader, sample town, CI, **agent crew harness** (`docs/CREW.md`), quality gates (`docs/QUALITY.md`) | `npm test` passes; sample map loads |
 | **1. Playable slice** | Sample town; orbit camera; thermal + night-vision cameras built on the 3-value render; warm and cold-blooded zombies; 3 guns; survivors; 3 mission types; briefing intel; HUD; win/lose | You can play all 3 mission types end to end, and at least one mission needs both cameras |
 | **2. Your neighbourhood** | Address search → download → mission; save/load map files; loading progress; handling for missing or partial map data | Your own suburb loads in under 15 s and produces a winnable mission of each type |
 | **3. Feel** | Crew radio voice lines, better sound, screen shake, scoring and grades, campaign chain | Playtest: "feels like a gunship" |
@@ -142,7 +143,7 @@ Each camera answers one question well and others badly. No single camera is enou
 
 | Service | Needed? | What for | Notes |
 |---|---|---|---|
-| **GitHub** | **Yes** | Hosting the repo | This cloud session cannot create repos. You create an empty private repo `pylon-turn`, then I attach it and push. |
+| **GitHub** | **Yes** | Hosting the repo | Repo: `singchee/Spooky-at-Home` (private). |
 | **OpenStreetMap: Overpass + Nominatim** | **Yes (no connector, no key)** | Map data and address search | Called from your browser at play time. These sites are blocked from this cloud container, so I test with the sample town and saved map files. To test real downloads here, the environment would need `overpass-api.de` and `nominatim.openstreetmap.org` allowed. Their usage rules: keep requests small, at most 1 address search per second, and credit OpenStreetMap on screen. |
 | **ElevenLabs** | Useful, phase 3 (**already connected**) | Crew radio callouts ("Good hits", "Check fire, friendlies!") and sound effects | Generate about 30–60 short lines once and save them in the repo. Uses your credits, so I'll confirm the list before generating. |
 | **Elevation tiles (AWS Terrarium)** | Optional, phase 4 | Hills and valleys | Free, no key, reachable from here. |
