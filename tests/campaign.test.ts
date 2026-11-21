@@ -9,8 +9,11 @@ import { hashString } from '../src/util/rng';
 import type { MapData } from '../src/map/types';
 import {
   LEVELS, MAX_GENERATOR_CALLS, NIGHT_BASE, NIGHT_PREFERENCES, NIGHT_SUBSTITUTES, NIGHTS,
-  mapFingerprint, missionFingerprint, nightDifficulty, nightSeed, planCampaign, type CampaignPlan, type Generator, type Level, type NightPlan,
+  applyRun, betterRun, emptyRecord, firstUnwon, mapFingerprint, missionFingerprint, nightDifficulty, nightOpen, nightSeed, planCampaign,
+  reconcile, runFrom, type CampaignPlan, type Generator, type Level, type NightPlan, type Run,
 } from '../src/sim/campaign';
+import { gradeMission, scoreInput } from '../src/sim/score';
+import { Bot, SKILL } from '../src/sim/bot';
 
 // Spec 001 (Three Nights), step 1: three deterministic, guardrail-clean nights out of every map we have,
 // and a replayed night is the same mission. docs/story/campaign.md §2, §5 and §9.
@@ -259,4 +262,103 @@ describe('campaign: fingerprints', () => {
     // The name isn't part of it (it can hold a house number); the place key adds S.
     expect(mapFingerprint({ ...map, name: '12, Example Street' })).toBe(mapFingerprint(map));
   });
+});
+
+describe('campaign record reducer (numbers only)', () => {
+  const won = (grade: Run['grade'], time: number, extra: Partial<Run> = {}): Run => ({
+    won: true, grade, time, survivorsTotal: 2, survivorsSaved: 2, friendlyHits: 0, kills: 30, integrity: 1, ...extra,
+  });
+  const lost = (time = 100): Run => ({ ...won('D', time), won: false, survivorsSaved: 0 });
+
+  it('a win is stored as best; a better replay replaces it; a worse one does not', () => {
+    let r = emptyRecord();
+    const first = applyRun(r, 1, 'aaaaaaaa', won('B', 120));
+    expect(first.isNewBest).toBe(true);
+    expect(first.previous).toBeNull();
+    r = first.record;
+    expect(r.nights[0]).toEqual({ fp: 'aaaaaaaa', tries: 1, best: { grade: 'B', time: 120, survivorsTotal: 2, survivorsSaved: 2, friendlyHits: 0, kills: 30, integrity: 1 } });
+    const worse = applyRun(r, 1, 'aaaaaaaa', won('C', 60));
+    expect(worse.isNewBest).toBe(false);
+    expect(worse.record.nights[0]!.best!.grade).toBe('B');
+    expect(worse.record.nights[0]!.tries).toBe(2);
+    const better = applyRun(worse.record, 1, 'aaaaaaaa', won('A', 200, { kills: 41 }));
+    expect(better.isNewBest).toBe(true);
+    expect(better.previous!.grade).toBe('B');
+    expect(better.record.nights[0]!.best).toMatchObject({ grade: 'A', time: 200, kills: 41 });
+    // Same grade: only a clearly faster run replaces it; a tie keeps the old run.
+    expect(applyRun(better.record, 1, 'aaaaaaaa', won('A', 199.8, { kills: 1 })).isNewBest).toBe(false);
+    expect(applyRun(better.record, 1, 'aaaaaaaa', won('A', 150)).isNewBest).toBe(true);
+    expect(betterRun(won('A', 10), undefined)).toBe(true);
+    expect(betterRun(won('S', 500), won('A', 10))).toBe(true);
+    expect(betterRun(won('A', 10), won('A', 10))).toBe(false);
+    // The reducer never changes the record it was given.
+    expect(r.nights[0]!.tries).toBe(1);
+  });
+
+  it('a loss increments tries and never removes a win', () => {
+    let r = applyRun(emptyRecord(), 1, 'aaaaaaaa', lost()).record;
+    expect(r.nights[0]).toEqual({ fp: 'aaaaaaaa', tries: 1 });
+    r = applyRun(r, 1, 'aaaaaaaa', won('C', 250)).record;
+    r = applyRun(r, 1, 'aaaaaaaa', lost()).record;
+    r = applyRun(r, 1, 'aaaaaaaa', lost()).record;
+    expect(r.nights[0]!.tries).toBe(4);
+    expect(r.nights[0]!.best!.grade).toBe('C');
+    // A lost run is never a best, even if its grade field says otherwise.
+    expect(applyRun(r, 1, 'aaaaaaaa', { ...won('S', 1), won: false }).record.nights[0]!.best!.grade).toBe('C');
+  });
+
+  it('night n opens only after night n−1 is won', () => {
+    let r = emptyRecord();
+    expect([nightOpen(r, 1), nightOpen(r, 2), nightOpen(r, 3)]).toEqual([true, false, false]);
+    expect(firstUnwon(r)).toBe(1);
+    // Flying a locked night records nothing.
+    expect(applyRun(r, 2, 'bbbbbbbb', won('A', 100)).record).toEqual(r);
+    r = applyRun(r, 1, 'aaaaaaaa', lost()).record;
+    expect(nightOpen(r, 2)).toBe(false);
+    r = applyRun(r, 1, 'aaaaaaaa', won('B', 100)).record;
+    expect([nightOpen(r, 2), nightOpen(r, 3)]).toEqual([true, false]);
+    expect(firstUnwon(r)).toBe(2);
+    r = applyRun(r, 2, 'bbbbbbbb', won('B', 300)).record;
+    r = applyRun(r, 3, 'cccccccc', won('A', 270)).record;
+    expect(nightOpen(r, 3)).toBe(true);
+    expect(firstUnwon(r)).toBeNull();
+  });
+
+  it('an fp mismatch resets that night and every later one', () => {
+    const p = nights(plan(map, 1, 2));
+    let r = emptyRecord();
+    for (const x of p) r = applyRun(r, x.night, x.fp, won('B', 100)).record;
+    expect(reconcile(p, r)).toEqual({ record: r, reset: null });
+    // The map changed under night two: nights two and three start fresh, night one stays won.
+    const changed = p.map((x) => (x.night === 2 ? { ...x, fp: '00000000' } : x));
+    const rec = reconcile(changed, r);
+    expect(rec.reset).toBe(2);
+    expect(rec.record.nights[0]).toEqual(r.nights[0]);
+    expect(rec.record.nights[1]).toBeNull();
+    expect(rec.record.nights[2]).toBeNull();
+    // Recording a run against a changed night resets it (and the ones after) the same way.
+    const again = applyRun(r, 2, '00000000', lost()).record;
+    expect(again.nights[1]).toEqual({ fp: '00000000', tries: 1 });
+    expect(again.nights[2]).toBeNull();
+    expect(again.nights[0]).toEqual(r.nights[0]);
+  });
+
+  it('runFrom takes its numbers from the finished sim and its grade', () => {
+    const x = nights(plan(map, 1, 1))[0];
+    const r = createSim(map, x.options);
+    if (!r.ok) throw new Error(r.reason);
+    const bot = new Bot(r.sim, SKILL.ace);
+    while (r.sim.phase === 'running' && r.sim.t < 600) {
+      bot.step(1 / 30);
+      r.sim.step(1 / 30);
+    }
+    const s = r.sim.state();
+    const score = gradeMission(scoreInput(r.sim.mission, s));
+    const run = runFrom(r.sim.mission, s, score);
+    const si = scoreInput(r.sim.mission, s);
+    expect(run).toEqual({
+      won: s.phase === 'won', grade: score.grade, time: s.t, survivorsTotal: s.survivorsTotal, survivorsSaved: si.survivorsSaved,
+      friendlyHits: s.friendlyHits, kills: s.kills, integrity: s.integrity,
+    });
+  }, 60_000);
 });

@@ -3,6 +3,8 @@ import type { RoadGraph } from '../map/roadGraph';
 import type { WalkGrid } from '../map/grid';
 import { MISSION_TEMPLATES, mapFeatures, templateAnchors, type TemplateId } from '../map/recon';
 import { generateMission, type Mission, type MissionOptions, type MissionResult, type MissionType } from './missions';
+import { rank, scoreInput, type Grade, type Score } from './score';
+import type { SimState } from './sim';
 import { hashString } from '../util/rng';
 
 /**
@@ -177,4 +179,108 @@ export function planCampaign(
     done.push(found);
   }
   return { ok: true, S, level, nights: done as [NightPlan, NightPlan, NightPlan], calls };
+}
+
+// ---------------------------------------------------------------------------------------
+// The record of a campaign: numbers only (spec 001 §2). Names for the text come from the
+// re-planned nights, which are identical by determinism, so the device holds no street names.
+// ---------------------------------------------------------------------------------------
+
+/** What's kept from a won run. */
+export interface RunNumbers {
+  grade: Grade;
+  /** Seconds the run took. */
+  time: number;
+  survivorsTotal: number;
+  /** As scored: escort and defend, made it in; clear, still alive. */
+  survivorsSaved: number;
+  friendlyHits: number;
+  kills: number;
+  /** Defend: the safehouse, 0..1 (1 for other missions). */
+  integrity: number;
+}
+export interface Run extends RunNumbers {
+  won: boolean;
+}
+export interface NightRecord {
+  /** missionFingerprint of the night these numbers belong to. */
+  fp: string;
+  /** Finished runs, won or lost. 0 = never flown (gates the night opener line). Leaving a night isn't a try. */
+  tries: number;
+  /** The best won run. Absent until the night is won. */
+  best?: RunNumbers;
+}
+/** One campaign at one level on one map. */
+export interface CampaignRecord {
+  nights: [NightRecord | null, NightRecord | null, NightRecord | null];
+}
+
+export function emptyRecord(): CampaignRecord {
+  return { nights: [null, null, null] };
+}
+
+/** The numbers of a finished run, as the grade saw them. */
+export function runFrom(m: Mission, s: SimState, score: Score): Run {
+  const i = scoreInput(m, s);
+  return {
+    won: s.phase === 'won', grade: score.grade, time: s.t, survivorsTotal: s.survivorsTotal, survivorsSaved: i.survivorsSaved,
+    friendlyHits: s.friendlyHits, kills: s.kills, integrity: s.integrity,
+  };
+}
+
+/** Is `a` a better run than `b`? A higher grade wins; on the same grade, a clearly faster time. A tie keeps the old run. */
+export function betterRun(a: RunNumbers, b: RunNumbers | null | undefined): boolean {
+  if (!b) return true;
+  if (rank(a.grade) !== rank(b.grade)) return rank(a.grade) < rank(b.grade);
+  return a.time < b.time - 0.5;
+}
+
+/** Night n can be flown: it's night one, or the night before it has been won. */
+export function nightOpen(r: CampaignRecord, night: Night): boolean {
+  return night === 1 || !!r.nights[night - 2]?.best;
+}
+
+/** The first night not yet won, or null when all three are. */
+export function firstUnwon(r: CampaignRecord): Night | null {
+  return NIGHTS.find((n) => !r.nights[n - 1]?.best) ?? null;
+}
+
+const numbers = (x: RunNumbers): RunNumbers => ({
+  grade: x.grade, time: x.time, survivorsTotal: x.survivorsTotal, survivorsSaved: x.survivorsSaved,
+  friendlyHits: x.friendlyHits, kills: x.kills, integrity: x.integrity,
+});
+
+/** The record with night n and every later night cleared. */
+function resetFrom(r: CampaignRecord, night: Night): CampaignRecord {
+  return { nights: r.nights.map((x, i) => (i >= night - 1 ? null : x)) as CampaignRecord['nights'] };
+}
+
+/**
+ * Checks a saved record against the re-planned nights. A night whose fingerprint doesn't match (the map
+ * changed since) is reset, with every night after it. `reset` names the first night reset, or null.
+ */
+export function reconcile(plan: readonly Pick<NightPlan, 'night' | 'fp'>[], r: CampaignRecord): { record: CampaignRecord; reset: Night | null } {
+  for (const x of plan) {
+    const saved = r.nights[x.night - 1];
+    if (saved && saved.fp !== x.fp) return { record: resetFrom(r, x.night), reset: x.night };
+  }
+  return { record: r, reset: null };
+}
+
+/**
+ * Records a finished run of night n (pure: returns a new record). Every finished run is a try; only a
+ * won run can be the best, and a loss never removes a win. A night that isn't open records nothing.
+ */
+export function applyRun(r: CampaignRecord, night: Night, fp: string, run: Run): { record: CampaignRecord; isNewBest: boolean; previous: RunNumbers | null } {
+  if (!nightOpen(r, night)) return { record: r, isNewBest: false, previous: r.nights[night - 1]?.best ?? null };
+  const base = r.nights[night - 1] && r.nights[night - 1]!.fp !== fp ? resetFrom(r, night) : r;
+  const was = base.nights[night - 1];
+  const previous = was?.best ?? null;
+  const isNewBest = run.won && betterRun(run, previous);
+  const next: NightRecord = { fp, tries: (was?.tries ?? 0) + 1 };
+  const best = isNewBest ? numbers(run) : previous;
+  if (best) next.best = best;
+  const nights = [...base.nights] as CampaignRecord['nights'];
+  nights[night - 1] = next;
+  return { record: { nights }, isNewBest, previous };
 }
