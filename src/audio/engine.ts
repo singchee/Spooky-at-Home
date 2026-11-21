@@ -11,6 +11,10 @@ import { Mixer } from './mixer';
 import { GeneratedScore, playSting, type Score, type ScoreMode } from './music';
 import { Ambience, radioStatic } from './ambience';
 import { Kit } from './kit';
+import { AssetBank, MUSIC, SFX, VOICE_LINES, voiceAsset, type AssetStats, type VoiceLine } from './assets';
+import { BED_IDS, playRecordedSting, RecordedBed, RecordedScore, trackIds } from './recorded';
+import { SamplePlayer } from './samples';
+import { VoiceChannel, type VoiceLogEntry } from './voice';
 
 /** What sound effects need: the context, where to plug in, and the extras the engine offers. */
 export interface SfxOutput {
@@ -22,6 +26,9 @@ export interface SfxOutput {
   radioStatic?(dur: number): void;
   kit?: Kit;
   resume?(): void;
+  /** A recorded sample, if it has loaded (null: use the generated sound). */
+  sample?(id: string): AudioBuffer | null;
+  samples?: SamplePlayer;
 }
 
 /** A released scene lingers this long (ms) in case the next screen claims it again (e.g. Retry). */
@@ -39,6 +46,10 @@ export interface AudioDebug {
   fading: number;
   intensity: number;
   gains: ReturnType<Mixer['read']> | null;
+  /** Which parts are playing from the recorded files rather than generated. */
+  recorded: { score: boolean; bed: boolean };
+  assets: AssetStats | null;
+  voice: { said: number; overlaps: number; onAir: VoiceLine | null; waiting: number; log: VoiceLogEntry[] } | null;
 }
 
 export class AudioEngine {
@@ -48,6 +59,10 @@ export class AudioEngine {
   private sfxKit: Kit | null = null;
   private score: Score | null = null;
   private ambience: Ambience | null = null;
+  private bed: RecordedBed | null = null;
+  private bank: AssetBank | null = null;
+  private samples: SamplePlayer | null = null;
+  private voice: VoiceChannel | null = null;
   private fadingOut: { tick(now: number): void; done: boolean }[] = [];
   private scene: ScoreMode = 'menu';
   private intensity = 0;
@@ -84,6 +99,7 @@ export class AudioEngine {
       const d = this.noise.getChannelData(0);
       for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
       this.sfxKit = new Kit(ctx, this.count);
+      this.loadRecorded(ctx, this.mixer);
       this.last = ctx.currentTime;
       setInterval(() => this.tick(), TICK_MS); // page-lived, like the context
       document.addEventListener('visibilitychange', this.onVisibility);
@@ -95,6 +111,23 @@ export class AudioEngine {
       this.ctx = null;
       return false;
     }
+  }
+
+  /**
+   * Fetch and decode the recorded files in the background (never awaited): the radio squelch and
+   * first line, this screen's music, the effects, the rest of the voice, then the other music.
+   * Until (or unless) a file arrives, its generated stand-in plays.
+   */
+  private loadRecorded(ctx: AudioContext, mixer: Mixer): void {
+    const bank = (this.bank = new AssetBank(ctx));
+    this.samples = new SamplePlayer(ctx, this.count);
+    this.voice = new VoiceChannel(ctx, mixer.radio, bank, (d, h) => mixer.duck(d, h), this.count);
+    const other: ScoreMode = this.scene === 'menu' ? 'mission' : 'menu';
+    void bank.request([SFX.squelch, voiceAsset('cleared-hot')]);
+    void bank.request(trackIds(this.scene));
+    void bank.request([SFX.fire25, SFX.fire40, SFX.fire105, SFX.explosion, SFX.alarm, ...BED_IDS]);
+    void bank.request(VOICE_LINES.map(voiceAsset));
+    void bank.request([...trackIds(other), MUSIC.stingWin, MUSIC.stingLose]);
   }
 
   /** A hidden tab goes quiet (and stops using the CPU); it picks up again when shown. */
@@ -117,6 +150,7 @@ export class AudioEngine {
   /** This screen is going. After a short grace, fall back to the menu theme (freeing the mission's nodes). */
   release(scene: ScoreMode): void {
     if (scene !== this.scene || scene === 'menu') return;
+    this.voice?.hush(); // a retry or quit: this mission's radio goes with it
     clearTimeout(this.releaseTimer);
     this.releaseTimer = setTimeout(() => {
       this.releaseTimer = undefined;
@@ -138,7 +172,16 @@ export class AudioEngine {
 
   /** A short musical cue at the end of a mission. */
   sting(won: boolean): void {
-    if (this.ctx && this.mixer) playSting(this.ctx, this.mixer.music, won, this.count);
+    if (!this.ctx || !this.mixer) return;
+    if (this.bank && playRecordedSting(this.ctx, this.mixer.music, this.bank, won, this.count)) {
+      // The recorded sting is a full cue: the score steps back while it plays.
+      if (this.score instanceof RecordedScore) this.score.dip(0.3, 6);
+    } else playSting(this.ctx, this.mixer.music, won, this.count);
+  }
+
+  /** A radio voice line (queued: one at a time, never overlapping; see voice.ts). */
+  say(line: VoiceLine): void {
+    this.voice?.say(line);
   }
 
   /** The buses for sound effects (unlocks the context). Null if Web Audio is unavailable. */
@@ -155,6 +198,8 @@ export class AudioEngine {
       duck: (d, h) => mixer.duck(d, h),
       radioStatic: (dur) => radioStatic(ctx, mixer.radio, noise, dur, (hiss += 0.37), sfxKit),
       resume: () => this.unlock(),
+      sample: (id) => this.bank?.get(id) ?? null,
+      samples: this.samples ?? undefined,
     };
   }
 
@@ -166,7 +211,7 @@ export class AudioEngine {
         this.score.stop(this.scene === 'menu' ? 2.5 : 1.2);
         this.fadingOut.push(this.score);
       }
-      this.score = new GeneratedScore(ctx, mixer.music, this.scene, this.seq++, this.count);
+      this.score = this.recordedScore(this.scene) ?? new GeneratedScore(ctx, mixer.music, this.scene, this.seq++, this.count);
       this.score.setIntensity(this.intensity);
     }
     if (this.scene === 'mission' && !this.ambience) {
@@ -175,6 +220,49 @@ export class AudioEngine {
       this.ambience.stop(2);
       this.fadingOut.push(this.ambience);
       this.ambience = null;
+      if (this.bed) {
+        this.bed.stop(2);
+        this.fadingOut.push(this.bed);
+        this.bed = null;
+      }
+    }
+  }
+
+  /** The recorded score for a scene, if its files have loaded (else null: play the generated one). */
+  private recordedScore(mode: ScoreMode, start?: number, fadeIn?: number): RecordedScore | null {
+    const { ctx, mixer, bank } = this;
+    if (!ctx || !mixer || !bank || !bank.ready(trackIds(mode))) return null;
+    try {
+      return new RecordedScore(ctx, mixer.music, mode, bank, this.count, start, fadeIn);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Files that arrive after a scene started take over from the generated stand-ins: the recorded
+   * score crossfades in over a few seconds, and the recorded drone and night air are layered over
+   * a quieter generated bed.
+   */
+  private upgrade(): void {
+    const { ctx, mixer, bank } = this;
+    if (!ctx || !mixer || !bank) return;
+    if (this.score instanceof GeneratedScore && !this.score.done && bank.ready(trackIds(this.score.mode))) {
+      const next = this.recordedScore(this.score.mode, this.score.intensity, 1.5);
+      if (next) {
+        next.setIntensity(this.intensity);
+        this.score.stop(3);
+        this.fadingOut.push(this.score);
+        this.score = next;
+      }
+    }
+    if (this.ambience && !this.bed && bank.ready(BED_IDS)) {
+      try {
+        this.bed = new RecordedBed(ctx, mixer.ambience, bank, this.count);
+        this.ambience.blend(0.35);
+      } catch {
+        this.bed = null;
+      }
     }
   }
 
@@ -185,8 +273,11 @@ export class AudioEngine {
     const dt = Math.max(0, Math.min(0.25, now - this.last));
     this.last = now;
     this.mixer.tick(dt);
+    this.upgrade();
     this.score?.tick(now);
     this.ambience?.tick(now);
+    this.bed?.tick(now);
+    this.voice?.tick();
     for (const f of this.fadingOut) f.tick(now);
     this.fadingOut = this.fadingOut.filter((f) => !f.done);
   }
@@ -202,6 +293,11 @@ export class AudioEngine {
       fading: this.fadingOut.length,
       intensity: this.score?.intensity ?? 0,
       gains: this.mixer?.read() ?? null,
+      recorded: { score: this.score instanceof RecordedScore, bed: !!this.bed },
+      assets: this.bank?.stats() ?? null,
+      voice: this.voice
+        ? { said: this.voice.said, overlaps: this.voice.overlaps(), onAir: this.voice.queue.current?.line ?? null, waiting: this.voice.queue.waiting, log: this.voice.log.slice(-12) }
+        : null,
     };
   }
 
@@ -210,6 +306,7 @@ export class AudioEngine {
     if (typeof navigator === 'undefined' || !navigator.webdriver || typeof window === 'undefined') return;
     const hooks = window.__spooky as unknown as Record<string, unknown> | undefined;
     if (hooks && !hooks.audio) hooks.audio = () => this.debug();
+    if (hooks && !hooks.audioSay) hooks.audioSay = (line: VoiceLine) => this.say(line);
   }
 }
 

@@ -1,0 +1,177 @@
+/**
+ * Recorded sound files (public/audio, served from the game's own origin): fetched and decoded
+ * lazily after the first click or key press, cached as AudioBuffers, and never waited on. Anything
+ * that fails to load (offline, a missing file, a browser that can't decode it) is simply absent:
+ * whoever asked falls back to the generated sound. The first failure is logged once, as a warning.
+ */
+
+/** Music cues (60 s loops and 8 s stings). */
+export const MUSIC = {
+  menu: 'music/menu-theme',
+  calm: 'music/mission-calm',
+  tense: 'music/mission-tense',
+  overrun: 'music/mission-overrun',
+  stingWin: 'music/sting-win',
+  stingLose: 'music/sting-lose',
+} as const;
+
+/** Sound effects and ambience beds. */
+export const SFX = {
+  drone: 'sfx/engine-drone',
+  night: 'sfx/night-ambience',
+  fire25: 'sfx/fire-25mm',
+  fire40: 'sfx/fire-40mm',
+  fire105: 'sfx/fire-105mm',
+  explosion: 'sfx/explosion-distant',
+  squelch: 'sfx/radio-squelch',
+  alarm: 'sfx/alarm',
+} as const;
+
+/** The radio lines (file name = what is said). */
+export const VOICE_LINES = [
+  'cleared-hot',
+  'new-contacts',
+  'more-coming',
+  'cold-blooded',
+  'good-effect',
+  'former-neighbours',
+  'splash-residents',
+  'danger-close',
+  'check-fire',
+  'survivor-lost',
+  'survivor-home-kettle',
+  'survivor-home-quieter',
+  'friendlies-under-attack',
+  'safehouse-hits',
+  'rushers',
+  'big-group',
+  'all-clear',
+  'survivors-moving',
+  'mission-complete',
+  'mission-failed',
+] as const;
+export type VoiceLine = (typeof VOICE_LINES)[number];
+export const voiceAsset = (line: VoiceLine): string => `voice/${line}`;
+
+export type AssetState = 'idle' | 'queued' | 'loading' | 'ready' | 'failed';
+
+/** What decoding needs (an AudioContext, or a stand-in in tests). */
+export interface Decoder {
+  decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer>;
+}
+export type Fetcher = (url: string) => Promise<{ ok: boolean; status?: number; arrayBuffer(): Promise<ArrayBuffer> }>;
+
+export interface AssetStats {
+  ready: number;
+  failed: number;
+  pending: number;
+}
+
+/** Where the files are served from: next to the page (the build uses a relative base). */
+const BASE = `${import.meta.env?.BASE_URL ?? './'}audio/`;
+
+export class AssetBank {
+  private buffers = new Map<string, AudioBuffer>();
+  private states = new Map<string, AssetState>();
+  private waiting: string[] = [];
+  private active = 0;
+  private warned = false;
+  private settled = new Map<string, (() => void)[]>();
+
+  constructor(
+    private decoder: Decoder,
+    private fetcher: Fetcher | null = typeof fetch === 'function' ? (u) => fetch(u) : null,
+    private base = BASE,
+    /** Files fetched and decoded at once (keeps decode memory and CPU spikes small). */
+    private concurrency = 2,
+    private warn: (msg: string) => void = (m) => console.warn(m),
+  ) {}
+
+  /** The decoded buffer, or null if it isn't loaded (yet, or ever). Never starts a load. */
+  get(id: string): AudioBuffer | null {
+    return this.buffers.get(id) ?? null;
+  }
+
+  status(id: string): AssetState {
+    return this.states.get(id) ?? 'idle';
+  }
+
+  /** All of these are loaded. */
+  ready(ids: readonly string[]): boolean {
+    return ids.every((id) => this.buffers.has(id));
+  }
+
+  /** At least one of these failed to load (so a set that needs all of them never will). */
+  failed(ids: readonly string[]): boolean {
+    return ids.some((id) => this.states.get(id) === 'failed');
+  }
+
+  /**
+   * Load these, in order, behind anything already waiting. Never throws or rejects; the promise
+   * settles when each has either loaded or failed. Asking again for a file is free.
+   */
+  request(ids: readonly string[]): Promise<void> {
+    const waits: Promise<void>[] = [];
+    for (const id of ids) {
+      const s = this.status(id);
+      if (s === 'ready' || s === 'failed') continue;
+      if (s === 'idle') {
+        this.states.set(id, 'queued');
+        this.waiting.push(id);
+      }
+      waits.push(new Promise((res) => this.settled.set(id, [...(this.settled.get(id) ?? []), res])));
+    }
+    this.pump();
+    return Promise.all(waits).then(() => undefined);
+  }
+
+  stats(): AssetStats {
+    let ready = 0;
+    let failed = 0;
+    let pending = 0;
+    for (const s of this.states.values()) {
+      if (s === 'ready') ready++;
+      else if (s === 'failed') failed++;
+      else pending++;
+    }
+    return { ready, failed, pending };
+  }
+
+  private pump(): void {
+    while (this.active < this.concurrency && this.waiting.length) {
+      const id = this.waiting.shift()!;
+      this.active++;
+      this.states.set(id, 'loading');
+      this.load(id)
+        .then(
+          (buf) => {
+            this.buffers.set(id, buf);
+            this.states.set(id, 'ready');
+          },
+          (e: unknown) => {
+            this.states.set(id, 'failed');
+            if (!this.warned) {
+              this.warned = true;
+              this.warn(`Spooky: recorded audio unavailable (${id}: ${e instanceof Error ? e.message : String(e)}); using generated sound.`);
+            }
+          },
+        )
+        .finally(() => {
+          this.active--;
+          for (const f of this.settled.get(id) ?? []) f();
+          this.settled.delete(id);
+          this.pump();
+        });
+    }
+  }
+
+  private async load(id: string): Promise<AudioBuffer> {
+    if (!this.fetcher) throw new Error('no fetch');
+    const res = await this.fetcher(`${this.base}${id}.mp3`);
+    if (!res.ok) throw new Error(`HTTP ${res.status ?? '?'}`);
+    const data = await res.arrayBuffer();
+    const buf = await this.decoder.decodeAudioData(data);
+    if (!buf || !(buf.duration > 0)) throw new Error('empty audio');
+    return buf;
+  }
+}

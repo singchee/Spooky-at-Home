@@ -16,6 +16,7 @@ import { el } from '../ui/dom';
 import { Sfx } from '../audio/sfx';
 import { audio } from '../audio/engine';
 import { measureThreat, threatIntensity } from '../audio/intensity';
+import { VoiceDirector } from '../audio/voice';
 import { waveCall } from './waveCall';
 import { getSettings, onSettingsChange, updateSettings } from '../ui/settings';
 import { openSettingsPanel } from '../ui/settingsPanel';
@@ -493,11 +494,14 @@ export class Game {
   /** Kills waiting to be called in (merged over KILL_MERGE seconds), and which line goes next. */
   private waveCall = 0;
   private killCall = { n: 0, at: -1, next: -1 };
+  /** Recorded radio voice: flavour under the on-screen radio text (src/audio/voice.ts). */
+  private voice: VoiceDirector | null = null;
 
   private handleEvents(events: SimEvent[]): void {
     const now = this.clock;
     const kc = this.killCall;
     if (kc.next < 0) kc.next = this.sim.mission.seed % KILL_LINES.length;
+    (this.voice ??= new VoiceDirector((line) => audio.say(line), this.sim.mission.seed)).update(events, this.sim);
     for (const e of events) {
       this.opts.onAction?.({ type: 'sim', event: e });
       switch (e.type) {
@@ -541,6 +545,7 @@ export class Game {
     }
     if (kc.at >= 0 && now - kc.at >= KILL_MERGE) {
       this.radio(KILL_LINES[kc.next](kc.n));
+      this.voice?.bigKill();
       kc.next = (kc.next + 1) % KILL_LINES.length;
       kc.at = -1;
       kc.n = 0;
