@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+# Map files exported from your own neighbourhood stay on your machine
+maps/private/
