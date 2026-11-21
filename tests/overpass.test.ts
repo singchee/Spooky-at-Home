@@ -119,8 +119,9 @@ describe('parseOverpass: recon categories (phase 2)', () => {
     expect(cats('school')[0].pts!.length).toBe(4);
   });
 
-  it('counts tennis from sport=tennis pitches and club=tennis', () => {
-    expect(cats('tennis').map((f) => f.name ?? '').sort()).toEqual(['', 'Coral Tennis Club']);
+  it('counts tennis from club=tennis; an unnamed sport=tennis pitch is just a sports ground', () => {
+    expect(cats('tennis').map((f) => f.name ?? '').sort()).toEqual(['Coral Tennis Club']);
+    expect(cats('pitch').map((f) => f.id).sort()).toEqual(['w106', 'w107']);
   });
 
   it('skips private backyard pools but keeps the public one', () => {
