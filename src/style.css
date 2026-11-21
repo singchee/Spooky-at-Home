@@ -67,7 +67,12 @@ button:disabled { opacity: 0.5; }
 }
 @media (max-width: 640px) {
   .hud-attrib { left: 16px; right: 16px; text-align: center; }
-  .hud-radio, .hud-sensor { bottom: 64px; }
+  .hud-radio { bottom: 64px; max-width: calc(100% - 32px); }
+  .hud-sensor { top: 16px; bottom: auto; left: 50%; right: auto; transform: translateX(-50%); }
+  .hud-mission { top: 108px; }
+  .card { padding: 16px; }
+  .row > * { min-width: 0; max-width: 100%; }
+  .row select, .row input, .filelabel, .filelabel input { width: 100%; }
   .card h1 { font-size: 28px; letter-spacing: 0.06em; }
   .menu { align-items: flex-start; }
   .filelabel input { max-width: 100%; }

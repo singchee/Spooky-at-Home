@@ -85,7 +85,7 @@ if (params.get('autostart') === '1') {
       difficulty: clampInt(params.get('difficulty'), 1, 5, 2),
       seed: clampInt(params.get('seed'), 1, 1e9, 1),
     },
-    { bot: params.get('bot') === '1', skipBriefing: params.get('brief') !== '1', sensor: (params.get('sensor') as SensorId) ?? undefined },
+    { bot: params.get('bot') === '1', skipBriefing: params.get('brief') !== '1', sensor: params.get('sensor') === 'night' ? 'night' : undefined },
   );
 } else {
   menu();

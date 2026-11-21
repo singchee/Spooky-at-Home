@@ -142,6 +142,8 @@ function roadNodesWithin(g: RoadGraph, map: MapData, frac: number): number[] {
 }
 
 export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts: MissionOptions): MissionResult {
+  if (!Number.isFinite(opts.difficulty)) return { ok: false, reason: 'Difficulty must be a number from 1 to 5.' };
+  if (opts.type !== 'auto' && !MISSION_TYPES.includes(opts.type)) return { ok: false, reason: `Unknown mission type "${String(opts.type)}".` };
   const d = Math.max(1, Math.min(5, Math.round(opts.difficulty)));
   const rng = mulberry32(hashString(`${map.name}|${opts.seed}|${opts.type}|${d}`));
   if (g.mainComp < 0 || roadNodesWithin(g, map, 0.9).length < 10) {

@@ -133,6 +133,7 @@ export class Game {
     if (this.screen !== 'playing') return;
     this.screen = 'paused';
     this.firing = false;
+    if (document.pointerLockElement) document.exitPointerLock?.();
     this.overlay.replaceChildren();
     const card = el('div', 'card', undefined, this.overlay);
     el('h2', undefined, 'Paused', card);
@@ -157,14 +158,13 @@ export class Game {
     const card = el('div', `card ${won ? 'won' : 'lost'}`, undefined, this.overlay);
     el('div', 'card-kicker', won ? 'MISSION COMPLETE' : 'MISSION FAILED', card);
     el('h2', undefined, reason, card);
-    const acc = s.shots ? Math.round((s.kills / s.shots) * 100) : 0;
     const stats = [
       `Time ${Math.floor(s.t / 60)}:${String(Math.floor(s.t % 60)).padStart(2, '0')}`,
-      `Kills ${s.kills} (${acc} per 100 rounds)`,
-      `Rounds fired ${s.shots}`,
+      `Kills ${s.kills} from ${s.shots} rounds${s.shots ? ` (${(s.kills / s.shots).toFixed(1)} per round)` : ''}`,
       `Friendly-fire incidents ${s.friendlyHits}`,
     ];
-    if (s.survivorsTotal) stats.push(`Survivors home ${s.survivorsHome}/${s.survivorsTotal}`);
+    if (s.survivorsTotal && this.sim.mission.type === 'clear') stats.push(`Friendlies alive ${s.survivorsAlive}/${s.survivorsTotal}`);
+    else if (s.survivorsTotal) stats.push(`Survivors home ${s.survivorsHome}/${s.survivorsTotal}`);
     for (const t of stats) el('p', 'small', t, card);
     const row = el('div', 'row', undefined, card);
     el('button', 'primary', 'Retry', row).addEventListener('click', () => this.opts.onRetry());
@@ -228,7 +228,7 @@ export class Game {
       if (k === 'q') this.weapon = WEAPONS[(WEAPONS.findIndex((w) => w.id === this.weapon) + 1) % WEAPONS.length].id;
       if (k === 'v' && this.switchLeft <= 0) this.setSensor(this.sensor === 'thermal' ? 'night' : 'thermal');
       // At most one white/black-hot flip per 0.35 s, so rapid tapping stays under 3 flashes a second.
-      if (k === 'h' && this.clock - this.lastFlip >= 0.35) {
+      if (k === 'h' && this.sensor === 'thermal' && this.clock - this.lastFlip >= 0.35) {
         this.polarity = 1 - this.polarity;
         this.lastFlip = this.clock;
       }

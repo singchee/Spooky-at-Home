@@ -86,6 +86,8 @@ export interface SimState {
 }
 
 export const ORBIT = { radius: 1000, altitude: 1500, period: 120 };
+/** New zombies never appear closer than this to a survivor (metres). Spawn points sit 12 m wide, so this leaves ~60 m. */
+export const MIN_SPAWN_GAP = 75;
 
 export class Sim {
   readonly mission: Mission;
@@ -131,6 +133,10 @@ export class Sim {
         id: i, x: p.start.x, z: p.start.z, alive: true, home: false, hp: 1, s: 0, delay: p.delay,
         offset: ((i % 3) - 1) * 1.4, route: p.route, routeLen: p.route ? polylineLength(p.route) : 0, diedAt: -1,
       });
+      // Spread the waiting group out a little instead of stacking everyone on one point.
+      const last = this.survivors[this.survivors.length - 1];
+      last.x += ((i % 3) - 1) * 1.6;
+      last.z += (Math.floor(i / 3) - 0.5) * 1.6;
     });
     if (mission.safehouse && mission.type === 'defend') this.safeField = grid.flowField(grid.perimeterCells(mission.safehouse.poly));
     if (mission.waves) this.waveTimer = 3; // first wave arrives quickly
@@ -305,7 +311,8 @@ export class Sim {
         for (let i = 0; i < g.nodes.length; i++) {
           if (g.comp[i] !== g.mainComp) continue;
           const d = dist(g.nodes[i], ref);
-          if (d >= 30 && d <= 90) cands.push(i);
+          // Routes can double back, so also keep ambushes well clear of where the survivors are now.
+          if (d >= 30 && d <= 90 && active.every((s) => dist(g.nodes[i], s) >= MIN_SPAWN_GAP)) cands.push(i);
         }
       }
     }
@@ -315,7 +322,7 @@ export class Sim {
         const n = g.nodes[i];
         if (Math.abs(n.x) > lim || Math.abs(n.z) > lim) continue;
         const d = dist(n, ref);
-        if (d >= w.minDist && d <= w.maxDist) cands.push(i);
+        if (d >= w.minDist && d <= w.maxDist && active.every((s) => dist(n, s) >= MIN_SPAWN_GAP)) cands.push(i);
       }
     }
     if (!cands.length) return;

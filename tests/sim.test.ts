@@ -162,3 +162,33 @@ describe('committed fingerprint (gate G4 across machines and versions)', () => {
   });
 });
 const EXPECTED_FINGERPRINT = '94d6a80a';
+
+describe('regressions from the phase 1 playtest', () => {
+  it('escort ambushes never spawn on top of survivors (was: 3.5% of missions lost by second 5)', () => {
+    for (let d = 1; d <= 5; d++) {
+      for (let seed = 1; seed <= 40; seed++) {
+        const sim = make('escort', d, seed);
+        play(sim, null, 4); // first wave arrives at t = 3 s
+        for (const s of sim.survivors) {
+          const nearest = Math.min(...sim.zombies.filter((z) => z.alive).map((z) => Math.hypot(z.x - s.x, z.z - s.z)));
+          expect(nearest, `escort d${d} seed ${seed}`).toBeGreaterThanOrEqual(55);
+        }
+      }
+    }
+  }, 120_000);
+
+  it('a perfect gunner wins escort on difficulty 1 for nearly every seed', () => {
+    let wins = 0;
+    for (let seed = 1; seed <= 20; seed++) {
+      const sim = make('escort', 1, seed);
+      play(sim, new Bot(sim, SKILL.ace));
+      if (sim.phase === 'won') wins++;
+    }
+    expect(wins).toBeGreaterThanOrEqual(18);
+  }, 180_000);
+
+  it('rejects a NaN difficulty or unknown mission type instead of building a broken mission', () => {
+    expect(generateMission(map, graph, grid, { type: 'clear', difficulty: NaN, seed: 1 }).ok).toBe(false);
+    expect(generateMission(map, graph, grid, { type: 'foo' as MissionType, difficulty: 2, seed: 1 }).ok).toBe(false);
+  });
+});

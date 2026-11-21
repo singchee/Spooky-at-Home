@@ -72,15 +72,28 @@ try {
       for (let i = 0; i < d.length; i += 4) s += d[i];
       return s / (d.length / 4);
     });
+    // Hold H for ~2 s with real key auto-repeat (Playwright marks repeated keydowns as repeat=true),
+    // sampling brightness every ~100 ms. A flash = a large swing that reverses direction.
     const samples = [await mean()];
-    await page.keyboard.down('h');
-    for (let i = 0; i < 12; i++) { await page.waitForTimeout(80); samples.push(await mean()); }
+    const t0 = Date.now();
+    while (Date.now() - t0 < 2000) {
+      for (let k = 0; k < 3; k++) { await page.keyboard.down('h'); await page.waitForTimeout(33); }
+      samples.push(await mean());
+    }
     await page.keyboard.up('h');
-    let flips = 0;
-    for (let i = 1; i < samples.length; i++) if (Math.abs(samples[i] - samples[i - 1]) > 40) flips++;
-    // One press = one gradual change; a strobe would show many large jumps.
-    const ok = flips <= 1;
-    results.push({ type: 'photosensitivity: hold H for 1 s', ok, largeJumps: flips, brightness: samples.map(Math.round), errors: ok ? [] : ['screen strobes while H is held'] });
+    const secs = (Date.now() - t0) / 1000;
+    let reversals = 0;
+    let lastDir = 0;
+    for (let i = 1; i < samples.length; i++) {
+      const d = samples[i] - samples[i - 1];
+      if (Math.abs(d) < 25) continue;
+      const dir = Math.sign(d);
+      if (lastDir && dir !== lastDir) reversals++;
+      lastDir = dir;
+    }
+    const flashesPerSec = reversals / 2 / secs;
+    const ok = flashesPerSec <= 3;
+    results.push({ type: 'photosensitivity: hold H for 2 s (auto-repeat)', ok, flashesPerSec: Number(flashesPerSec.toFixed(2)), brightness: samples.map(Math.round), errors: ok ? [] : [`screen flashes ${flashesPerSec.toFixed(1)}/s while H is held (limit 3)`] });
     if (!ok) exitCode = 1;
     await page.close();
   }
