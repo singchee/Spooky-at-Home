@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /**
  * Low-poly human figures animated entirely in the vertex shader.
@@ -15,6 +15,9 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
  */
 export const PART = { torso: 0, head: 1, armL: 2, armR: 3, legL: 4, legR: 5, panel: 6, strobe: 7 } as const;
 
+/** Figures are drawn ~20% larger than life (about 2.7 m) so their poses read from the gunship. */
+export const FIGURE_SCALE = 1.2;
+
 /** Floats per instance in each per-instance attribute (iA, iB, iC are all vec4). */
 export const FIGURE_STRIDE = 4;
 
@@ -23,10 +26,15 @@ const SHOULDER_Y = 1.76;
 const NECK_Y = 1.82;
 
 function tagPart(geo: THREE.BufferGeometry, part: number, pivot: THREE.Vector3, limbLen: number): THREE.BufferGeometry {
-  const g = (geo.index ? geo.toNonIndexed() : geo) as THREE.BufferGeometry;
-  if (g !== geo) geo.dispose();
-  g.deleteAttribute('uv');
-  g.computeVertexNormals(); // flat facets: each face reads as a plane, which suits low-poly
+  // Indexed and lean: the vertex shader does all the work, so fewer vertices = more zombies.
+  geo.deleteAttribute('uv');
+  let g = geo;
+  if (!g.index) {
+    g.deleteAttribute('normal');
+    g = mergeVertices(g);
+    geo.dispose();
+  }
+  g.computeVertexNormals();
   const pos = g.attributes.position;
   const n = pos.count;
   const aPart = new Float32Array(n).fill(part);
@@ -56,13 +64,14 @@ export function buildFigureGeometry(withSurvivorKit: boolean): THREE.BufferGeome
   torso.translate(0, (HIP_Y + SHOULDER_Y + 0.06) / 2, 0);
   parts.push(tagPart(torso, PART.torso, new THREE.Vector3(0, HIP_Y, 0), 0));
 
-  const head = new THREE.IcosahedronGeometry(0.26, 0).translate(0, NECK_Y + 0.2, 0.03);
+  const head = new THREE.IcosahedronGeometry(0.26, 0).scale(1, 1.1, 1).translate(0, NECK_Y + 0.2, 0.03);
   parts.push(tagPart(head, PART.head, new THREE.Vector3(0, NECK_Y, 0), 0));
 
   for (const side of [1, -1]) {
-    const arm = new THREE.CylinderGeometry(0.1, 0.075, 0.82, 5).translate(side * 0.44, SHOULDER_Y - 0.41, 0);
+    // Limbs are open-ended four-sided prisms: their ends are hidden or too small to see.
+    const arm = new THREE.CylinderGeometry(0.1, 0.075, 0.82, 4, 1, true).translate(side * 0.44, SHOULDER_Y - 0.41, 0);
     parts.push(tagPart(arm, side > 0 ? PART.armL : PART.armR, new THREE.Vector3(side * 0.44, SHOULDER_Y, 0), 0.82));
-    const leg = new THREE.CylinderGeometry(0.15, 0.1, HIP_Y, 5).translate(side * 0.17, HIP_Y / 2, 0);
+    const leg = new THREE.CylinderGeometry(0.15, 0.1, HIP_Y, 4, 1, true).translate(side * 0.17, HIP_Y / 2, 0);
     parts.push(tagPart(leg, side > 0 ? PART.legL : PART.legR, new THREE.Vector3(side * 0.17, HIP_Y, 0), HIP_Y));
   }
 
@@ -84,6 +93,7 @@ const vertexShader = /* glsl */ `
   uniform float uKind;   // 0 zombies, 1 survivors
   uniform float uBlink;  // survivors' IR strobe: 1 on, 0 off
   uniform float uBase;   // height of the feet above the map's zero (roads sit at 1 m)
+  uniform float uScale;  // overall size: a little larger than life so figures read from 1.8 km
   attribute float aPart;
   attribute vec3 aPivot;
   attribute float aLimbT;
@@ -168,7 +178,7 @@ const vertexShader = /* glsl */ `
     // Per-agent variety: height, build and a crab-wise heading offset.
     float h = mix(0.95 + 0.1 * r3, 0.9 + 0.24 * r3, zombie);
     float w = mix(1.0, 0.9 + 0.22 * r1, zombie);
-    p *= vec3(w, h, w);
+    p *= vec3(w, h, w) * uScale;
     mat3 rYaw = rotY(iA.z + zombie * (r4 - 0.5) * 0.35);
     p = rYaw * p;
     n = normalize(rYaw * n);
@@ -201,6 +211,7 @@ export function makeFigureMaterial(kind: 'zombie' | 'survivor'): THREE.ShaderMat
       uKind: { value: kind === 'zombie' ? 0 : 1 },
       uBlink: { value: 0 },
       uBase: { value: 1.05 },
+      uScale: { value: FIGURE_SCALE },
     },
     vertexShader,
     fragmentShader,
@@ -220,6 +231,7 @@ export class FigureBatch {
   constructor(kind: 'zombie' | 'survivor', readonly capacity: number) {
     const base = buildFigureGeometry(kind === 'survivor');
     this.geo = new THREE.InstancedBufferGeometry();
+    this.geo.setIndex(base.index);
     for (const name of Object.keys(base.attributes)) this.geo.setAttribute(name, base.attributes[name]);
     this.a = new Float32Array(capacity * 4);
     this.b = new Float32Array(capacity * 4);
@@ -248,8 +260,9 @@ export class FigureBatch {
     }
   }
 
-  get triangles(): number {
-    return this.geo.attributes.position.count / 3;
+  /** Per figure: vertices the shader animates, and triangles drawn. */
+  get cost(): { vertices: number; triangles: number } {
+    return { vertices: this.geo.attributes.position.count, triangles: (this.geo.index?.count ?? this.geo.attributes.position.count) / 3 };
   }
 
   dispose(): void {

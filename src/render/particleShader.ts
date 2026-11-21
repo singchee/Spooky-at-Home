@@ -5,8 +5,10 @@ import * as THREE from 'three';
  *
  * The CPU writes a particle once, when it is born (start position and time, velocity, life, sizes,
  * kind, sensor colour). Its motion, growth, cooling and fade are worked out in the shader from
- * the game clock, so nothing is updated per particle per frame. Pools are fixed-size ring buffers:
- * when one is full the oldest particle is reused, so memory and draw calls never grow.
+ * the game clock, so nothing is updated per particle per frame. Pools have a fixed capacity per
+ * group: when a group is full, the particle closest to burning out is replaced, so memory and
+ * draw calls never grow. Live particles are kept packed at the front of the buffers and only
+ * those are drawn (some software renderers pay per instance, even for invisible ones).
  *
  * Colours are sensor values: R heat (thermal), G visible light (night vision), B near-infrared.
  */
@@ -42,55 +44,71 @@ export interface ParticleSpec {
   p: number;
 }
 
-interface Region {
-  start: number;
-  size: number;
-  next: number;
-}
-
-/** One instanced quad mesh holding several ring-buffer regions (for example short-lived and long-lived). */
+/** One instanced quad mesh holding several particle groups (for example short-lived and long-lived). */
 export class ParticlePool {
   readonly mesh: THREE.Mesh;
   readonly p0: Float32Array; // x, y, z, t0
   readonly vl: Float32Array; // vx, vy, vz, life
   readonly sk: Float32Array; // size0, size1, kind, seed
   readonly col: Float32Array; // r, g, b, param
+  private group: Uint8Array;
+  private groupCount: number[];
+  private count = 0;
   private attrs: THREE.InstancedBufferAttribute[];
-  private regions: Region[] = [];
   private dirtyLo = Infinity;
   private dirtyHi = -1;
   private geo: THREE.InstancedBufferGeometry;
   readonly capacity: number;
 
-  constructor(regionSizes: number[], readonly material: THREE.ShaderMaterial) {
-    let start = 0;
-    for (const size of regionSizes) {
-      this.regions.push({ start, size, next: 0 });
-      start += size;
-    }
-    this.capacity = start;
+  constructor(private groupCaps: number[], readonly material: THREE.ShaderMaterial) {
+    const cap = groupCaps.reduce((a, b) => a + b, 0);
+    this.capacity = cap;
+    this.groupCount = groupCaps.map(() => 0);
     const quad = new THREE.PlaneGeometry(1, 1);
     this.geo = new THREE.InstancedBufferGeometry();
     this.geo.setIndex(quad.index);
     this.geo.setAttribute('position', quad.attributes.position);
-    this.p0 = new Float32Array(start * 4);
-    this.vl = new Float32Array(start * 4);
-    this.sk = new Float32Array(start * 4);
-    this.col = new Float32Array(start * 4);
-    // Unused slots are born far in the past with zero life, so the shader skips them.
-    for (let i = 0; i < start; i++) this.p0[i * 4 + 3] = -1e6;
+    this.p0 = new Float32Array(cap * 4);
+    this.vl = new Float32Array(cap * 4);
+    this.sk = new Float32Array(cap * 4);
+    this.col = new Float32Array(cap * 4);
+    this.group = new Uint8Array(cap);
     this.attrs = [this.p0, this.vl, this.sk, this.col].map((a) => new THREE.InstancedBufferAttribute(a, 4).setUsage(THREE.DynamicDrawUsage));
     ['aP0', 'aVL', 'aSK', 'aCol'].forEach((n, i) => this.geo.setAttribute(n, this.attrs[i]));
-    this.geo.instanceCount = start;
+    this.geo.instanceCount = 0;
     this.mesh = new THREE.Mesh(this.geo, material);
     this.mesh.frustumCulled = false;
     quad.dispose();
   }
 
-  spawn(region: number, s: ParticleSpec): void {
-    const r = this.regions[region];
-    const i = r.start + r.next;
-    r.next = (r.next + 1) % r.size;
+  private end(i: number): number {
+    return this.p0[i * 4 + 3] + this.vl[i * 4 + 3];
+  }
+
+  private dirty(i: number): void {
+    if (i < this.dirtyLo) this.dirtyLo = i;
+    if (i > this.dirtyHi) this.dirtyHi = i;
+  }
+
+  spawn(group: number, s: ParticleSpec): void {
+    let i: number;
+    if (this.groupCount[group] < this.groupCaps[group]) {
+      i = this.count++;
+      this.groupCount[group]++;
+      this.group[i] = group;
+    } else {
+      // Full: replace the particle in this group that would burn out soonest.
+      i = -1;
+      let best = Infinity;
+      for (let k = 0; k < this.count; k++) {
+        if (this.group[k] !== group) continue;
+        const e = this.end(k);
+        if (e < best) {
+          best = e;
+          i = k;
+        }
+      }
+    }
     const o = i * 4;
     this.p0[o] = s.x;
     this.p0[o + 1] = s.y;
@@ -108,35 +126,48 @@ export class ParticlePool {
     this.col[o + 1] = s.g;
     this.col[o + 2] = s.b;
     this.col[o + 3] = s.p;
-    this.dirtyLo = Math.min(this.dirtyLo, i);
-    this.dirtyHi = Math.max(this.dirtyHi, i);
+    this.dirty(i);
   }
 
-  /** Particles alive at `now` in a region (or all regions), optionally of one kind. */
-  live(now: number, region?: number, kind?: number): number {
-    const rs = region === undefined ? this.regions : [this.regions[region]];
+  /** Particles alive at `now` (born and not burned out), in one group or all, optionally of one kind. */
+  live(now: number, group?: number, kind?: number): number {
     let n = 0;
-    for (const r of rs) {
-      for (let i = r.start; i < r.start + r.size; i++) {
-        const age = now - this.p0[i * 4 + 3];
-        if (age >= 0 && age < this.vl[i * 4 + 3] && (kind === undefined || this.sk[i * 4 + 2] === kind)) n++;
-      }
+    for (let i = 0; i < this.count; i++) {
+      if (group !== undefined && this.group[i] !== group) continue;
+      const age = now - this.p0[i * 4 + 3];
+      if (age >= 0 && age < this.vl[i * 4 + 3] && (kind === undefined || this.sk[i * 4 + 2] === kind)) n++;
     }
     return n;
   }
 
-  regionSize(region: number): number {
-    return this.regions[region].size;
+  /** Slots in use: live particles plus ones waiting to be born (staggered smoke). */
+  get used(): number {
+    return this.count;
   }
 
-  /** Upload only the slots written since the last frame. */
+  /** Drop burned-out particles (keeping the live ones packed), then upload what changed. */
   flush(now: number): void {
     this.material.uniforms.uTime.value = now;
+    for (let i = this.count - 1; i >= 0; i--) {
+      if (now < this.end(i)) continue;
+      const last = --this.count;
+      this.groupCount[this.group[i]]--;
+      if (i !== last) {
+        this.p0.copyWithin(i * 4, last * 4, last * 4 + 4);
+        this.vl.copyWithin(i * 4, last * 4, last * 4 + 4);
+        this.sk.copyWithin(i * 4, last * 4, last * 4 + 4);
+        this.col.copyWithin(i * 4, last * 4, last * 4 + 4);
+        this.group[i] = this.group[last];
+        this.dirty(i);
+      }
+    }
+    this.geo.instanceCount = this.count;
     if (this.dirtyHi < 0) return;
+    const hi = Math.min(this.dirtyHi, this.count - 1);
     for (const a of this.attrs) {
       a.clearUpdateRanges();
-      a.addUpdateRange(this.dirtyLo * 4, (this.dirtyHi - this.dirtyLo + 1) * 4);
-      a.needsUpdate = true;
+      if (hi >= this.dirtyLo) a.addUpdateRange(this.dirtyLo * 4, (hi - this.dirtyLo + 1) * 4);
+      a.needsUpdate = hi >= this.dirtyLo;
     }
     this.dirtyLo = Infinity;
     this.dirtyHi = -1;
@@ -157,6 +188,68 @@ const noiseGlsl = /* glsl */ `
   }
   float fbm(vec2 p) { return 0.5 * vnoise(p) + 0.3 * vnoise(p * 2.03 + 7.1) + 0.2 * vnoise(p * 4.01 + 3.7); }
 `;
+
+/** Texture-based noise for the particle shaders: one lookup instead of a dozen hashes per pixel. */
+const texNoiseGlsl = /* glsl */ `
+  uniform sampler2D uNoise;
+  float tnoise(vec2 p) { return texture2D(uNoise, p * 0.125).r; } // value noise, lattice step 1
+  float tfbm(vec2 p) { return texture2D(uNoise, p * 0.125).g; }   // three octaves of it
+`;
+
+let sharedNoise: THREE.DataTexture | null = null;
+/**
+ * A tileable 128 x 128 noise texture: R = value noise (8 cells across), G = 3-octave fBm.
+ * Built from an integer hash, so it is identical on every run (no Math.random).
+ */
+export function noiseTexture(): THREE.DataTexture {
+  if (sharedNoise) return sharedNoise;
+  const N = 128;
+  const hash = (x: number, y: number, o: number) => {
+    let h = Math.imul(x, 0x27d4eb2d) ^ Math.imul(y, 0x165667b1) ^ Math.imul(o + 1, 0x9e3779b9);
+    h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  };
+  const value = (u: number, v: number, cells: number, o: number) => {
+    const x = u * cells;
+    const y = v * cells;
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    const fx = x - ix;
+    const fy = y - iy;
+    const sx = fx * fx * (3 - 2 * fx);
+    const sy = fy * fy * (3 - 2 * fy);
+    const w = (a: number) => ((a % cells) + cells) % cells;
+    const a = hash(w(ix), w(iy), o);
+    const b = hash(w(ix + 1), w(iy), o);
+    const c = hash(w(ix), w(iy + 1), o);
+    const d = hash(w(ix + 1), w(iy + 1), o);
+    return (a + (b - a) * sx) * (1 - sy) + (c + (d - c) * sx) * sy;
+  };
+  const data = new Uint8Array(N * N * 4);
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const u = i / N;
+      const v = j / N;
+      const n = value(u, v, 8, 0);
+      const f = 0.5 * n + 0.3 * value(u, v, 16, 1) + 0.2 * value(u, v, 32, 2);
+      const k = (j * N + i) * 4;
+      data[k] = Math.round(n * 255);
+      data[k + 1] = Math.round(f * 255);
+      data[k + 2] = 0;
+      data[k + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.needsUpdate = true;
+  sharedNoise = tex;
+  return tex;
+}
 
 const vertexShader = /* glsl */ `
   uniform float uTime;
@@ -225,7 +318,7 @@ const vertexShader = /* glsl */ `
     }
     if (abs(kind - 6.0) < 0.5) {
       // Flames: anchored at their base, taller than wide.
-      mv.xy += vec2(c.x * size, (c.y + 0.5) * size * 1.5);
+      mv.xy += vec2(c.x * size, (c.y + 0.35) * size * 1.15);
     } else {
       mv.xy += c * size;
     }
@@ -243,10 +336,12 @@ const additiveFragment = /* glsl */ `
   varying float vKind;
   varying float vSeed;
   varying float vAge;
-  ${noiseGlsl}
+  ${texNoiseGlsl}
   void main() {
     float r = length(vUv);
     float t = vT;
+    bool streak = vKind > 1.5 && vKind < 2.5 || abs(vKind - 5.0) < 0.5;
+    if (r > 1.0 && !streak && vKind < 5.5) discard; // round sprites: skip the quad's corners cheaply
     vec3 col = vec3(0.0);
     if (vKind < 0.5) {
       // Flash: a short, local glow. Never full-screen.
@@ -255,8 +350,8 @@ const additiveFragment = /* glsl */ `
     } else if (vKind < 1.5) {
       // Fireball puff: turbulent noise with hot pockets and a ragged edge that thins as it cools.
       vec2 q = vUv * 1.8 + vSeed * 17.0;
-      float n = fbm(q + vec2(0.0, -vAge * 1.5));
-      float n2 = vnoise(q * 3.1 - vAge * 2.0);
+      float n = tfbm(q + vec2(0.0, -vAge * 1.5));
+      float n2 = tnoise(q * 3.1 - vAge * 2.0);
       float edgeR = 0.95 - 0.35 * t;
       float shape = 1.0 - smoothstep(edgeR * (0.45 + 0.5 * n), edgeR * (0.8 + 0.4 * n), r);
       float core = 1.0 - smoothstep(0.0, 0.7, r);
@@ -277,15 +372,16 @@ const additiveFragment = /* glsl */ `
     } else if (vKind < 4.5) {
       // Shockwave: a thin ring racing outward, kicked-up dust lit by the blast.
       float ang = atan(vUv.y, vUv.x);
-      float wob = 0.85 + 0.3 * vnoise(vec2(ang * 3.0 + vSeed * 20.0, vSeed * 5.0));
+      float wob = 0.85 + 0.3 * tnoise(vec2(cos(ang), sin(ang)) * 2.5 + vSeed * 20.0);
       float ring = exp(-pow((r - 0.82) / (0.06 + 0.1 * t), 2.0));
       col = vCol.rgb * ring * wob * (1.0 - t) * (1.0 - t);
     } else {
       // Lingering fire: flickering flame, cooling over its life.
       vec2 uv = vec2(vUv.x, vUv.y * 0.5 + 0.5); // y 0 at base, 1 at tip
-      float n = fbm(vec2(uv.x * 2.5 + vSeed * 9.0, uv.y * 2.0 - uTime * 2.6));
-      float width = (1.0 - uv.y) * (0.55 + 0.45 * n);
-      float flame = (1.0 - smoothstep(width * 0.5, width, abs(uv.x))) * (1.0 - smoothstep(0.5, 1.0, uv.y + 0.4 * n));
+      float n = tfbm(vec2(uv.x * 2.0 + vSeed * 9.0, uv.y * 1.6 - uTime * 2.2));
+      float width = 0.75 * pow(max(1.0 - uv.y, 0.0), 0.7) * (0.7 + 0.5 * n);
+      float flame = (1.0 - smoothstep(width * 0.3, width, abs(uv.x))) * (1.0 - smoothstep(0.35, 0.95, uv.y + 0.3 * (n - 0.5)));
+      flame = max(flame, 0.6 * exp(-(uv.x * uv.x * 6.0 + uv.y * uv.y * 10.0))); // glowing embers at the base
       float flicker = 0.75 + 0.25 * sin(uTime * 13.0 + vSeed * 30.0) * sin(uTime * 7.3 + vSeed * 11.0);
       float fadeIn = smoothstep(0.0, 0.04, t);
       float cool = pow(1.0 - t, 1.4);
@@ -306,11 +402,12 @@ const smokeFragment = /* glsl */ `
   varying float vT;
   varying float vSeed;
   varying float vAge;
-  ${noiseGlsl}
+  ${texNoiseGlsl}
   void main() {
     float r = length(vUv);
-    float n = fbm(vUv * 1.3 + vSeed * 31.0 + vec2(vAge * 0.15, -vAge * 0.25));
-    float n2 = vnoise(vUv * 3.7 - vSeed * 5.0 + vAge * 0.3);
+    if (r > 1.15) discard; // outside the puff: no noise work
+    float n = tfbm(vUv * 1.3 + vSeed * 31.0 + vec2(vAge * 0.15, -vAge * 0.25));
+    float n2 = tnoise(vUv * 3.7 - vSeed * 5.0 + vAge * 0.3);
     float body = 1.0 - smoothstep(0.2, 1.0, r + 0.4 * (n - 0.5));
     float lumps = smoothstep(0.2, 0.85, n * 0.75 + n2 * 0.35);
     float env = smoothstep(0.0, 0.15, vT) * pow(1.0 - vT, 1.3);
@@ -325,7 +422,7 @@ const smokeFragment = /* glsl */ `
 /** Tracers, flashes, fireballs, sparks, debris, shockwaves and fires: added onto the scene. */
 export function makeAdditiveMaterial(): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
-    uniforms: { uTime: { value: 0 } },
+    uniforms: { uTime: { value: 0 }, uNoise: { value: noiseTexture() } },
     vertexShader,
     fragmentShader: additiveFragment,
     blending: THREE.AdditiveBlending,
@@ -342,6 +439,7 @@ export function makeSmokeMaterial(): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },
+      uNoise: { value: noiseTexture() },
       uThermal: { value: SMOKE_DIM.thermal },
       uVisible: { value: SMOKE_DIM.visible },
       uNir: { value: SMOKE_DIM.nir },

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ANIM, HEAT, RUN_SPEED, bodyHeat, gaitAmp, gaitRate, hash01, survivorAnimState, zombieAnimState } from '../src/game/agentAnim';
 import { AgentsView } from '../src/game/agentsView';
+import { FigureBatch, PART, buildFigureGeometry } from '../src/render/figureShader';
 import { makeSampleTown } from '../src/map/sample';
 import { createSim } from '../src/sim/setup';
 
@@ -106,5 +107,23 @@ describe('AgentsView', () => {
     expect(s.zombies).toBe(2500); // capped at the newest 2,500
     expect(s.survivors).toBe(32);
     view.dispose();
+  });
+});
+
+describe('figure geometry', () => {
+  it('has every body part, each vertex tagged with its part and joint', () => {
+    const g = buildFigureGeometry(true);
+    const parts = new Set(Array.from(g.attributes.aPart.array as Float32Array));
+    for (const p of Object.values(PART)) expect(parts.has(p)).toBe(true);
+    expect(g.attributes.aPivot.count).toBe(g.attributes.position.count);
+    expect(g.attributes.aLimbT.count).toBe(g.attributes.position.count);
+    g.dispose();
+  });
+  it('stays lean enough for thousands of animated instances (vertices are skinned in the shader)', () => {
+    const b = new FigureBatch('zombie', 10);
+    expect(b.mesh.geometry.index).not.toBeNull(); // the merged figure is indexed: drop the index and the mesh breaks apart
+    expect(b.cost.vertices).toBeLessThan(120);
+    expect(b.cost.triangles).toBeLessThan(120);
+    b.dispose();
   });
 });

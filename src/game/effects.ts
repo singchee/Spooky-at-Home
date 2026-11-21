@@ -11,7 +11,7 @@ import { PK, ParticlePool, makeAdditiveMaterial, makeCraterMaterial, makeSmokeMa
  *  2. smoke (multiply-blended GPU particles): dims visible light and near-IR a lot and heat
  *     hardly at all, like real smoke, so it hides things from night vision but not thermal;
  *  3. craters: scorched discs that glow hot and cool over ~25 s.
- * Particles live in fixed ring buffers, so memory and draw calls stay flat.
+ * Particles live in fixed-capacity pools (only live ones are drawn), so memory and draw calls stay flat.
  */
 const CAP_TRACERS = 256;
 const CAP_SHORT = 4096;
@@ -56,14 +56,14 @@ export const BLAST_PROFILES: Record<'25' | '40' | '105', Profile> = {
   '40': {
     flash: { size: 22, life: 0.1 }, fireballs: 7, fbSize: [4, 18], fbLife: 1.3,
     sparks: 18, sparkSpeed: 34, sparkWidth: 0.9, debris: 9, ring: 40,
-    smoke: 7, smokeSize: [8, 30], smokeLife: 9, smokeRise: 5,
-    fires: 2, fireLife: [10, 15], fireSize: [3.5, 6], tracerWidth: 1.0,
+    smoke: 5, smokeSize: [9, 32], smokeLife: 9, smokeRise: 5,
+    fires: 2, fireLife: [10, 15], fireSize: [2, 3.2], tracerWidth: 1.0,
   },
   '105': {
-    flash: { size: 50, life: 0.14 }, fireballs: 14, fbSize: [10, 42], fbLife: 2.4,
+    flash: { size: 50, life: 0.14 }, fireballs: 10, fbSize: [10, 42], fbLife: 2.4,
     sparks: 40, sparkSpeed: 60, sparkWidth: 1.4, debris: 20, ring: 110,
-    smoke: 16, smokeSize: [20, 75], smokeLife: 14, smokeRise: 10,
-    fires: 6, fireLife: [14, 20], fireSize: [6, 10], tracerWidth: 1.6,
+    smoke: 10, smokeSize: [24, 80], smokeLife: 14, smokeRise: 10,
+    fires: 6, fireLife: [14, 20], fireSize: [2.8, 4.5], tracerWidth: 1.6,
   },
 };
 const profileOf = (weapon: string): Profile => BLAST_PROFILES[weapon as '25'] ?? BLAST_PROFILES['25'];
@@ -178,9 +178,9 @@ export class Effects {
       const size = P.fireSize[0] + rnd() * (P.fireSize[1] - P.fireSize[0]);
       g.spawn(REG_FIRE, {
         x: fx, y: 1.2, z: fz, t0: now + 0.2 + rnd() * 0.4, vx: 0, vy: 0, vz: 0, life,
-        size0: size, size1: size * 0.8, kind: PK.fire, seed: rnd(), r: 0.34, g: 0.3, b: 0, p: 1,
+        size0: size, size1: size * 0.7, kind: PK.fire, seed: rnd(), r: 0.3, g: 0.3, b: 0.05, p: 1,
       });
-      for (let s = 1.5; s < life - 1; s += 2.4) {
+      for (let s = 1.5; s < life - 1; s += 3.5) {
         this.smoke.spawn(0, {
           x: fx, y: 2 + size * 2, z: fz, t0: now + s,
           vx: WIND.x * 1.5, vy: 2.5 + rnd(), vz: WIND.z * 1.5, life: 6 + rnd() * 2,
