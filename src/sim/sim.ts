@@ -372,7 +372,7 @@ export class Sim {
       } else if (this.mission.type === 'defend' && this.safeField) {
         const here = grid.fieldAt(this.safeField, z.x, z.z);
         if (here === 0) {
-          this.integrity -= 0.012 * dt;
+          this.integrity -= 0.02 * dt;
           dir = { x: 0, z: 0 };
         } else dir = grid.downhill(this.safeField, z.x, z.z);
       } else if (z.home) {

@@ -27,8 +27,9 @@ run('balance', () => {
           const r = createSim(map, { type, difficulty: d, seed });
           if (!r.ok) { fails++; continue; }
           const sim = r.sim;
-          const bot = new Bot(sim, SKILL[(process.env.SKILL as 'ace' | 'human') ?? 'human']);
-          while (sim.phase === 'running' && sim.t < 900) { bot.step(1 / 30); sim.step(1 / 30); }
+          const skill = process.env.SKILL ?? 'human';
+          const bot = skill === 'none' ? null : new Bot(sim, SKILL[skill as 'ace' | 'human']);
+          while (sim.phase === 'running' && sim.t < 900) { bot?.step(1 / 60); sim.step(1 / 60); }
           if (sim.phase === 'won') wins++;
           lens.push(sim.t);
           lost += sim.survivors.filter((s) => !s.alive).length;

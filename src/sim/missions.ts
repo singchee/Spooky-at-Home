@@ -258,7 +258,7 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
         survivors,
         needHome: need,
         hordes: [],
-        waves: { every: Math.max(12, 27 - 2.8 * d), size: 2 + 2 * d, coldShare, minDist: 140, maxDist: 300, maxAlive: 60 + 20 * d },
+        waves: { every: Math.max(9, 22 - 2.6 * d), size: 3 + 3 * d, coldShare, minDist: 140, maxDist: 300, maxAlive: 60 + 20 * d },
       },
     };
   }

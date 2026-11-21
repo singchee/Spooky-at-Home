@@ -69,6 +69,7 @@ button:disabled { opacity: 0.5; }
   .hud-attrib { left: 16px; right: 16px; text-align: center; }
   .hud-radio { bottom: 64px; max-width: calc(100% - 32px); }
   .hud-sensor { bottom: 120px; }
+  .hud-cross.danger::after { top: 100%; left: 50%; transform: translate(-50%, 6px); }
   .hud-mission { top: 108px; }
   .card { padding: 16px; }
   .row > * { min-width: 0; max-width: 100%; }

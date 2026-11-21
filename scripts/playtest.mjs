@@ -64,36 +64,43 @@ try {
     await page.goto(`http://localhost:${PORT}/?autostart=1&type=clear&difficulty=1&seed=3`);
     await page.waitForFunction(() => window.__spooky?.ready === true, null, { timeout: 30000 });
     await page.waitForTimeout(1500);
-    const mean = () => page.evaluate(() => {
+    // Sample brightness inside the page on EVERY animation frame (sampling from outside was too slow
+    // to see a real strobe), while holding H with real key auto-repeat for ~2 s.
+    await page.evaluate(() => {
       const c = document.querySelector('canvas');
-      const g = document.createElement('canvas'); g.width = 64; g.height = 36;
-      const x = g.getContext('2d'); x.drawImage(c, 0, 0, 64, 36);
-      const d = x.getImageData(0, 0, 64, 36).data; let s = 0;
-      for (let i = 0; i < d.length; i += 4) s += d[i];
-      return s / (d.length / 4);
+      const g = document.createElement('canvas'); g.width = 32; g.height = 18;
+      const x = g.getContext('2d', { willReadFrequently: true });
+      window.__fs = []; window.__fsStop = false;
+      const loop = () => {
+        x.drawImage(c, 0, 0, 32, 18);
+        const d = x.getImageData(0, 0, 32, 18).data; let s = 0;
+        for (let i = 0; i < d.length; i += 4) s += d[i];
+        window.__fs.push([performance.now(), s / (d.length / 4)]);
+        if (!window.__fsStop) requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
     });
-    // Hold H for ~2 s with real key auto-repeat (Playwright marks repeated keydowns as repeat=true),
-    // sampling brightness every ~100 ms. A flash = a large swing that reverses direction.
-    const samples = [await mean()];
     const t0 = Date.now();
-    while (Date.now() - t0 < 2000) {
-      for (let k = 0; k < 3; k++) { await page.keyboard.down('h'); await page.waitForTimeout(33); }
-      samples.push(await mean());
-    }
+    while (Date.now() - t0 < 2000) { await page.keyboard.down('h'); await page.waitForTimeout(33); }
     await page.keyboard.up('h');
-    const secs = (Date.now() - t0) / 1000;
+    const frames = await page.evaluate(() => { window.__fsStop = true; return window.__fs; });
+    const samples = frames.map((f) => f[1]);
+    const secs = (frames[frames.length - 1][0] - frames[0][0]) / 1000;
+    // A flash = a brightness swing of > 25 (of 255) that reverses direction (WCAG: pairs of opposing changes).
     let reversals = 0;
     let lastDir = 0;
-    for (let i = 1; i < samples.length; i++) {
-      const d = samples[i] - samples[i - 1];
+    let anchor = samples[0];
+    for (const v of samples) {
+      const d = v - anchor;
       if (Math.abs(d) < 25) continue;
       const dir = Math.sign(d);
       if (lastDir && dir !== lastDir) reversals++;
       lastDir = dir;
+      anchor = v;
     }
-    const flashesPerSec = reversals / 2 / secs;
+    const flashesPerSec = reversals / 2 / Math.max(0.5, secs);
     const ok = flashesPerSec <= 3;
-    results.push({ type: 'photosensitivity: hold H for 2 s (auto-repeat)', ok, flashesPerSec: Number(flashesPerSec.toFixed(2)), brightness: samples.map(Math.round), errors: ok ? [] : [`screen flashes ${flashesPerSec.toFixed(1)}/s while H is held (limit 3)`] });
+    results.push({ type: 'photosensitivity: hold H for 2 s (auto-repeat)', ok, flashesPerSec: Number(flashesPerSec.toFixed(2)), frames: samples.length, errors: ok ? [] : [`screen flashes ${flashesPerSec.toFixed(1)}/s while H is held (limit 3)`] });
     if (!ok) exitCode = 1;
     await page.close();
   }
