@@ -5,7 +5,7 @@ import type { MapData } from './map/types';
 import { createSim } from './sim/setup';
 import type { MissionType } from './sim/missions';
 import { Game } from './game/game';
-import { showMenu, type MenuChoice } from './ui/menu';
+import { showMenu, type MenuChoice, type MenuMode } from './ui/menu';
 import { showLanding, type LandingChoice } from './ui/landing';
 import { startTutorial, trainingDone, type TutorialHandle } from './ui/tutorial';
 import { el } from './ui/dom';
@@ -70,21 +70,26 @@ function play(choice: MenuChoice, opts: { bot?: boolean; skipBriefing?: boolean;
   }
   if (!r.ok) {
     window.__spooky!.error = r.reason;
-    menu({ message: r.reason });
+    menu(menuAfter(choice), { message: r.reason });
     return;
   }
   game = new Game(app, choice.map, r.sim, {
     ...opts,
     onRetry: () => play(choice, opts),
     onNext: () => play({ ...choice, seed: choice.seed + 1 }, opts),
-    onMenu: () => menu(),
+    onMenu: () => menu(menuAfter(choice)),
   });
   window.__spooky!.screen = 'game';
   window.__spooky!.ready = true;
   window.__spooky!.error = undefined;
 }
 
-function menu(o: { message?: string; focus?: 'address' | 'start'; sample?: boolean } = {}): void {
+/**
+ * The screens between the front page and a briefing (see menu.ts): "scout" (type your address),
+ * "recon" (missions that suit the map) and "custom" (the manual form). `sample` puts the sample
+ * town on the recon screen.
+ */
+function menu(mode: MenuMode, o: { message?: string; sample?: boolean } = {}): void {
   clear();
   window.__spooky!.screen = 'menu';
   // A recon mission's template and anchor belong to the map it was built on, not the sample town.
@@ -93,29 +98,28 @@ function menu(o: { message?: string; focus?: 'address' | 'start'; sample?: boole
     const { template: _template, anchor: _anchor, ...rest } = last ?? {};
     preset = { ...rest, map: makeSampleTown() };
   }
-  const close = showMenu(app, (c) => play(c), preset);
-  const back = el('button', 'menu-back', '← Front page', app);
-  back.addEventListener('click', () => landing());
+  const close = showMenu(app, (c) => play(c), { mode, preset, onFrontPage: () => landing() });
   let toast: HTMLDivElement | null = null;
   if (o.message) {
     toast = el('div', 'toast', o.message, app);
+    toast.setAttribute('role', 'alert');
     setTimeout(() => toast?.remove(), 8000);
   }
-  if (o.focus === 'address') app.querySelector<HTMLInputElement>('.menu input:not([type=file])')?.focus();
-  if (o.focus === 'start') app.querySelector<HTMLButtonElement>('.menu button.primary')?.focus();
   closeScreen = () => {
     close();
-    back.remove();
     toast?.remove();
   };
 }
+
+/** Back from a mission: to recon for a recon mission, otherwise to the manual form it came from. */
+const menuAfter = (c: MenuChoice | null): MenuMode => (c?.template ? 'recon' : 'custom');
 
 function landing(notice?: string): void {
   clear();
   window.__spooky!.screen = 'landing';
   closeScreen = showLanding(app, (c: LandingChoice) => {
-    if (c === 'scout') menu({ focus: 'address' });
-    else if (c === 'sample') menu({ focus: 'start', sample: true });
+    if (c === 'scout') menu('scout');
+    else if (c === 'sample') menu('recon', { sample: true });
     else training();
   }, { notice, trained: trainingDone() });
 }
@@ -126,14 +130,14 @@ function training(): void {
   try {
     tutorial = startTutorial(app, (to) => {
       if (to === 'restart') training();
-      else if (to === 'scout') menu({ focus: 'address' });
+      else if (to === 'scout') menu('scout');
       else if (to === 'landing') landing('Training complete. Your street is next.');
-      else menu({ sample: true, focus: 'start' });
+      else menu('recon', { sample: true });
     });
     game = tutorial.game;
     window.__spooky!.ready = true;
   } catch (e) {
-    menu({ message: `Training night couldn't start (${(e as Error).message}).` });
+    menu('scout', { message: `Training night couldn't start (${(e as Error).message}).` });
   }
 }
 
@@ -144,7 +148,7 @@ function clampInt(v: string | null, lo: number, hi: number, dflt: number): numbe
 
 // URL parameters let testers and the crew skip the menu, e.g.
 // ?map=sample&type=escort&difficulty=2&seed=7&autostart=1&bot=1&sensor=night
-// ?screen=landing|menu|tutorial opens that screen directly.
+// ?screen=landing|scout|recon|custom|tutorial opens that screen directly (menu = scout).
 if (params.get('autostart') === '1') {
   const map: MapData = makeSampleTown();
   play(
@@ -156,8 +160,12 @@ if (params.get('autostart') === '1') {
     },
     { bot: params.get('bot') === '1', skipBriefing: params.get('brief') !== '1', sensor: params.get('sensor') === 'night' ? 'night' : undefined },
   );
-} else if (params.get('screen') === 'menu') {
-  menu();
+} else if (params.get('screen') === 'menu' || params.get('screen') === 'scout') {
+  menu('scout');
+} else if (params.get('screen') === 'recon') {
+  menu('recon', { sample: true });
+} else if (params.get('screen') === 'custom') {
+  menu('custom');
 } else if (params.get('screen') === 'tutorial') {
   training();
 } else {
