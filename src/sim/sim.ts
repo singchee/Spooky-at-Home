@@ -5,7 +5,7 @@ import type { WalkGrid } from '../map/grid';
 import { hashString, mulberry32, type Rng } from '../util/rng';
 import { nearChildPlace } from '../map/recon';
 import { placeLabel } from './missions';
-import type { Mission } from './missions';
+import { FIRST_WAVE, WAVE_KINDS, type Mission, type WaveKind } from './missions';
 import { WEAPONS, weaponById, type WeaponDef } from './weapons';
 
 /**
@@ -56,7 +56,7 @@ export type SimEvent =
   | { type: 'danger-close' }
   | { type: 'survivor-lost'; x: number; z: number }
   | { type: 'survivor-home' }
-  | { type: 'wave'; count: number; cold: number; from: string; place: string }
+  | { type: 'wave'; count: number; cold: number; from: string; place: string; kind: WaveKind }
   | { type: 'radio'; text: string }
   | { type: 'result'; won: boolean; reason: string };
 
@@ -114,6 +114,10 @@ export class Sim {
   private field: Int32Array | null = null;
   private fieldAge = 99;
   private waveTimer = 0;
+  /** Index of the next wave kind in mission.waves.kinds (advances only when a wave really arrives). */
+  private waveIndex = 0;
+  /** Compass sectors (0-7) the last two waves came from, so the next one comes from somewhere new. */
+  private waveSectors: number[] = [];
   private nextId = 0;
   private safeField: Int32Array | null = null;
   private lastDangerClose = -99;
@@ -162,7 +166,7 @@ export class Sim {
       last.z += (Math.floor(i / 3) - 0.5) * 1.6;
     });
     if (mission.safehouse && mission.type === 'defend') this.safeField = grid.flowField(grid.perimeterCells(mission.safehouse.poly));
-    if (mission.waves) this.waveTimer = 3; // first wave arrives quickly
+    if (mission.waves) this.waveTimer = FIRST_WAVE; // first wave arrives quickly
     this.shelterGrace = Math.max(15, 45 - 6 * mission.difficulty);
     this.noSpawn = new Uint8Array(graph.nodes.length);
     if (mission.waves) graph.nodes.forEach((n, i) => (this.noSpawn[i] = nearChildPlace(map, n, WAVE_CHILD_GAP) ? 1 : 0));
@@ -185,12 +189,17 @@ export class Sim {
     this.events.push(e);
   }
 
-  private spawnZombie(p: V2, cold: boolean, home: V2 | null): void {
+  private spawnZombie(p: V2, cold: boolean, home: V2 | null, speedMul = 1): void {
     const d = this.mission.difficulty;
     this.zombies.push({
       id: this.nextId++, x: p.x, z: p.z, vx: 0, vz: 0, cold, alive: true, diedAt: -1, home, goal: null,
-      speed: (cold ? 1.1 : 1.3) + this.rng() * 0.6 + 0.08 * d,
+      speed: ((cold ? 1.1 : 1.3) + this.rng() * 0.6 + 0.08 * d) * speedMul,
     });
+  }
+
+  /** The kind of the next wave to arrive. */
+  private nextWaveKind(): WaveKind {
+    return this.mission.waves?.kinds?.[this.waveIndex] ?? 'standard';
   }
 
   /**
@@ -343,7 +352,8 @@ export class Sim {
     if (!w) return;
     this.waveTimer -= dt;
     if (this.waveTimer > 0) return;
-    this.waveTimer = w.every;
+    // A wave that can't arrive (too many alive, nowhere to spawn) keeps its kind for the next try.
+    this.waveTimer = w.every * WAVE_KINDS[this.nextWaveKind()].gap;
     const alive = this.zombies.reduce((n, z) => n + (z.alive ? 1 : 0), 0);
     if (alive >= w.maxAlive) return;
     const active = this.activeSurvivors();
@@ -378,16 +388,24 @@ export class Sim {
       }
     }
     if (!cands.length) return;
-    const at = g.nodes[cands[Math.floor(this.rng() * cands.length)]];
-    const size = Math.min(w.size, w.maxAlive - alive);
-    const cold = Math.round(size * w.coldShare);
+    // Come from a different direction than the last two waves, where the map allows it.
+    const fresh = cands.filter((i) => !this.waveSectors.includes(compassSector(ref, g.nodes[i])));
+    const pool = fresh.length ? fresh : cands;
+    const at = g.nodes[pool[Math.floor(this.rng() * pool.length)]];
+    const kind = this.nextWaveKind();
+    const k = WAVE_KINDS[kind];
+    const size = Math.min(Math.max(1, Math.round(w.size * k.size)), w.maxAlive - alive);
+    const cold = Math.round(size * (k.cold ?? w.coldShare));
     for (let i = 0; i < size; i++) {
       const a = this.rng() * Math.PI * 2;
       const r = Math.sqrt(this.rng()) * 12;
-      this.spawnZombie(this.grid.nearestFree({ x: at.x + Math.cos(a) * r, z: at.z + Math.sin(a) * r }), i < cold, null);
+      this.spawnZombie(this.grid.nearestFree({ x: at.x + Math.cos(a) * r, z: at.z + Math.sin(a) * r }), i < cold, null, k.speed);
     }
+    this.waveIndex++;
+    this.waveTimer = w.every * WAVE_KINDS[this.nextWaveKind()].gap;
+    this.waveSectors = [compassSector(ref, at), ...this.waveSectors].slice(0, 2);
     const dir = compassWord(ref, at);
-    this.emit({ type: 'wave', count: size, cold, from: dir, place: placeLabel(this.map, at) });
+    this.emit({ type: 'wave', count: size, cold, from: dir, place: placeLabel(this.map, at), kind });
   }
 
   private updateZombies(dt: number): void {
@@ -525,7 +543,12 @@ function gaussian(r: Rng): number {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r());
 }
 
-function compassWord(from: V2, to: V2): string {
+/** 0 = north, then clockwise in eighths. */
+function compassSector(from: V2, to: V2): number {
   const a = (Math.atan2(to.x - from.x, -(to.z - from.z)) * 180) / Math.PI;
-  return ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'][Math.round(((a + 360) % 360) / 45) % 8];
+  return Math.round(((a + 360) % 360) / 45) % 8;
+}
+
+function compassWord(from: V2, to: V2): string {
+  return ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'][compassSector(from, to)];
 }
