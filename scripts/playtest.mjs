@@ -876,7 +876,7 @@ async function wayInChecks(browser) {
       errs.push(`request to a host that isn't allowed: ${url}`);
       return route.abort('blockedbyclient');
     });
-    await page.goto(`http://localhost:${PORT}${path}`);
+    if (path) await page.goto(`http://localhost:${PORT}${path}`); // null: the caller navigates
     return { page, errs, osmCalls };
   }
 
@@ -1067,6 +1067,96 @@ async function wayInChecks(browser) {
     const shot = `${out}/wayin-recon-header-${width}.png`;
     await page.screenshot({ path: shot });
     res.push({ type: `way in: front-page button clear of the recon heading (${width} px)`, errors: errs, shots: { recon: shot } });
+    await page.close();
+  }
+
+  // 6. Places remembered on this device (BACKLOG 3.12): the second scout of the same place makes no
+  //    OpenStreetMap request and says it came from this device; Refresh downloads it again (map only);
+  //    Forget this place and Forget all saved places (Settings) remove it. Still the stubbed OSM.
+  {
+    const { page, errs, osmCalls } = await wayInPage(browser, desktop, OSM.ok(300));
+    const toRecon = async (text) => {
+      await scoutFor(page, text);
+      await page.waitForSelector('.menu .recon .recon-cards > *', { timeout: 20000 });
+      return scoutState(page);
+    };
+    const note = () => page.evaluate(() => document.querySelector('.recon .recon-saved')?.innerText.replace(/\s+/g, ' ').trim() ?? null);
+    const backToScout = async () => {
+      await page.click('.recon-change');
+      await page.waitForSelector('.menu .scout h1');
+    };
+    const shots = {};
+
+    await toRecon('Test Reef');
+    const first = await note();
+    const afterFirst = osmCalls.length;
+    if (!/^Saved on this device, so next time it opens instantly/.test(first ?? '')) errs.push(`no "saved on this device" note after a download: ${first}`);
+    if (!/never sent anywhere/.test(first ?? '')) errs.push(`no privacy note by the saved place: ${first}`);
+    if (afterFirst < 2) errs.push(`first scout didn't search and download: ${osmCalls.join(', ')}`);
+
+    await backToScout();
+    const second = await toRecon('  test reef '); // the same search, typed differently
+    const again = await note();
+    if (osmCalls.length !== afterFirst) errs.push(`the second scout asked OpenStreetMap again: ${osmCalls.slice(afterFirst).join(', ')}`);
+    if (!second.stages.some((s) => /^Loaded from this device · downloaded just now$/.test(s))) errs.push(`the readout doesn't say it loaded from this device: ${JSON.stringify(second.stages)}`);
+    if (!/^Loaded from this device · downloaded just now Refresh Forget this place/.test(again ?? '')) errs.push(`recon note for a saved place: ${again}`);
+    const map2 = await page.textContent('.recon h2');
+    if (map2 !== PLACE) errs.push(`saved place opened as "${map2}"`);
+    shots.saved = `${out}/wayin-saved-place-desktop.png`;
+    await page.screenshot({ path: shots.saved });
+
+    // Refresh: downloads the map again (no new place search), and keeps it.
+    await page.click('.recon-refresh');
+    await page.waitForSelector('.menu .recon .recon-cards > *', { timeout: 20000 });
+    const refreshed = osmCalls.slice(afterFirst);
+    if (refreshed.length !== 1 || isGeocode(refreshed[0])) errs.push(`Refresh should download the map once and not search again: ${refreshed.join(', ')}`);
+    if (!/^Saved on this device/.test((await note()) ?? '')) errs.push(`after Refresh: ${await note()}`);
+
+    // Forget this place: gone, and the next scout downloads afresh.
+    await page.click('.recon-forget');
+    await page.waitForFunction(() => /^Forgotten\./.test(document.querySelector('.recon-saved-text')?.textContent ?? ''), null, { timeout: 5000 }).catch(() => errs.push('Forget this place did not confirm'));
+    if (await page.$('.recon-forget, .recon-refresh')) errs.push('Forget/Refresh still offered after forgetting');
+    await backToScout();
+    const beforeThird = osmCalls.length;
+    await toRecon('Test Reef');
+    if (osmCalls.length - beforeThird < 2) errs.push(`a forgotten place still loaded from the device: ${osmCalls.slice(beforeThird).join(', ')}`);
+
+    // Settings → Forget all saved places.
+    await page.click('.screen-settings');
+    await page.waitForFunction(() => /^1 place saved on this device/.test(document.querySelector('.settings-places p')?.textContent ?? ''), null, { timeout: 5000 })
+      .catch(async () => errs.push(`settings count: ${await page.textContent('.settings-places p')}`));
+    shots.settings = `${out}/wayin-saved-places-settings.png`;
+    await page.screenshot({ path: shots.settings });
+    await page.click('.settings-forget-places');
+    await page.waitForFunction(() => /^No places saved on this device\.$/.test(document.querySelector('.settings-places p')?.textContent ?? ''), null, { timeout: 5000 })
+      .catch(async () => errs.push(`after Forget all: ${await page.textContent('.settings-places p')}`));
+    await page.keyboard.press('Escape');
+    await backToScout();
+    const beforeFourth = osmCalls.length;
+    await toRecon('Test Reef');
+    if (osmCalls.length - beforeFourth < 2) errs.push(`"Forget all" left the place on the device: ${osmCalls.slice(beforeFourth).join(', ')}`);
+    // Nothing about saved places leaves the browser: every outside request was to OSM (wayInPage fails any other).
+    res.push({ type: 'way in: places remembered on this device', errors: errs, shots });
+    await page.close();
+  }
+
+  // 7. A browser that refuses storage (private window, blocked site data) still scouts, just without saving.
+  {
+    const { page, errs, osmCalls } = await wayInPage(browser, desktop, OSM.ok(200), null);
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'indexedDB', { get() { throw new DOMException('blocked', 'SecurityError'); } });
+    });
+    await page.goto(`http://localhost:${PORT}/?screen=scout`);
+    for (let i = 0; i < 2; i++) {
+      await scoutFor(page, 'Test Reef');
+      await waitOutcome(page);
+      const st = await scoutState(page);
+      if (!st.recon) errs.push(`no storage: scouting failed: ${st.msg}`);
+      if (await page.$('.recon-saved')) errs.push('claims the place is saved when storage is blocked');
+      if (i === 0) await page.click('.recon-change');
+    }
+    if (osmCalls.length !== 4) errs.push(`expected two searches and two downloads without storage: ${osmCalls.length}`);
+    res.push({ type: 'way in: storage blocked (private window)', errors: errs });
     await page.close();
   }
   return res;

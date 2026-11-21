@@ -166,6 +166,11 @@ button:disabled { opacity: 0.5; }
 
 .card.wide.recon { max-width: 1120px; }
 .recon h2 { margin-bottom: 4px; }
+/* A place kept on this device (BACKLOG 3.12): "Loaded from this device · downloaded 3 days ago · Refresh". */
+.recon-saved { margin: 2px 0 6px; }
+.recon-saved p { margin: 0 0 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.recon-saved button { min-height: 32px; padding: 4px 10px; font-size: 14px; }
+.recon-saved-text:focus { outline: none; }
 .recon-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 20px; align-items: start; margin-top: 8px; }
 .recon-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .recon-list li { display: flex; gap: 10px; align-items: flex-start; }
@@ -471,6 +476,8 @@ button:disabled { opacity: 0.5; }
 .settings-toggle label { cursor: pointer; }
 .settings-hint { grid-column: 2; color: var(--muted); font-size: 14px; line-height: 1.35; }
 .settings-actions { justify-content: flex-end; }
+.settings-places p { margin: 6px 0; }
+.settings-places button { margin: 2px 0 6px; }
 @media (max-width: 480px) {
   .settings-row:not(.settings-toggle) { grid-template-columns: minmax(0, 1fr) 4.5em; }
   .settings-row > label:first-child { grid-column: 1 / -1; }
