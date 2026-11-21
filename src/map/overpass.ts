@@ -201,6 +201,33 @@ export function dedupeFeatures(list: Feature[]): Feature[] {
   return out.sort((a, b) => order(a.category) - order(b.category) || (a.name ? 0 : 1) - (b.name ? 0 : 1) || byId(a, b));
 }
 
+/**
+ * Which places survive the MAX_FEATURES cap, best first. Schools, kindergartens and playgrounds
+ * are never dropped: the mission guardrail's exclusion zone depends on them (PLAN §9). Hospitals,
+ * police and stations come next; car parks and sports pitches, the most numerous, go last.
+ */
+const CAP_PRIORITY: readonly FeatureCategory[] = [
+  'school', 'kindergarten', 'playground',
+  'hospital', 'police', 'fire_station', 'train_station', 'bus_station',
+  'mall', 'supermarket', 'sports_centre', 'stadium', 'tennis', 'forest', 'park', 'swimming_pool',
+  'pitch', 'parking',
+];
+const NEVER_DROP: readonly FeatureCategory[] = ['school', 'kindergarten', 'playground'];
+
+/** Keeps at most `max` features (plus every school, kindergarten and playground), in their original order. */
+export function capFeatures(list: Feature[], max = MAX_FEATURES): Feature[] {
+  if (list.length <= max) return list;
+  const must = list.filter((f) => NEVER_DROP.includes(f.category)).length;
+  const keep = new Set(
+    list
+      .map((f, i) => ({ f, i }))
+      .sort((a, b) => CAP_PRIORITY.indexOf(a.f.category) - CAP_PRIORITY.indexOf(b.f.category) || a.i - b.i)
+      .slice(0, Math.max(max, must))
+      .map((x) => x.f),
+  );
+  return list.filter((f) => keep.has(f));
+}
+
 /** Turns raw Overpass JSON into the game's local-metre map format. */
 export function parseOverpass(json: OverpassJson, origin: LatLon, half: number, name: string): MapData {
   const buildings: Building[] = [];
@@ -275,7 +302,7 @@ export function parseOverpass(json: OverpassJson, origin: LatLon, half: number, 
     areas,
     pois,
     attribution: 'Map data © OpenStreetMap contributors (ODbL)',
-    features: dedupeFeatures(features).slice(0, MAX_FEATURES),
+    features: capFeatures(dedupeFeatures(features)),
     busRoutes: [...routes.values()].map(({ members: _members, ...r }) => r).filter((r) => r.lines.length > 0),
     trees,
     lamps,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildQuery, featureCategory, geocode, parseOverpass, type OverpassJson } from '../src/map/overpass';
+import { buildQuery, capFeatures, featureCategory, geocode, parseOverpass, type OverpassElement, type OverpassJson } from '../src/map/overpass';
+import type { Feature, FeatureCategory } from '../src/map/types';
 
 // A point in the open ocean: test coordinates must never point at anyone's home.
 const origin = { lat: -10.0, lon: 100.0 };
@@ -173,5 +174,34 @@ describe('featureCategory: tennis', () => {
     expect(featureCategory({ leisure: 'sports_centre', sport: 'tennis', name: 'Reef Tennis Centre' })).toBe('tennis');
     expect(featureCategory({ club: 'tennis' })).toBe('tennis');
     expect(featureCategory({ club: 'tennis', leisure: 'pitch' })).toBe('tennis');
+  });
+});
+
+describe('feature cap', () => {
+  const f = (id: string, category: FeatureCategory): Feature => ({ id, category, p: { x: 0, z: 0 } });
+
+  it('drops car parks and pitches first, and never schools, kindergartens or playgrounds', () => {
+    const list = [f('s', 'school'), f('pk1', 'parking'), f('h', 'hospital'), f('pi', 'pitch'), f('k', 'kindergarten'), f('pk2', 'parking'), f('po', 'police'), f('pg', 'playground'), f('rs', 'train_station')];
+    expect(capFeatures(list, 6).map((x) => x.id)).toEqual(['s', 'h', 'k', 'po', 'pg', 'rs']); // original order kept
+    expect(capFeatures(list, 7).map((x) => x.id)).toEqual(['s', 'h', 'pi', 'k', 'po', 'pg', 'rs']);
+    // Even past the cap, every child place stays (the exclusion zone needs them).
+    expect(capFeatures(list, 2).map((x) => x.id)).toEqual(['s', 'k', 'pg']);
+    expect(capFeatures(list, 100)).toBe(list);
+  });
+
+  it('a map flooded with car parks still keeps its hospital, police, station and school', () => {
+    const els: OverpassElement[] = [];
+    for (let i = 0; i < 2100; i++) els.push({ type: 'node', id: 5000 + i, lat: -10.0 + (i % 50) * 0.00005, lon: 100.0 + Math.floor(i / 50) * 0.00005, tags: { amenity: 'parking' } });
+    els.push(
+      { type: 'node', id: 1, lat: -10.001, lon: 100.001, tags: { amenity: 'hospital', name: 'Flood Hospital' } },
+      { type: 'node', id: 2, lat: -10.002, lon: 100.002, tags: { amenity: 'police', name: 'Flood Police' } },
+      { type: 'node', id: 3, lat: -10.003, lon: 100.003, tags: { railway: 'station', name: 'Flood Central' } },
+      { type: 'node', id: 4, lat: -10.004, lon: 100.004, tags: { amenity: 'school', name: 'Flood Primary' } },
+      { type: 'node', id: 6, lat: -10.0045, lon: 100.0045, tags: { leisure: 'playground' } },
+    );
+    const m = parseOverpass({ elements: els }, origin, 600, 'Flood');
+    expect(m.features).toHaveLength(2000);
+    const cats = m.features!.map((x) => x.category);
+    for (const c of ['hospital', 'police', 'train_station', 'school', 'playground']) expect(cats, c).toContain(c);
   });
 });
