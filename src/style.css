@@ -106,7 +106,8 @@ button:disabled { opacity: 0.5; }
 .tm-bg { fill: var(--tm-bg); }
 .tm-outside { fill: #070908; }
 .tm-grid { stroke: var(--tm-grid); fill: none; }
-.tm-gridref { fill: rgba(184, 255, 138, 0.42); font-weight: 700; }
+/* Grid references sit on top of the map with an opaque dark halo: #b8c8bf on #0b0d0c is about 11:1. */
+.tm-gridref { fill: #b8c8bf; stroke: #0b0d0c; paint-order: stroke; stroke-linejoin: round; font-weight: 700; }
 .tm-park { fill: var(--tm-park); }
 .tm-wood { fill: var(--tm-wood); }
 .tm-wood-dot { fill: var(--tm-wood-dot); }
@@ -138,7 +139,6 @@ button:disabled { opacity: 0.5; }
 .tm-mlabel.safe, .tm-mlabel.home { fill: var(--accent); }
 .tm-mlabel.hostile, .tm-wave-label { fill: #ff8a7f; font-weight: 700; }
 .tm-mlabel.friendly { fill: var(--tm-friendly); }
-.tm-mlabel.orbit { fill: var(--muted); }
 .tm-hl-outline { fill: rgba(255, 255, 255, 0.06); stroke: #fff; filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.6)); }
 .tm-anchor { fill: rgba(184, 255, 138, 0.06); stroke: var(--accent); }
 .tm-safehouse { fill: rgba(184, 255, 138, 0.35); stroke: var(--accent); }
@@ -157,7 +157,7 @@ button:disabled { opacity: 0.5; }
 .tm-orbit { fill: none; stroke: rgba(231, 239, 233, 0.35); }
 .tm-orbitmark { fill: none; stroke: var(--ink); }
 .tm-north { fill: var(--ink); }
-.tm-furn-text { fill: var(--muted); font-weight: 700; }
+.tm-furn-text { fill: var(--muted); stroke: #0b0d0c; paint-order: stroke; stroke-linejoin: round; font-weight: 700; }
 .tm-scale { fill: none; stroke: var(--muted); }
 .tm-aim { fill: none; stroke: #fff; }
 .tm-aircraft { fill: var(--accent); stroke: #0b0d0c; stroke-width: 1.5; }
