@@ -2,7 +2,7 @@ import type { Feature, FeatureCategory, MapData, V2 } from '../map/types';
 import { bounds, centroid, dist, pointInPolygon, polygonArea, polylineLength, distToSegment } from '../map/geom';
 import { dijkstra, nearestNode, pathFromPrev, roadNamesAlong, type RoadGraph } from '../map/roadGraph';
 import type { WalkGrid } from '../map/grid';
-import { CATEGORY_INFO, MISSION_TEMPLATES, featureName, findAnchor, type TemplateId } from '../map/recon';
+import { CATEGORY_INFO, CHILD_KINDS, MISSION_TEMPLATES, featureName, findAnchor, nearChildPlace, type TemplateId } from '../map/recon';
 import { hashString, mulberry32, pick, shuffle, type Rng } from '../util/rng';
 
 /**
@@ -71,11 +71,15 @@ export interface MissionOptions {
 
 export type MissionResult = { ok: true; mission: Mission } | { ok: false; reason: string };
 
-const SAFE_KINDS = ['school', 'hospital', 'community_centre', 'police', 'fire_station', 'library', 'place_of_worship', 'clinic'];
+// Guardrail (PLAN §9, issue #11): schools, kindergartens and colleges are never a safehouse.
+const SAFE_KINDS = ['hospital', 'community_centre', 'police', 'fire_station', 'library', 'place_of_worship', 'clinic'];
 const KIND_LABEL: Record<string, string> = {
-  school: 'the school', hospital: 'the hospital', community_centre: 'the community centre', police: 'the police station',
+  hospital: 'the hospital', community_centre: 'the community centre', police: 'the police station',
   fire_station: 'the fire station', library: 'the library', place_of_worship: 'the church', clinic: 'the clinic',
 };
+
+/** Guardrail (PLAN §9): no horde is placed within this many metres of a school, kindergarten or playground. */
+const HORDE_CHILD_GAP = 60;
 
 const fmtTime = (secs: number) => {
   const s = Math.max(0, Math.ceil(secs));
@@ -113,21 +117,34 @@ function nearestStreet(map: MapData, p: V2): string {
   return l.startsWith('the ') ? 'an unnamed street' : l;
 }
 
+/**
+ * Guardrail (PLAN §9): may this building be a mission's safehouse? Never a school, kindergarten
+ * or college, and never inside or beside one, or beside a playground.
+ */
+function safeBuilding(map: MapData, b: { pts: V2[]; kind?: string }): boolean {
+  return !CHILD_KINDS.includes(b.kind ?? '') && !nearChildPlace(map, centroid(b.pts));
+}
+
 function findSafehouse(map: MapData, g: RoadGraph, rng: Rng): Mission['safehouse'] | null {
   const lim = map.half * 0.65;
-  const pois = map.pois.filter((p) => SAFE_KINDS.includes(p.kind) && Math.abs(p.p.x) < lim && Math.abs(p.p.z) < lim);
+  const pois = map.pois.filter((p) => SAFE_KINDS.includes(p.kind) && Math.abs(p.p.x) < lim && Math.abs(p.p.z) < lim && !nearChildPlace(map, p.p));
   shuffle(rng, pois);
   for (const poi of pois) {
     if (nearestNode(g, poi.p, 150) < 0) continue;
+    const inside = map.buildings.find((x) => pointInPolygon(poi.p, x.pts));
+    if (inside && !safeBuilding(map, inside)) continue;
     const b =
-      map.buildings.find((x) => pointInPolygon(poi.p, x.pts)) ??
-      map.buildings.filter((x) => dist(centroid(x.pts), poi.p) < 60).sort((a, c) => dist(centroid(a.pts), poi.p) - dist(centroid(c.pts), poi.p))[0];
+      inside ??
+      map.buildings
+        .filter((x) => dist(centroid(x.pts), poi.p) < 60 && safeBuilding(map, x))
+        .sort((a, c) => dist(centroid(a.pts), poi.p) - dist(centroid(c.pts), poi.p))[0];
     const poly = b ? b.pts : circle(poi.p, 12);
+    if (nearChildPlace(map, centroid(poly))) continue;
     return { centre: centroid(poly), poly, name: poi.name ?? KIND_LABEL[poi.kind] ?? 'the safehouse' };
   }
   // Fallback: one of the biggest buildings near the middle.
   const big = map.buildings
-    .filter((b) => Math.hypot(centroid(b.pts).x, centroid(b.pts).z) < map.half * 0.5)
+    .filter((b) => Math.hypot(centroid(b.pts).x, centroid(b.pts).z) < map.half * 0.5 && safeBuilding(map, b))
     .sort((a, b) => polygonArea(b.pts) - polygonArea(a.pts))
     .slice(0, 8)
     .filter((b) => nearestNode(g, centroid(b.pts), 80) >= 0);
@@ -176,6 +193,7 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
       if (centres.length >= nHordes) break;
       const free = grid.nearestFree(c);
       if (grid.isBlocked(free.x, free.z)) continue; // never put a horde inside a building
+      if (nearChildPlace(map, free, HORDE_CHILD_GAP)) continue; // guardrail (PLAN §9)
       if (centres.every((o) => dist(o, free) > 130)) centres.push(free);
     }
     if (centres.length < 2) return { ok: false, reason: 'Could not find room for the hordes on this map.' };
@@ -210,7 +228,7 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
   }
 
   const safehouse = findSafehouse(map, g, rng);
-  if (!safehouse) return { ok: false, reason: 'No school, hospital or large building near the middle of this map to use as a safehouse.' };
+  if (!safehouse) return { ok: false, reason: 'No hospital, police station or other large building near the middle of this map to use as a safehouse.' };
   return type === 'escort' ? buildEscort(c, safehouse) : buildDefend(c, safehouse);
 }
 
@@ -365,7 +383,8 @@ function buildDefend(c: Ctx, safehouse: Safehouse, fl?: DefendFlavour): MissionR
 
 /** The building that stands for a place: the one it's in, one with its name, or the biggest on its grounds. */
 function safehouseFromFeature(map: MapData, f: Feature, name: string): Safehouse {
-  const solid = (b: { pts: V2[] }) => polygonArea(b.pts) >= 60;
+  // Guardrail (PLAN §9): never a school building, nor one beside a school, kindergarten or playground.
+  const solid = (b: { pts: V2[]; kind?: string }) => polygonArea(b.pts) >= 60 && safeBuilding(map, b);
   let b = map.buildings.find((x) => solid(x) && pointInPolygon(f.p, x.pts));
   if (!b && f.name) b = map.buildings.find((x) => solid(x) && x.name === f.name && dist(centroid(x.pts), f.p) < 300);
   if (!b && f.pts && f.pts.length >= 3) {
@@ -423,12 +442,6 @@ function generateFromTemplate(map: MapData, g: RoadGraph, grid: WalkGrid, opts: 
         title: () => `Get them home from ${name}`,
         opener: (n) => `Spooky, this is Ground. ${n} late-night shoppers are barricaded inside {safehouse}.`,
       });
-    case 'escort-school':
-      // Guardrail (PLAN §9): adults only. The school is just a solid building they sheltered in.
-      return buildEscort(c, safehouseFromFeature(map, f, name), {
-        title: () => `Get them home from ${name}`,
-        opener: (n) => `Spooky, this is Ground. ${n} adults, staff and neighbours, have been sheltering at {safehouse}. The building is empty otherwise.`,
-      });
     case 'escort-station': {
       const what = f.category === 'bus_station' ? 'bus' : 'train';
       return buildEscort(c, safehouseFromFeature(map, f, name), {
@@ -456,6 +469,7 @@ function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'c
   const add = (p: V2, gap: number) => {
     const free = grid.nearestFree(p, 40);
     if (grid.isBlocked(free.x, free.z)) return false; // never put a horde inside a building
+    if (nearChildPlace(map, free, HORDE_CHILD_GAP)) return false; // guardrail (PLAN §9)
     if (!centres.every((o) => dist(o, free) > gap)) return false;
     centres.push(free);
     return true;

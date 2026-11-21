@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { makeSampleTown } from '../src/map/sample';
 import { buildRoadGraph } from '../src/map/roadGraph';
 import { WalkGrid } from '../src/map/grid';
-import { MISSION_TEMPLATES, TEMPLATE_IDS, mapFeatures, matchMissions, rankMissions, reconMap, type TemplateId } from '../src/map/recon';
+import { MISSION_TEMPLATES, TEMPLATE_IDS, mapFeatures, matchMissions, rankMissions, reconMap, templateAnchors, type TemplateId } from '../src/map/recon';
 import { generateMission } from '../src/sim/missions';
 import type { Building, Feature, FeatureCategory, MapData, Road, V2 } from '../src/map/types';
 
@@ -138,7 +138,6 @@ describe('matchMissions', () => {
       ['forest-sweep', place('f', 'forest', -150, 150, 'Test Woods', 45)],
       ['hold-sports', place('s', 'sports_centre', 150, -150, 'Test Sports Centre')],
       ['escort-shops', place('m', 'mall', -150, -150, 'Test Plaza')],
-      ['escort-school', place('sc', 'school', 50, -250, 'Test High School')],
       ['escort-station', place('st', 'train_station', -250, 50, 'Test Central')],
       ['clear-park', place('p', 'park', 250, 50, 'Test Park', 40)],
       ['hold-landmark', place('po', 'police', -50, 250, 'Test Police Station')],
@@ -175,9 +174,10 @@ describe('matchMissions', () => {
     expect(s.some((x) => x.template === 'forest-sweep')).toBe(false);
   });
 
-  it('guardrail: no template is about children, and none is anchored on kindergartens or playgrounds', () => {
+  it('guardrail: no template is about children, and none is anchored on schools, kindergartens or playgrounds', () => {
     for (const id of TEMPLATE_IDS) {
       const t = MISSION_TEMPLATES[id];
+      expect(t.anchors).not.toContain('school');
       expect(t.anchors).not.toContain('kindergarten');
       expect(t.anchors).not.toContain('playground');
       expect(t.name).not.toMatch(CHILD_WORDS);
@@ -190,5 +190,25 @@ describe('matchMissions', () => {
         expect(s.title).not.toMatch(CHILD_WORDS);
       }
     }
+  });
+
+  it('guardrail: no anchor inside or within 50 m of a school, kindergarten or playground, nor wrapped around one', () => {
+    const offered = (fs: Feature[], id: TemplateId) => templateAnchors(gridTown(fs), id, 1).map((f) => f.id);
+    // A park with a playground in it is out; the same park without one is in.
+    expect(offered([place('p', 'park', 150, 150, 'Swing Park', 40), place('pg', 'playground', 160, 160)], 'clear-park')).toEqual([]);
+    expect(offered([place('p', 'park', 150, 150, 'Swing Park', 40), place('pg', 'playground', -250, -250)], 'clear-park')).toEqual(['p']);
+    // A police station 40 m from a kindergarten (point only) is out; 200 m away is fine.
+    expect(offered([place('po', 'police', -150, 150, 'Test Police'), place('k', 'kindergarten', -110, 150)], 'hold-landmark')).toEqual([]);
+    expect(offered([place('po', 'police', -150, 150, 'Test Police'), place('k', 'kindergarten', 50, 150)], 'hold-landmark')).toEqual(['po']);
+    // A tennis club 45 m from the edge of a school's grounds is out (its centre is 85 m from the school's).
+    expect(offered([place('t', 'tennis', 150, -150, 'Test Tennis', 20), place('sc', 'school', 235, -150, 'Test School', 40)], 'clear-tennis')).toEqual([]);
+    expect(offered([place('t', 'tennis', 150, -150, 'Test Tennis', 20), place('sc', 'school', -250, 250, 'Test School', 40)], 'clear-tennis')).toEqual(['t']);
+    // A shop built inside a school's grounds is out.
+    expect(offered([place('m', 'mall', -150, -150, 'School Tuckshop'), place('sc', 'school', -150, -150, 'Test School', 45)], 'escort-shops')).toEqual([]);
+    // And none of that is reachable through an explicit anchor id either.
+    const r = generateMission(gridTown([place('p', 'park', 150, 150, 'Swing Park', 40), place('pg', 'playground', 160, 160)]), buildRoadGraph(gridTown()), new WalkGrid(gridTown()), {
+      type: 'clear', difficulty: 2, seed: 1, template: 'clear-park', anchor: 'p',
+    });
+    expect(r.ok).toBe(false);
   });
 });
