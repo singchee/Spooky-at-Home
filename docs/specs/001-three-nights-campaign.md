@@ -104,6 +104,7 @@ After a night is won, the campaign screen lets you fly it again. It's the identi
 
 ---
 ## Technical design  *(added by tech-lead)*
+*See "Technical design (tech-lead, 21 Nov 2026)" at the end of the file. It was appended there because other people were editing this file at the same time.*
 
 ## Feel & access  *(added by feel-designer)*
 
@@ -200,3 +201,174 @@ Approved as specced: the name "Three Nights", the longer finale (about 4.5 minut
 | Sound alone | `night-lost`'s prompt and the last push both need visible equivalents (M1, S3). Everything else already has text. |
 
 **Verdict: APPROVED WITH CHANGES.** M1–M5 must be in the build, and `/playtest` should confirm them, before the campaign merges. The S items should land in the same build where they're cheap (S1, S2, S5, S7, S8, S9, S10 are mostly wording and layout). Otherwise they go on the backlog before the human playtest, because S3, S6 and S11 directly affect the "did night three feel like a finale?" question.
+
+---
+## Technical design  *(tech-lead, 21 Nov 2026)*
+
+**Checked against:** `feat/phase-3` at `eae6ed3`, including the 3.6 merge and the 27 recorded lines. I read `src/sim/missions.ts`, `sim.ts`, `score.ts`, `setup.ts`, `src/ui/bests.ts`, `recon.ts`, `menu.ts`, `src/game/game.ts`, `src/main.ts`, `src/audio/voice.ts`, `assets.ts` and `engine.ts`, plus the diffs on `feat/3.11-controls`, `feat/3.12-place-cache` and `feat/3.6-recorded-audio`. `npm run typecheck` is clean. On `npm test`, the only failures were timeouts and the 4 ms step budget, under a load average of about 20 from other agents; `eae6ed3` has since raised two of those time limits. I also ran two headless probes against the real sim (numbers under "Finale" below).
+
+**Summary.** Most of the campaign can be built from pure functions over things the code already has: `generateMission`, `templateAnchors`, `gradeMission`, the seeded RNG and the wave kinds. Two pieces are genuinely new. (1) **The finale's wave schedule.** It can't be a parameter tweak, because waves spawned in the last 60 to 90 s of today's Hold never reach the doors (measured below). (2) **The campaign result flow** inside `Game`. Everything else is new files with no shared code to conflict with.
+
+### 1. Where it lives
+
+| Path | New or changed | What | Layer / merge order |
+|---|---|---|---|
+| `src/sim/campaign.ts` | **new** | `nightSeed`, `nightDifficulty`, preference and substitute lists, `planCampaign()` (resolves all three nights), `missionFingerprint()`, `mapFingerprint()`, and the record reducer `applyRun()` with `betterRun()` | Pure. No DOM, storage or clock. |
+| `src/sim/campaignText.ts` | **new** | Line ids and their caption text (the transcripts table, feel M2), `cardLines` / `startLines` / `endLines` choosers, `previouslyOn()`, `tally()`, and `resultActions()`, which decides the result card's buttons (feel M1) as data | Pure |
+| `src/sim/missions.ts` | changed | `MissionOptions.finale?: boolean`, `WavePlan.schedule?: WaveSlot[]`, `finaleSchedule()`, and a branch in `buildDefend` when `finale` is set. **Nothing changes when `finale` is absent.** | Pure |
+| `src/sim/sim.ts` | changed | A new private `updateSchedule(dt)`, used only when `mission.waves.schedule` exists. The `wave` event gains an optional `push?: true`. **`updateWaves` is untouched.** | Pure. 3.11 also changes `sim.ts`, but only the weapons part, so the two don't overlap. |
+| `src/ui/campaignStore.ts` | **new** | Storage on the device: injected `KeyValueStore` (same pattern as `Bests`), validation, size cap, forget. Imports types only from `src/sim`. | Browser |
+| `src/ui/campaign.ts` | **new** | The campaign screen (difficulty choice, three night cards, Forget with confirmation), the tally screen, and card captions. Maps `resultActions()` to callbacks. | DOM |
+| `src/ui/recon.ts`, `src/ui/menu.ts` | changed (small) | An optional `onCampaign` handler, plus a "Fly Three Nights" / "Continue Three Nights · Night 2 of 3" block above "Suggested missions". `menu.ts` passes it through. | **After 3.12**, which reworks both files. This adds one handler and one block. |
+| `src/main.ts` | changed | `campaign(map, S)` and `playNight(ctx, n)`, beside `play()`. URL hooks for playtests (§7). | |
+| `src/game/game.ts` | changed (small) | One optional `GameOptions.night?: NightHooks` (below). With it set: the briefing kicker comes from the hook, the opening radio lines are said before "cleared hot", the result card is drawn from a view model (no single-mission best), and the pause button reads "Leave this night". **No other paths change.** | **After 3.11**, which changes keys and the Esc pause in the same file |
+| `src/audio/assets.ts`, `voice.ts`, `engine.ts` | changed | Register the section A and B ids with `RULES`. Add a separate `CAMPAIGN_VOICE` list that is requested when the campaign screen opens, **not** in the unlock-time `bank.request(VOICE_LINES…)`. Add `VoiceDirector` support for opening lines. | 3.6 is merged. Do this last (step 6). |
+| Not touched | | `src/render`, `src/world`, `agentsView`, `effects`, `briefingDiorama`, `tutorial*` (3.7, 3.9 and 3.10 territory) | |
+
+```ts
+// src/game/game.ts: the whole campaign surface inside Game
+export interface NightHooks {
+  kicker: string;                         // "NIGHT 2 OF 3 · THE LONG WAY HOME · DIFFICULTY 3"
+  openingLines: CaptionedLine[];          // said in order before "cleared hot" (S1: at most one line)
+  leaveLabel: string;                     // "Leave this night"
+  /** Called once when the sim ends. Records the run and returns the card to show. No bests() write. */
+  onEnd(state: SimState, score: Score): ResultView;
+}
+export interface ResultView {
+  kicker: string; bestLine: string; note?: string;          // "Night one stays won · best B"
+  lines: CaptionedLine[];                                    // Ground's end lines, captioned on the card (M2)
+  buttons: { label: string; key?: 'r' | 'n'; primary?: boolean; run(): void }[];  // keys map only to buttons that exist
+}
+```
+
+**Layering: no violation.** `src/sim/campaign*.ts` import only `src/map/*` (recon, types), `src/util/rng` and `src/sim/*`. `betterRun` is written in `campaign.ts` using `rank()` from `score.ts`. It must **not** import `isBetter` from `src/ui/bests.ts`, because sim must never depend on ui. Add `tests/layering.test.ts` (§7). It doesn't exist today.
+
+### 2. Data flow
+
+```
+recon screen ── S (start.seed; seedForPlace(place) for a scouted place) ──▶ campaign screen
+                                                                     │ B chosen (1|2|3)
+                     planCampaign(map, graph, grid, S, B)  ◀─────────┘  (pure, once per map+S+B)
+                       for n in 1..3: seed = hashString(`campaign|${S}|${n}`), d = B+n−1
+                       prefs → templateAnchors(map, id, seed) minus used anchors, ≤3 each → generateMission
+                       → substitutes → NightPlan{ options, mission, template, anchorId, fp, hadCold }
+                       all three nights or { ok:false, reason } (generator's own words)
+                                     │
+campaignStore.get(placeKey, B) ──▶ reconcile(plan, record): drop any night whose fp ≠ plan fp, and every night after it
+                                     │
+night card ─ cardLines() captions + audio.say ─▶ createSim(map, night.options) ─▶ Game{ night hooks }
+                                     │                                  │ sim ends
+                                     │        onEnd(state, score) ─▶ applyRun(record, n, fp, run)  (pure)
+                                     │                                  └▶ campaignStore.put()   (ui)
+                                     ▼
+                  tally(plan, record) ─▶ tally screen (textContent only)
+```
+
+**What's stored, and what isn't (a change to campaign.md §6).** The record holds **numbers only**: per night `{ fp, tries, best?: { grade, time, survivorsTotal, survivorsSaved, friendlyHits, kills, integrity } }`. No anchor names, street names, coordinates or `map.name`. Names for previously-on and the tally come from the **re-resolved plan**, which is identical by determinism. So the text is true by construction, and the device holds no street names. `fp = missionFingerprint(mission)`, a hash of type, template, anchor id, seed, difficulty, time limit, rounded safehouse and home centres, and survivor count. It detects a map that changed under a saved campaign. That can happen through a 3.12 "Refresh", or through 3.12 renaming `map.name`, which feeds the generator's RNG.
+
+- **Storage key:** `spooky.campaign.v1` → `{ [placeKey]: { updated, levels: { [B]: { nights: [...] } } } }`, where `placeKey = \`${S}:${mapFingerprint(map)}\``. `mapFingerprint` hashes `half`, the building, road and feature counts, and the first road's first point rounded to 1 m. The sample town and a loaded file can both have S = 1, so `S` alone isn't unique.
+- **One record per difficulty** (answers feel S10). Changing B starts a separate campaign, and the old one stays. "Forget this campaign" removes **every B** for this place, after a worded confirmation.
+- **Best run:** `betterRun(a, b)` compares grade, then time; a tie keeps the old run. Only won runs are stored as `best`. A loss only increments `tries` and **never removes a win**. Night n is open when n = 1 or night n−1 has a `best`. `tries === 0` gates `n*-open`. `first-cold` comes from the plan (`hadCold` per night), so it needs no storage.
+- **Single-mission bests:** campaign nights **never** write `bests()` (feel S8). The night-three finale is a different mission from single-mission Hold, so writing it would corrupt that record.
+
+### 3. Seeds and determinism
+
+- **Seeds per night:** `nightSeed(S, n) = hashString(\`campaign|${S}|${n}\`)`. B is not in the seed, as campaign.md specifies. The generator and Sim mix in `map.name`, type, template, anchor and d as they do today. A lost night replays `createSim(map, night.options)`, with the same options object, so "Same streets, same dead" is literally true (pinned in §7).
+- **No unseeded randomness and no clock in `src/sim`.** The finale schedule uses its own stream, `mulberry32(hashString(\`finale|${map.name}|${seed}|${template}|${anchor}|${d}\`))`. The defend mission's main RNG stream is therefore unchanged: night three has the **same safehouse and stragglers** as the single-mission Hold with that seed, plus a longer hold and a different schedule. `Date.now()` appears only in `campaignStore` (the `updated` field, used to trim old places). Nothing in mission logic reads it.
+- **Frame rate:** scheduled slots fire when sim time `t ≥ at`. They don't count frames. `Game` steps the sim at a fixed 1/60 s, so a slot fires within one step of its time. The test runs the same schedule at 1/30 s and 1/60 s and gets the same slots in the same order.
+- **One risk to note, not blocking:** the generator hashes `map.name`. When 3.12 lands, scouted maps are renamed to the suburb label, so their missions change once. The fp check catches that, and a campaign saved before the rename resets with a one-line notice (§5).
+
+### 4. Finale: night three (amendment 1) as data
+
+**Measured on the sample town** (headless, no gunner, integrity pinned at 1 so the doors never fall):
+- Today's Hold spawns waves whose first zombie reaches the doors **70 to 160 s after spawning**. Over seeds 1–3 at d3–d5, 2 to 4 of the 8 or 9 waves that actually spawned **never reached the doors before dawn**. The Game Director's "fizzle" was right.
+- A big wave spawned 130–160 m away *by walking distance* (flow field × 3 m) arrives as follows: **lead zombie 67–95 s, median 78–114 s** after spawning. That's an effective lead pace of 1.6–2.05 m/s and a median pace of 1.3–1.8 m/s at d3–d5. Every zombie arrived. The band holds 9–10 road nodes on the sample town.
+
+**The plan is data on the mission.** `WavePlan.schedule` holds every wave's time, kind and size. The Sim follows it, and it's exactly what the test inspects.
+
+```ts
+export interface WaveSlot {
+  at: number;            // sim seconds
+  kind: WaveKind;
+  size: number;          // multiplier on WavePlan.size (WAVE_KINDS[kind].size already folded in)
+  push?: true;           // the last push: ignores maxAlive, spawns at `from`
+  from?: V2[];           // push only: spawn points in seeded preference order, walking distance in band
+}
+// WavePlan.kinds = schedule.map(s => s.kind), so waveIntel, the tactical map and `big-expected` keep working unchanged.
+```
+
+**Starting numbers (the Balance Analyst tunes the constants, and the tests pin the outcomes):**
+
+| Part | Rule (constants in one `FINALE` table in `missions.ts`) |
+|---|---|
+| Hold | `FINALE.hold = 270` s at every d (3–5) |
+| Opening, t < 60 s | Waves every `every × 1.3`, size × 0.6, kinds `standard`/`rush` only. The stragglers walk in during this part, as they do today. |
+| Build | Seeded kinds (`standard`, `rush`, `cold` where cold exists, **no `big`**). Size ramps from 0.8 to 1.0, waves every `every`. |
+| Lull | No slot in the `FINALE.lull = 12` s before the push (feel S3) |
+| Last push | Kind `big`, size 1.7, `push: true`. `from` = up to 3 road nodes with walking distance 110–170 m, clear of `noWaveSpawn`. Spawns at `pushAt = hold − FINALE.arriveLeft − ⌈path / FINALE.leadPace⌉`, with `arriveLeft = 35` s and `leadPace = 1.6` m/s. On the sample town that puts it at roughly t = 130 s: "Big group inbound from the north-east" with about 140 s to go, and the doors hit with 35–55 s left. |
+| After the push | `rush` slots only, and only while they can still arrive (`at ≤ hold − 100`, tunable) |
+
+**Sim rules for a schedule.** Slots spawn in order. A slot that can't spawn (`alive ≥ maxAlive`, or no spawn candidates) retries every 1 s, and the slots after it wait behind it. Nothing is ever dropped, so the intel stays true. The push ignores `maxAlive` and goes ahead of any waiting slots when its time comes. It spawns at the first `from` point that isn't within `MIN_SPAWN_GAP` of an active straggler, or failing that at the last one. At d5 the most alive at once is `maxAlive + push` = 205 + 44 ≈ 250, a quarter of the 1,000-zombie budget.
+
+**When the push can't arrive, the generator says so.** If no road node has a walking distance in the band (widening to 90–220 m once), or if `pushAt < 60`, `buildDefend` returns `ok:false` with a reason. The campaign resolver then moves to the next anchor or template, ending with `classic-clear`. **A finale is never built with a push that can't reach the doors.**
+
+**Single missions stay identical.** Step 1 adds a committed fingerprint for single-mission defend, beside the existing escort fingerprint `be9b7fe7`, **before** `missions.ts` or `sim.ts` change. It also adds a Sim trace hash (state after 1,800 steps, no input). Both must still pass after steps 2–6.
+
+### 5. Failure modes for external inputs
+
+| Input | Missing | Malformed | Huge |
+|---|---|---|---|
+| **OSM map** (scouted, cached by 3.12, or a file) | No place kinds: the preference lists fall through to the classic templates. If a night still can't be built: substitutes (campaign.md §5). If **any** night has no mission at all: no campaign, shown with that night's generator reason, plus the single missions. A campaign is three nights or none; there's no two-night version. | Names are untrusted: `textContent` only, CSS `overflow-wrap:anywhere` (feel M3). Names never reach storage (§2). `featureName` never emits a house number. | `menu.ts` already caps maps at 6,000 buildings. Planning makes at most 3 attempts per template, **≤ 30 `generateMission` calls in the worst case** (pinned by a counter, not a timer). It runs once per map+S+B and is memoised by the campaign screen, never by the recon screen. Show "Planning three nights…" after a paint. |
+| **Saved campaign** (localStorage) | Blocked or unavailable: in memory for the session, with one line: "This browser won't keep campaign progress." | Corrupt JSON, wrong `v`, or a bad field: that place's entry is ignored and rebuilt fresh, and the app never throws. Field validation follows `Bests.valid`. **fp mismatch** (the map changed since): that night and every later one are reset, with "The streets have changed since you last flew here, so these nights start fresh." | At most 20 places, oldest `updated` trimmed first. About 150 bytes per night, so under 30 KB in total. A quota error keeps the record in memory, with the same line as "blocked". |
+| **Voice files** | 3.6's loader already falls back to text only. Captions never depend on audio (M2). | Same as missing | 27 files, about 1.3 MB. They're **lazy**: requested when the campaign screen opens, not on the first click for every player. |
+| **Network** | Nothing new. No new hosts. | | |
+
+### 6. Performance (QUALITY §2)
+
+- **Sim step, 1,000 zombies, < 4 ms:** unchanged per step. The finale peaks at about 250 alive. The schedule check costs O(1) per step, and the push's spawn points are found at generation time, not in the Sim. The finale runs 270 s instead of 225 s, so whole-mission tests and `/balance` get about 20% longer.
+- **Draw calls < 150, JS < 400 KB gz:** no new meshes. The new UI and sim code is an estimated 25–30 KB raw, about 8 KB gzipped.
+- **Planning time (no budget exists yet; I propose ≤ 1 s on a full 1.2 km map):** the probe measured about 10 ms per `generateMission` on the sample town under heavy load. A typical plan makes 3–8 calls, so 0.1–0.8 s on a real map. The worst case is 30 calls, about 2–3 s on a real map, behind the "Planning…" status. `/playtest` records it, and if it's over budget the fix is to stop at the first `ok` per template (already the rule) and drop to 2 attempts per template.
+- **Map download + build < 15 s:** unaffected.
+- **Flashes ≤ 3/s:** no new effects, but feel M4's last-push scenario must be run (§7).
+
+### 7. Test plan (failing first)
+
+**Unit and simulation (Node, `npm test`):**
+
+| File | Test (name it this) |
+|---|---|
+| `tests/sim.test.ts` | `committed fingerprint: sample-town defend d3 seed 42 has not changed`, and `a single-mission defend plays identically (trace hash)`. **Added first and green**, so they lock single missions before anything changes. |
+| `tests/campaign.test.ts` | `night difficulty rises every night and never passes 5` (B 1..3) · `night seeds are hashString(campaign|S|n)` · `planning is deterministic: same map+S+B gives deep-equal plans` · `a replayed night is the identical Mission and the identical SimState after 600 steps` · `all three nights resolve on the sample town at B 1..3` · `no anchor is used twice` · `no preference or substitute list holds a template anchored on a child category, and every resolved anchor passes nearChildPlace === false` · `night two always has survivors (substitutes too)` · `roads-and-houses map plays three classic nights` · `a map with no connected roads has no campaign and gives the generator's reason` · `planning makes at most 30 generateMission calls` · `first-cold is chosen iff this night hadCold and no earlier night did (B 1..3)` · `big-expected is chosen iff waves.kinds includes big, and always on a finale night three` |
+| `tests/campaign.test.ts` (reducer) | `a win is stored as best; a better replay replaces it; a worse one doesn't` · `a loss increments tries and never removes a win` · `night n opens only after night n−1 is won` · `an fp mismatch resets that night and every later one` |
+| `tests/campaignText.test.ts` | `previously-on and tally numbers equal the stored fields` (snapshot from a scripted three-night bot run) · `"none in three nights" iff the friendly-hit sum is 0` · `pluralises 1 survivor / 2 survivors` · `no campaign text contains map.name` (map named "12, Example Street") · `every voiced line id has slot-free caption text (no "{", no digits)` · `result actions: lost → replay (R) + back, with no next and no N; first win → next (N) + replay + back; night-three win → tally only; a lost replay of a won night says "stays won · best X"` |
+| `tests/finale.test.ts` | `finale schedule invariants, d3..5 × seeds 1..20`: hold 270; sorted; exactly one `push`, of kind big; no other slot in the 12 s before it; the opening 60 s spawns ≤ 0.7× single Hold's opening; `kinds` includes big; `waveIntel` names a big wave · `the last push reaches the doors, unopposed, with 25–60 s left, and at least half its zombies arrive before dawn` (integrity pinned to 1 each step, zombies tracked by id range) · `push spawn points avoid noWaveSpawn and active stragglers` · `same slots at dt 1/30 and 1/60` · `a capable bot can win the finale at d3 on some seed; doing nothing loses` (G6) · `a finale whose push can't arrive is rejected with a reason` (synthetic map with the safehouse cut off beyond 280 m) |
+| `tests/campaignStore.test.ts` | `round-trips through a fake store` · `corrupt JSON or wrong version starts fresh without throwing` · `blocked or full storage keeps progress in memory` · `keeps at most 20 places, oldest first out` · `forget removes every difficulty for the place` · `the stored JSON contains no feature names, street names, coordinates or map.name` |
+| `tests/layering.test.ts` | `src/sim and src/map import neither three nor the DOM, and src/sim has no Math.random or Date` (scans the source text) |
+| `tests/recordedAudio.test.ts` | Step 6 removes the 19 section A and B ids from `AWAITING_CAMPAIGN`. The 8 section C ids stay until their own backlog item. **Fix the test's comment** ("spec 001's build must empty this list"), because spec 001 rules section C out. That's a separate commit, named in the PR (hard rule 8). It isn't a weakening. |
+| `tests/balance/balance.test.ts` | Add `finale` rows (BALANCE=1) for d3–5. `/balance` gate: finale bot win rate ≥ single Hold at the same d; d5 within 25–60%; median length 4–5 min; **measured on top of 3.11's unlimited 25 mm**. |
+
+**Playtest scenarios (`/playtest`, `scripts/playtest.mjs`):** URL hooks `?screen=campaign&level=2` (sample town) and `?map=sample&campaign=2&night=3&autostart=1&bot=1`, plus a test-only `__spooky.campaignSeed(record)` that loads a stored record so the tally can be screenshotted. Scenarios: campaign screen → fly night 1 with the bot → win card → night 2 card; lose a night → only the replay and back actions are shown, and N does nothing; the tally screen; all at feel M3's four viewports; feel M4's two flash scenarios (25 mm held 10 s; the last push at the doors in night vision); feel S4's heat-clutter screenshots at t ≈ 240 s. No console errors (G7).
+
+### 8. Smallest first step
+
+**Commit 1: "Campaign: plan three nights, headless."** It adds `src/sim/campaign.ts` (`nightSeed`, `nightDifficulty`, the preference and substitute lists, `planCampaign`, `missionFingerprint`; night three is **plain defend** for now), `tests/campaign.test.ts` (the planning, determinism, replay-identical, guardrail and substitute tests above), the defend fingerprint and trace hash in `tests/sim.test.ts`, and `tests/layering.test.ts`. No UI, storage or game changes, and it conflicts with no in-flight branch. Write the tests first and watch them fail on the missing module. The commit proves that three deterministic, guardrail-clean nights come out of every map we have, and that a replay is the same mission.
+
+**Then:** **2.** The finale schedule in `missions.ts` and `sim.ts`, with `tests/finale.test.ts`, then `/balance`, **after 3.11 merges**. **3.** `applyRun` and `campaignStore`. **4.** `campaignText` (lines, previously-on, tally, result actions). **5.** UI: `campaign.ts`, the recon/menu block **after 3.12**, the `Game.night` hooks **after 3.11**, and `main.ts`. Lines are text-only captions at this point. **6.** Voice: register the A and B ids, lazy `CAMPAIGN_VOICE`, `VoiceDirector` opening lines, shrink `AWAITING_CAMPAIGN`.
+
+### 9. Notes for other roles
+- **Story Writer:** `big-expected`'s voiced text says "105". The audio director held it back, and it stays text-only until it's reworded and recorded. The opener lines move to the night card if feel S1 is accepted. `campaignText` keeps that placement as data (`cardLines` vs `startLines`), so either choice is a one-line change.
+- **3.12 owner:** the campaign takes `S` from the recon screen's `start.seed`. For a scouted place that should be `seedForPlace(place)`. Today `menu.ts` passes the custom form's seed (default 1). If 3.12 doesn't make that change, step 5 does it in one line in `scoutPlace`. Identity doesn't depend on it, because `mapFingerprint` keeps places apart.
+- **Map Checker:** `maps/fixtures/` is empty, so "every map fixture" (G5) means the sample town plus the synthetic variants in `tests/campaign.test.ts`, until real fixtures are added.
+- **Feel review:** this design takes M1 (the `resultActions` view model), M2 (one caption table, card captions), S3 (lull, push tell via the existing `big` wave call plus `push: true`), S7 (`previously` once per session per card), S8 (per-night best only) and S10 (one record per B, worded Forget).
+
+### Verdict: **APPROVED WITH CHANGES**
+
+Build it as designed above, with these changes:
+1. **The stored record holds numbers only.** Names come from the re-resolved plan, and an fp check resets a night if the map has changed. This replaces the name fields in campaign.md §6.
+2. **The finale's waves are an explicit `WavePlan.schedule`,** with a guaranteed push that is placed and timed by walking distance. The generator **rejects** a finale whose push can't arrive, and the resolver falls through to the next option. Single-mission defend is locked by a fingerprint and a trace hash **before** any change.
+3. **Three nights or no campaign.**
+4. **One record per difficulty.** "Forget" clears every difficulty for the place.
+5. **Campaign nights never write `bests()`.**
+6. **`Game` gets one optional `night` hook and a view-model result card.** Build it after 3.11. Change recon and menu after 3.12. Don't touch render, world, diorama or tutorial.
+7. **Campaign voice files load lazily.** Section C ids stay in `AWAITING_CAMPAIGN`, and the test's comment is corrected in its own commit.
+8. **Add `tests/layering.test.ts`.**
