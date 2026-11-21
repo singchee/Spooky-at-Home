@@ -18,19 +18,23 @@ export interface ChangeFacts {
   depsHead: Record<string, string>;
   testCountBase: number;
   testCountHead: number;
-  addedLines: string[];
+  addedLines: { path: string; text: string }[];
 }
 
 /** Files the crew may not change without you: the rules it runs under. */
 export const PROTECTED = [
   'CLAUDE.md', 'PLAN.md', 'docs/AUTONOMY.md', 'docs/QUALITY.md', 'docs/CREW.md',
-  '.claude/', '.github/', 'tools/classify-change.ts', 'package-lock.json:major',
+  '.claude/', '.github/', 'tools/classify-change.ts', 'tests/classify-change.test.ts',
 ];
 
 export const ALLOWED_HOSTS = [
   'overpass-api.de', 'overpass.kumi.systems', 'nominatim.openstreetmap.org', 's3.amazonaws.com',
   'openstreetmap.org', 'www.openstreetmap.org',
 ];
+
+/** The classifier and its own tests contain example patterns on purpose; the lockfile lists registry URLs. */
+const NOT_SCANNED = ['tools/classify-change.ts', 'tests/classify-change.test.ts', 'package-lock.json'];
+const SHIPS_TO_PLAYER = (p: string) => p.startsWith('src/') || p === 'index.html';
 
 const RANK: Record<ChangeClass, number> = { A: 0, B: 1, C: 2 };
 const major = (v: string) => (v.replace(/^[^\d]*/, '').split('.')[0] ?? '');
@@ -60,16 +64,20 @@ export function classify(f: ChangeFacts): { cls: ChangeClass; reasons: string[] 
 
   if (f.testCountHead < f.testCountBase) raise('C', `test count fell ${f.testCountBase} → ${f.testCountHead}`);
 
-  for (const line of f.addedLines) {
-    if (/\b(it|test|describe)\.(skip|only|todo)\b/.test(line)) raise('C', `skips or isolates a test: ${line.trim().slice(0, 80)}`);
-    if (/\bMath\.random\s*\(/.test(line)) raise('B', 'adds Math.random() (check it is not in mission logic)');
-    for (const m of line.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)) {
+  for (const { path, text } of f.addedLines) {
+    if (NOT_SCANNED.includes(path)) continue;
+    if (path.startsWith('tests/') && /\b(it|test|describe)\.(skip|only|todo)\b/.test(text)) {
+      raise('C', `skips or isolates a test in ${path}: ${text.trim().slice(0, 60)}`);
+    }
+    if (/(api[_-]?key|secret|password|token)\s*[:=]\s*['"][^'"]{8,}/i.test(text)) raise('C', `possible secret in ${path}`);
+    if (!SHIPS_TO_PLAYER(path)) continue;
+    if (/\bMath\.random\s*\(/.test(text)) raise('B', `adds Math.random() in ${path} (must not be in mission logic)`);
+    for (const m of text.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)) {
       const host = m[1].toLowerCase();
-      if (!ALLOWED_HOSTS.some((h) => host === h || host.endsWith('.' + h)) && !host.endsWith('github.com') && host !== 'localhost') {
-        raise('C', `new external host ${host}`);
+      if (!ALLOWED_HOSTS.some((h) => host === h || host.endsWith('.' + h)) && host !== 'localhost') {
+        raise('C', `new external host ${host} in ${path}`);
       }
     }
-    if (/(api[_-]?key|secret|password|token)\s*[:=]\s*['"][^'"]{8,}/i.test(line)) raise('C', 'possible secret in code');
   }
 
   const touchesSrc = f.files.some((x) => x.path.startsWith('src/'));
@@ -97,8 +105,12 @@ async function main() {
     const list = sh(`git ls-tree -r --name-only ${ref} -- tests`).trim().split('\n').filter((p) => /\.test\.ts$/.test(p));
     return list.reduce((n, p) => n + (sh(`git show ${ref}:${p}`).match(/\b(it|test)\s*\(/g)?.length ?? 0), 0);
   };
-  const addedLines = sh(`git diff -U0 ${mergeBase} HEAD`).split('\n')
-    .filter((l) => l.startsWith('+') && !l.startsWith('+++'));
+  const addedLines: { path: string; text: string }[] = [];
+  let current = '';
+  for (const l of sh(`git diff -U0 ${mergeBase} HEAD`).split('\n')) {
+    if (l.startsWith('+++ ')) current = l.replace(/^\+\+\+ (b\/)?/, '');
+    else if (l.startsWith('+')) addedLines.push({ path: current, text: l.slice(1) });
+  }
   const branch = sh('git rev-parse --abbrev-ref HEAD').trim();
   const result = classify({
     branch, files, depsBase: deps(mergeBase), depsHead: deps('HEAD'),
