@@ -3,6 +3,8 @@ import { dist, pointAlong, polylineLength } from '../map/geom';
 import type { RoadGraph } from '../map/roadGraph';
 import type { WalkGrid } from '../map/grid';
 import { hashString, mulberry32, type Rng } from '../util/rng';
+import { nearChildPlace } from '../map/recon';
+import { placeLabel } from './missions';
 import type { Mission } from './missions';
 import { WEAPONS, weaponById, type WeaponDef } from './weapons';
 
@@ -54,7 +56,7 @@ export type SimEvent =
   | { type: 'danger-close' }
   | { type: 'survivor-lost'; x: number; z: number }
   | { type: 'survivor-home' }
-  | { type: 'wave'; count: number; cold: number; from: string }
+  | { type: 'wave'; count: number; cold: number; from: string; place: string }
   | { type: 'radio'; text: string }
   | { type: 'result'; won: boolean; reason: string };
 
@@ -88,6 +90,8 @@ export interface SimState {
 export const ORBIT = { radius: 1000, altitude: 1500, period: 120 };
 /** New zombies never appear closer than this to a survivor (metres). Spawn points sit 12 m wide, so this leaves ~60 m. */
 export const MIN_SPAWN_GAP = 75;
+/** Waves never spawn this close to a school, kindergarten or playground (guardrail, PLAN §9). */
+export const WAVE_CHILD_GAP = 60;
 
 export class Sim {
   readonly mission: Mission;
@@ -113,6 +117,13 @@ export class Sim {
   private nextId = 0;
   private safeField: Int32Array | null = null;
   private lastDangerClose = -99;
+  /** Road nodes waves may not spawn at: near schools, kindergartens, playgrounds. Computed once. */
+  private noSpawn: Uint8Array;
+  /** Seconds before zombies notice sheltering friendlies (longer on easy). */
+  private shelterGrace: number;
+  private lastUnderAttack = -99;
+  /** A horde creeping toward the sheltering friendlies (clear missions). */
+  private drift: { anchor: V2; target: V2; speed: number } | null = null;
 
   constructor(mission: Mission, map: MapData, graph: RoadGraph, grid: WalkGrid) {
     this.mission = mission;
@@ -121,12 +132,24 @@ export class Sim {
     this.grid = grid;
     this.rng = mulberry32(hashString(`sim|${mission.mapName}|${mission.seed}|${mission.type}|${mission.difficulty}`));
     this.weapons = WEAPONS.map((w) => ({ id: w.id, ammo: w.magazine, cooldown: 0, reloading: 0 }));
-    for (const h of mission.hordes) {
+    // Each horde mills around its own movable anchor (a copy, so the mission data never changes).
+    const anchors = mission.hordes.map((h) => ({ ...h.centre }));
+    mission.hordes.forEach((h, k) => {
       for (let i = 0; i < h.count; i++) {
         const a = this.rng() * Math.PI * 2;
         const r = Math.sqrt(this.rng()) * 22;
-        this.spawnZombie(grid.nearestFree({ x: h.centre.x + Math.cos(a) * r, z: h.centre.z + Math.sin(a) * r }), i < h.cold, h.centre);
+        this.spawnZombie(grid.nearestFree({ x: h.centre.x + Math.cos(a) * r, z: h.centre.z + Math.sin(a) * r }), i < h.cold, anchors[k]);
       }
+    });
+    // Clear missions: after the grace period, the horde nearest the sheltering friendlies drifts toward them,
+    // so there is real pressure to find and protect them (the critic found the friendlies were never threatened).
+    const shelter = mission.type === 'clear' ? mission.survivors.find((s) => !s.route) : undefined;
+    if (shelter && anchors.length) {
+      let best = 0;
+      anchors.forEach((a, k) => {
+        if (dist(a, shelter.start) < dist(anchors[best], shelter.start)) best = k;
+      });
+      this.drift = { anchor: anchors[best], target: { ...shelter.start }, speed: 0.5 + 0.1 * mission.difficulty };
     }
     mission.survivors.forEach((p, i) => {
       this.survivors.push({
@@ -140,6 +163,9 @@ export class Sim {
     });
     if (mission.safehouse && mission.type === 'defend') this.safeField = grid.flowField(grid.perimeterCells(mission.safehouse.poly));
     if (mission.waves) this.waveTimer = 3; // first wave arrives quickly
+    this.shelterGrace = Math.max(15, 45 - 6 * mission.difficulty);
+    this.noSpawn = new Uint8Array(graph.nodes.length);
+    if (mission.waves) graph.nodes.forEach((n, i) => (this.noSpawn[i] = nearChildPlace(map, n, WAVE_CHILD_GAP) ? 1 : 0));
   }
 
   /** Aircraft position: a steady left-hand orbit around the mission's centre. */
@@ -165,6 +191,25 @@ export class Sim {
       id: this.nextId++, x: p.x, z: p.z, vx: 0, vz: 0, cold, alive: true, diedAt: -1, home, goal: null,
       speed: (cold ? 1.1 : 1.3) + this.rng() * 0.6 + 0.08 * d,
     });
+  }
+
+  /**
+   * Add one zombie at a walkable spot near `p` (used by Training night to restock its targets).
+   * Ids come from the same counter as every other zombie, so they never collide.
+   */
+  addZombie(p: V2, cold: boolean, home: V2 | null): Zombie {
+    this.spawnZombie(this.grid.nearestFree(p), cold, home);
+    return this.zombies[this.zombies.length - 1];
+  }
+
+  /** Bring a fallen survivor back to their feet where they fell (Training night patches up friendly fire). */
+  revive(survivorId: number): boolean {
+    const s = this.survivors.find((x) => x.id === survivorId);
+    if (!s || s.alive || s.home) return false;
+    s.alive = true;
+    s.hp = 1;
+    s.diedAt = -1;
+    return true;
   }
 
   weaponReady(id: string): boolean {
@@ -260,6 +305,10 @@ export class Sim {
         if (d < nearest) nearest = d;
         if (d < 1.6) attackers++;
       }
+      if (!s.route && nearest < 12 && this.t - this.lastUnderAttack > 8) {
+        this.lastUnderAttack = this.t;
+        this.emit({ type: 'radio', text: 'FRIENDLIES UNDER ATTACK! Contacts closing on the sheltering friendlies.' });
+      }
       if (attackers) {
         s.hp -= 0.7 * attackers * dt;
         if (s.hp <= 0) {
@@ -309,7 +358,7 @@ export class Sim {
         const ahead = Math.min(lead.routeLen, lead.s + 90 + this.rng() * 140);
         ref = pointAlong(lead.route, ahead);
         for (let i = 0; i < g.nodes.length; i++) {
-          if (g.comp[i] !== g.mainComp) continue;
+          if (g.comp[i] !== g.mainComp || this.noSpawn[i]) continue;
           const d = dist(g.nodes[i], ref);
           // Routes can double back, so also keep ambushes well clear of where the survivors are now.
           if (d >= 30 && d <= 90 && active.every((s) => dist(g.nodes[i], s) >= MIN_SPAWN_GAP)) cands.push(i);
@@ -318,7 +367,7 @@ export class Sim {
     }
     if (!cands.length) {
       for (let i = 0; i < g.nodes.length; i++) {
-        if (g.comp[i] !== g.mainComp) continue;
+        if (g.comp[i] !== g.mainComp || this.noSpawn[i]) continue;
         const n = g.nodes[i];
         if (Math.abs(n.x) > lim || Math.abs(n.z) > lim) continue;
         const d = dist(n, ref);
@@ -338,10 +387,18 @@ export class Sim {
       this.spawnZombie(this.grid.nearestFree({ x: at.x + Math.cos(a) * r, z: at.z + Math.sin(a) * r }), i < cold, null);
     }
     const dir = compassWord(ref, at);
-    this.emit({ type: 'wave', count: size, cold, from: dir });
+    this.emit({ type: 'wave', count: size, cold, from: dir, place: placeLabel(this.map, at) });
   }
 
   private updateZombies(dt: number): void {
+    if (this.drift && this.t > this.shelterGrace) {
+      const { anchor, target, speed } = this.drift;
+      const d = dist(anchor, target);
+      if (d > 8) {
+        anchor.x += ((target.x - anchor.x) / d) * speed * dt;
+        anchor.z += ((target.z - anchor.z) / d) * speed * dt;
+      }
+    }
     const grid = this.grid;
     const active = this.activeSurvivors();
     if (this.mission.type === 'escort') {
@@ -358,6 +415,8 @@ export class Sim {
       let near: Survivor | null = null;
       let nd = 25;
       for (const s of active) {
+        // Sheltering friendlies stay hidden for the first moments, so the player has time to find them.
+        if (!s.route && this.t < this.shelterGrace) continue;
         const d = Math.hypot(s.x - z.x, s.z - z.z);
         if (d < nd) {
           nd = d;

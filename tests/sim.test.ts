@@ -161,7 +161,7 @@ describe('committed fingerprint (gate G4 across machines and versions)', () => {
     expect((h >>> 0).toString(16)).toBe(EXPECTED_FINGERPRINT);
   });
 });
-const EXPECTED_FINGERPRINT = 'dac45c39';
+const EXPECTED_FINGERPRINT = '7de5904e';
 
 describe('regressions from the phase 1 playtest', () => {
   it('escort ambushes never spawn on top of survivors (was: 3.5% of missions lost by second 5)', () => {
@@ -200,5 +200,69 @@ describe('regressions from the phase 1 playtest', () => {
   it('rejects a NaN difficulty or unknown mission type instead of building a broken mission', () => {
     expect(generateMission(map, graph, grid, { type: 'clear', difficulty: NaN, seed: 1 }).ok).toBe(false);
     expect(generateMission(map, graph, grid, { type: 'foo' as MissionType, difficulty: 2, seed: 1 }).ok).toBe(false);
+  });
+});
+
+describe('guardrail: waves stay away from schools, kindergartens and playgrounds (PLAN §9)', () => {
+  it('no wave zombie ever spawns within 60 m of one, even when schools line half the map', async () => {
+    const { nearChildPlace } = await import('../src/map/recon');
+    // Schools at every road junction on the west side: without the guard, waves land there.
+    const schools = graph.nodes
+      .filter((n, i) => n.x <= -200 && i % 2 === 0)
+      .map((n, i) => ({ id: `testschool${i}`, p: { x: n.x + 8, z: n.z + 8 }, kind: 'school', name: `Test School ${i}` }));
+    const schoolMap: MapData = { ...map, name: 'school-test', pois: [...map.pois, ...schools] };
+    let checked = 0;
+    for (const type of ['escort', 'defend'] as MissionType[]) {
+      for (let seed = 1; seed <= 6; seed++) {
+        const r = createSim(schoolMap, { type, difficulty: 4, seed });
+        if (!r.ok) continue;
+        const sim = r.sim;
+        const seen = new Set<number>();
+        for (let t = 0; t < 150 && sim.phase === 'running'; t += 1) {
+          play(sim, null, t + 1);
+          for (const z of sim.zombies) {
+            if (seen.has(z.id)) continue;
+            seen.add(z.id);
+            checked++;
+            // spawn spread is 12 m around the node, so allow that much inside the 60 m gap
+            expect(nearChildPlace(schoolMap, { x: z.x, z: z.z }, 45), `${type} seed ${seed} zombie ${z.id}`).toBe(false);
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(100);
+  }, 180_000);
+});
+
+describe('training helpers', () => {
+  it('addZombie gives every new zombie a fresh id, on walkable ground, even after waves have spawned', () => {
+    const sim = make('defend', 3, 2);
+    play(sim, null, 20); // waves add zombies through the sim's own counter
+    const before = sim.zombies.length;
+    const a = sim.addZombie({ x: 0, z: 0 }, true, { x: 0, z: 0 });
+    const b = sim.addZombie({ x: 5, z: 5 }, false, null);
+    expect(sim.zombies.length).toBe(before + 2);
+    expect(a.cold).toBe(true);
+    expect(b.cold).toBe(false);
+    expect(a.alive && b.alive).toBe(true);
+    expect(sim.grid.isBlocked(a.x, a.z)).toBe(false);
+    const ids = sim.zombies.map((z) => z.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(b.id).toBeGreaterThan(a.id);
+  });
+
+  it('revive brings back a fallen survivor by id, and only a fallen one', () => {
+    const sim = make('escort', 2, 3);
+    const s = sim.survivors[1];
+    expect(sim.revive(s.id)).toBe(false); // alive already
+    s.alive = false;
+    s.hp = 0;
+    s.diedAt = sim.t;
+    expect(sim.revive(s.id)).toBe(true);
+    expect(s.alive).toBe(true);
+    expect(s.hp).toBe(1);
+    expect(s.diedAt).toBe(-1);
+    expect(sim.revive(s.id)).toBe(false); // already up
+    expect(sim.revive(9999)).toBe(false);
   });
 });

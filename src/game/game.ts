@@ -11,6 +11,7 @@ import { SensorShader, type SensorId } from '../render/sensors';
 import { AgentsView } from './agentsView';
 import { Effects } from './effects';
 import { Hud } from '../ui/hud';
+import { briefingMap } from '../ui/tacticalMap';
 import { el } from '../ui/dom';
 import { Sfx } from '../audio/sfx';
 
@@ -22,13 +23,57 @@ export interface GameOptions {
   onRetry(): void;
   onNext(): void;
   onMenu(): void;
+  /** Optional listener for player actions and sim events (used by the tutorial). */
+  onAction?(a: GameAction): void;
+  /**
+   * Reduce flicker (photosensitivity): no 105 camera kick, and the camera-switch static becomes a
+   * gentle fade. Defaults to the OS "reduce motion" preference.
+   */
+  reduceFlicker?: boolean;
 }
+
+/** Extra hooks on window.__spooky, installed only under browser automation (see the Game constructor). */
+interface TestHooks {
+  fireAt?: (weapon: string, x?: number, z?: number) => boolean;
+  aimAt?: (x: number, z: number) => void;
+  survivors?: () => V2[];
+  /** Live zombies (test-only), so tests can aim at real targets instead of reading pixels. */
+  zombies?: () => V2[];
+  /** Advance exactly `dt` game seconds per rendered frame (null: real time), so a slow test machine sees every frame a 60 fps player would. */
+  fixedStep?: (dt: number | null) => void;
+  /** Hold or release the trigger, as holding the left button does (without needing pointer lock). */
+  holdFire?: (on: boolean) => void;
+  /** Where the aim point appears relative to the screen centre, CSS px (the camera kick, as last drawn). */
+  aimOffset?: () => [number, number];
+}
+
+/** The OS asks for reduced motion (live: it can change while the page is open). */
+const reducedMotionQuery: MediaQueryList | null = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+
+/** What the player just did, or what the simulation just reported. */
+export type GameAction =
+  | { type: 'weapon'; weapon: string }
+  | { type: 'sensor'; sensor: SensorId }
+  | { type: 'polarity'; polarity: number }
+  | { type: 'sim'; event: SimEvent };
 
 type Screen = 'briefing' | 'playing' | 'paused' | 'ended';
 /** One audio context for the whole page; browsers limit how many can exist. */
 const sharedSfx = new Sfx();
 const STEP = 1 / 60;
 const SWITCH_TIME = 0.7;
+/** Reduce flicker: the switch cover fades in over this long before the picture changes, then fades out. */
+const CALM_RISE = 0.18;
+/** Big-kill radio calls. They take turns (starting from the mission seed), so the same line never plays twice running. */
+const KILL_LINES: readonly ((n: number) => string)[] = [
+  (n) => `Good effect on target, ${n} down. That's a lot of former neighbours.`,
+  (n) => `Splash ${n}. The residents' committee will want a word.`,
+  (n) => `${n} down. Someone's going to need a very big rake.`,
+  (n) => `That's ${n} fewer at the bus stop. Nice shooting.`,
+  (n) => `${n} down in one go. Neighbourhood watch, upgraded.`,
+];
+/** Blasts landing this close together (seconds) are reported as one call with the combined count. */
+const KILL_MERGE = 1.5;
 
 export class Game {
   readonly sim: Sim;
@@ -65,6 +110,14 @@ export class Game {
   private raf = 0;
   private disposed = false;
   private listeners: [EventTarget, string, EventListener][] = [];
+  /** Reduce flicker (see GameOptions.reduceFlicker). */
+  readonly reduceFlicker: boolean;
+  /** The camera the picture shows; with reduce flicker it changes under the fade, not before it. */
+  private shownSensor: SensorId = 'thermal';
+  private camRight = new THREE.Vector3();
+  private camUp = new THREE.Vector3();
+  /** Test hook only (see TestHooks.fixedStep): seconds per frame, or null for real time. */
+  private fixedDt: number | null = null;
 
   constructor(private container: HTMLElement, private map: MapData, sim: Sim, private opts: GameOptions) {
     this.sim = sim;
@@ -90,9 +143,13 @@ export class Game {
     this.composer.addPass(this.sensorPass);
 
     this.hud = new Hud(container, map.attribution);
+    this.hud.setMinimap(map, sim.mission);
     this.overlay = el('div', 'overlay', undefined, container);
     this.bot = opts.bot ? new Bot(sim, SKILL.human) : null;
     if (opts.sensor) this.sensor = opts.sensor;
+    this.shownSensor = this.sensor;
+    this.reduceFlicker = opts.reduceFlicker ?? !!reducedMotionQuery?.matches;
+    this.sensorPass.uniforms.calm.value = this.reduceFlicker ? 1 : 0;
     const m = sim.mission;
     this.aim = m.route ? { ...m.route[0] } : m.safehouse ? { ...m.safehouse.centre } : { ...m.orbitCentre };
 
@@ -102,13 +159,42 @@ export class Game {
     else this.showBriefing();
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.frame);
+    // Test hooks for the automated flash checks and screenshots (scripts/playtest.mjs). Only under
+    // browser automation (navigator.webdriver), so real players never get them.
+    const hooks = window.__spooky as TestHooks | undefined;
+    if (typeof navigator !== 'undefined' && navigator.webdriver && hooks) {
+      hooks.fireAt = (w, x, z) => this.fireAt(w, x === undefined || z === undefined ? this.aim : { x, z });
+      hooks.aimAt = (x, z) => {
+        this.aim = { x, z };
+      };
+      hooks.survivors = () => this.sim.survivors.filter((s) => s.alive && !s.home).map((s) => ({ x: s.x, z: s.z }));
+      hooks.zombies = () => this.sim.zombies.filter((z) => z.alive).map((z) => ({ x: z.x, z: z.z }));
+      hooks.fixedStep = (dt) => {
+        this.fixedDt = dt;
+      };
+      hooks.aimOffset = () => {
+        const p = this.screenPos(this.aim, 0);
+        const c = this.renderer.domElement;
+        return [p.x - c.clientWidth / 2, p.y - c.clientHeight / 2];
+      };
+      hooks.holdFire = (on) => {
+        this.firing = on && this.screen === 'playing';
+      };
+    }
+  }
+
+  /** Test hook: fire `weapon` at a ground point now, if it is loaded (see the constructor). */
+  fireAt(weapon: string, p: V2): boolean {
+    if (this.disposed || this.screen !== 'playing') return false;
+    return this.sim.fire(weapon, { ...p });
   }
 
   // ---------- screens ----------
   private showBriefing(): void {
     const m = this.sim.mission;
     this.overlay.replaceChildren();
-    const card = el('div', 'card', undefined, this.overlay);
+    const card = el('div', 'card briefing', undefined, this.overlay);
+    card.appendChild(briefingMap(this.map, m, this.sim.graph));
     el('div', 'card-kicker', `MISSION · DIFFICULTY ${m.difficulty} · SEED ${m.seed}`, card);
     el('h2', undefined, m.title, card);
     for (const line of m.briefing) el('p', undefined, line, card);
@@ -179,7 +265,7 @@ export class Game {
     this.listeners.push([t, type, fn]);
   }
 
-  private lockPointer(): void {
+  lockPointer(): void {
     try {
       const p = this.renderer.domElement.requestPointerLock?.() as unknown;
       if (p instanceof Promise) p.catch(() => undefined);
@@ -207,6 +293,8 @@ export class Game {
     this.on(window, 'mousemove', (e) => {
       if (document.pointerLockElement !== canvas || this.screen !== 'playing') return;
       const me = e as MouseEvent;
+      // Some browsers send a bogus huge jump under pointer lock (e.g. on click); ignore it.
+      if (Math.abs(me.movementX) > 300 || Math.abs(me.movementY) > 300) return;
       this.nudgeAim(me.movementX, me.movementY);
     });
     this.on(window, 'keydown', (e) => {
@@ -224,13 +312,16 @@ export class Game {
       if (k === 'm') this.sfx.muted = !this.sfx.muted;
       if (this.screen === 'paused' && k === 'r') this.opts.onRetry();
       if (this.screen !== 'playing') return;
+      const gun = this.weapon;
       if (k === '1' || k === '2' || k === '3') this.weapon = WEAPONS[Number(k) - 1].id;
       if (k === 'q') this.weapon = WEAPONS[(WEAPONS.findIndex((w) => w.id === this.weapon) + 1) % WEAPONS.length].id;
+      if (this.weapon !== gun) this.opts.onAction?.({ type: 'weapon', weapon: this.weapon });
       if (k === 'v' && this.switchLeft <= 0) this.setSensor(this.sensor === 'thermal' ? 'night' : 'thermal');
       // At most one white/black-hot flip per 0.35 s, so rapid tapping stays under 3 flashes a second.
       if (k === 'h' && this.sensor === 'thermal' && this.clock - this.lastFlip >= 0.35) {
         this.polarity = 1 - this.polarity;
         this.lastFlip = this.clock;
+        this.opts.onAction?.({ type: 'polarity', polarity: this.polarity });
       }
       if (k === 'z') this.zoom = !this.zoom;
     });
@@ -249,6 +340,24 @@ export class Game {
     if (s === this.sensor) return;
     this.sensor = s;
     this.switchLeft = SWITCH_TIME;
+    this.opts.onAction?.({ type: 'sensor', sensor: s });
+  }
+
+  /** The ground point the camera is aimed at (a copy). */
+  aimPoint(): V2 {
+    return { ...this.aim };
+  }
+
+  /** The selected gun's id. */
+  get weaponId(): string {
+    return this.weapon;
+  }
+
+  /** Where a ground point appears on screen, in CSS pixels. */
+  screenPos(p: V2, y = 4): { x: number; y: number; visible: boolean } {
+    const v = new THREE.Vector3(p.x, y, p.z).project(this.camera);
+    const c = this.renderer.domElement;
+    return { x: ((v.x + 1) / 2) * c.clientWidth, y: ((1 - v.y) / 2) * c.clientHeight, visible: v.z < 1 && Math.abs(v.x) < 1 && Math.abs(v.y) < 1 };
   }
 
   /** Move the aim point on the ground by a screen-space amount, so it feels the same at any zoom. */
@@ -274,7 +383,7 @@ export class Game {
   private frame = (now: number): void => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.frame);
-    const dt = Math.min(0.1, (now - this.last) / 1000);
+    const dt = this.fixedDt ?? Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
     if (this.screen === 'playing') this.clock += dt;
 
@@ -308,9 +417,16 @@ export class Game {
     this.sim.fire(this.weapon, p);
   }
 
+  /** Kills waiting to be called in (merged over KILL_MERGE seconds), and which line goes next. */
+  private waveCall = 0;
+  private killCall = { n: 0, at: -1, next: -1 };
+
   private handleEvents(events: SimEvent[]): void {
     const now = this.clock;
+    const kc = this.killCall;
+    if (kc.next < 0) kc.next = this.sim.mission.seed % KILL_LINES.length;
     for (const e of events) {
+      this.opts.onAction?.({ type: 'sim', event: e });
       switch (e.type) {
         case 'fire':
           this.effects.fire(e.weapon, e.from, e.to, e.tof, now);
@@ -319,7 +435,12 @@ export class Game {
         case 'impact':
           this.effects.impact(e.weapon, e.x, e.z, now);
           this.sfx.impact(e.weapon);
-          if (e.kills >= 5) this.radio(`Good effect on target, ${e.kills} down. That's a lot of former neighbours.`);
+          // A big blast opens a call; anything else that lands in the next moment joins its count.
+          if (kc.at >= 0) kc.n += e.kills;
+          else if (e.kills >= 5) {
+            kc.n = e.kills;
+            kc.at = now;
+          }
           break;
         case 'friendly-hit':
           this.radio('CHECK FIRE! CHECK FIRE! Friendly down!', true);
@@ -333,9 +454,17 @@ export class Game {
         case 'survivor-home':
           this.radio("One survivor home. Kettle's on.");
           break;
-        case 'wave':
-          this.radio(`New contacts: ${e.count} from the ${e.from}${e.cold ? `, ${e.cold} of them cold-blooded` : ''}.`);
+        case 'wave': {
+          const cold = e.cold ? `, ${e.cold} of them cold-blooded` : '';
+          const lines = [
+            `New contacts: ${e.count} coming in from ${e.place}${cold}.`,
+            `${e.count} more heading your way from ${e.place}${cold}.`,
+            `Movement near ${e.place}: ${e.count} contacts${cold}.`,
+            `Here they come: ${e.count} from the ${e.from}, near ${e.place}${cold}.`,
+          ];
+          this.radio(lines[this.waveCall++ % lines.length]);
           break;
+        }
         case 'radio':
           this.radio(e.text);
           break;
@@ -343,6 +472,12 @@ export class Game {
           this.showResult(e.won, e.reason);
           break;
       }
+    }
+    if (kc.at >= 0 && now - kc.at >= KILL_MERGE) {
+      this.radio(KILL_LINES[kc.next](kc.n));
+      kc.next = (kc.next + 1) % KILL_LINES.length;
+      kc.at = -1;
+      kc.n = 0;
     }
   }
 
@@ -368,8 +503,8 @@ export class Game {
     }
     this.camera.fov = fov;
     this.camera.position.set(ac.x, ac.y, ac.z);
-    const sh = this.effects.shake;
-    this.camera.lookAt(this.aim.x + Math.sin(this.clock * 90) * sh * 8, 0, this.aim.z + Math.cos(this.clock * 77) * sh * 8);
+    this.camera.lookAt(this.aim.x, 0, this.aim.z);
+    this.applyKick(fov);
     this.camera.updateProjectionMatrix();
 
     this.agents.update(this.sim, this.clock);
@@ -377,12 +512,11 @@ export class Game {
 
     const u = this.sensorPass.uniforms;
     u.time.value = this.clock;
-    u.mode.value = this.sensor === 'night' ? 1 : 0;
+    u.mode.value = this.pictureSensor() === 'night' ? 1 : 0;
     this.polarityShown += Math.sign(this.polarity - this.polarityShown) * Math.min(Math.abs(this.polarity - this.polarityShown), dt * 4);
     u.polarity.value = this.polarityShown;
     u.washout.value = this.effects.washout;
-    // Switch static fades out smoothly instead of cutting off.
-    u.blank.value = Math.min(1, (this.switchLeft / SWITCH_TIME) * 1.6);
+    u.blank.value = this.switchCover();
     this.renderer.info.reset();
     this.composer.render();
 
@@ -390,8 +524,49 @@ export class Game {
     if (this.hudTimer <= 0) {
       this.hudTimer = 0.1;
       this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose());
+      this.hud.updateMinimap(ac, this.aim, this.sim.survivors.filter((s) => s.alive && !s.home));
     }
     this.hud.setMarkers(this.markers());
+  }
+
+  /**
+   * The 105's camera kick: one damped swing of at most SHAKE_MAX_PX screen pixels, converted to
+   * metres at the aim point with the current field of view and range. Off with reduced motion or
+   * reduce flicker.
+   */
+  private applyKick(fovDeg: number): void {
+    if (this.reduceFlicker || reducedMotionQuery?.matches) return;
+    const k = this.effects.shakePx(this.clock);
+    if (!k.x && !k.y) return;
+    const cam = this.camera;
+    const h = this.renderer.domElement.clientHeight || 1;
+    const range = cam.position.distanceTo(new THREE.Vector3(this.aim.x, 0, this.aim.z));
+    const mPerPx = (2 * range * Math.tan(THREE.MathUtils.degToRad(fovDeg / 2))) / h;
+    cam.updateMatrixWorld();
+    this.camRight.setFromMatrixColumn(cam.matrixWorld, 0);
+    this.camUp.setFromMatrixColumn(cam.matrixWorld, 1);
+    const t = new THREE.Vector3(this.aim.x, 0, this.aim.z)
+      .addScaledVector(this.camRight, k.x * mPerPx)
+      .addScaledVector(this.camUp, k.y * mPerPx);
+    cam.lookAt(t);
+  }
+
+  /** Which camera the picture shows this frame (with reduce flicker it changes once the fade has covered it). */
+  private pictureSensor(): SensorId {
+    if (this.switchLeft <= 0 || !this.reduceFlicker || this.switchLeft <= SWITCH_TIME - CALM_RISE) this.shownSensor = this.sensor;
+    return this.shownSensor;
+  }
+
+  /** How much the camera-switch cover hides the picture, 0-1. */
+  private switchCover(): number {
+    const left = this.switchLeft;
+    if (left <= 0) return 0;
+    // Normal: static that cuts in and fades out smoothly.
+    if (!this.reduceFlicker) return Math.min(1, (left / SWITCH_TIME) * 1.6);
+    // Reduce flicker: a flat grey that eases in, swaps the picture underneath, then eases out.
+    const ease = (x: number) => x * x * (3 - 2 * x);
+    const since = SWITCH_TIME - left;
+    return since < CALM_RISE ? ease(since / CALM_RISE) : ease(Math.min(1, left / (SWITCH_TIME - CALM_RISE)));
   }
 
   /** True when the current gun would endanger a friendly at the aim point. */
@@ -435,7 +610,11 @@ export class Game {
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
+    // Test hooks must not outlive this game (they'd point at a dead one).
+    const hooks = window.__spooky as TestHooks | undefined;
+    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
     for (const [t, type, fn] of this.listeners) t.removeEventListener(type, fn);
     if (document.pointerLockElement) document.exitPointerLock?.();
