@@ -16,7 +16,8 @@ You are the sensor and gun operator in a gunship circling above a neighbourhood 
 | 2 | Visual style | **Thermal camera (white-hot / black-hot)** | It is authentic to the genre. It also **hides the low detail of map data**: OpenStreetMap gives building outlines and heights, not textures, and in thermal view a plain block looks right. | Same as above. |
 | 3 | Map source | **OpenStreetMap through the Overpass API** (a public query service) **+ Nominatim** (OpenStreetMap's address search) | Free, no account or key, worldwide, and has building heights, road types, street names, parks, schools and hospitals. | Areas with poor map coverage → fill the gaps with procedurally generated houses. |
 | 4 | Mission creation | **Fixed rules with a seed, not AI-generated** | Rules guarantee every mission can be won: the route exists, the spawn points are reachable, the timings are fair. The same address + seed always gives the same mission, so you can replay it and share it. | An optional AI layer may later *rewrite the briefing text only* (§6, phase 5), never the mission logic. |
-| 5 | Enemies and civilians | Zombies are enemies. Survivors carry flashing infrared markers and **hitting them fails the mission.** | This keeps targets unambiguous over a real neighbourhood, and the rules of engagement (rules about when you may fire) become a gameplay skill. | — |
+| 5 | Enemies and civilians | Zombies are enemies. Survivors carry an infrared strobe, which only the night-vision camera can see, and a thermal ID panel, which shows as a faint dark square in the thermal camera. **Hitting survivors fails the mission.** | This keeps targets distinguishable over a real neighbourhood, and the rules of engagement (rules about when you may fire) become a gameplay skill. Confirming who is friendly is one reason to switch cameras (§5a). | — |
+| 6 | Camera views | **Several sensors, each answering a different question** (§5a) | Switching cameras becomes a decision rather than a cosmetic toggle. | Playtests show players stay in one mode (see §8). |
 
 **The assumption everything rests on:** a stylised thermal view of map outlines will feel like *your* neighbourhood. Street layout, building heights and real street names usually carry recognition, and roof textures do not. **What would prove it wrong:** you load your own suburb in phase 2 and it doesn't feel like home. If so, phase 5's terrain and imagery options become the priority.
 
@@ -105,14 +106,33 @@ World builder  Road network        Walk grid               Mission generator
 | 40 mm | medium, 10° | 2.5/s | 8 / 3.5 s | ~2.5 s | 7 m | General use |
 | 105 mm | wide, 22° | 1 per 4 s | 1 / 4.5 s | ~4.5 s | 18 m | Hordes; dangerous near friendlies |
 
-*From a slant range of about 2.2 km. The delay is deliberate: you have to lead moving targets. **Controls:** mouse aims (click to capture the pointer), hold the mouse button to fire, `Q` or `1/2/3` to switch guns, `Z` to zoom, `H` to switch white-hot/black-hot, `R` to restart.
+*From a slant range of about 2.2 km. The delay is deliberate: you have to lead moving targets. **Controls:** mouse aims (click to capture the pointer), hold the mouse button to fire, `Q` or `1/2/3` to switch guns, `Z` to zoom, `V` to switch cameras, `H` to switch white-hot/black-hot (thermal only), `R` to restart.
+
+## 5a. Cameras (sensors) and cold-blooded zombies
+
+Each camera answers one question well and others badly. No single camera is enough on its own.
+
+| Camera | Answers | Weak at | Version |
+|---|---|---|---|
+| **Thermal** (white-hot / black-hot is only a display toggle) | "Where are the warm bodies?" Sees through darkness and light smoke. | Can't see cold-blooded zombies on grass. Can't see IR strobes. Hot craters and burning wrecks clutter the picture. | 1 |
+| **Night vision** (amplifies the little light there is) | "What is it, and is it friendly?" Shows shapes, cold-blooded zombies and survivors' IR strobes. | Needs light: murky between streetlights and under trees. Each blast washes out the picture for 1–2 s. | 1 |
+| **Movement radar** (shows anything that is moving) | "What is moving?" Works in any light and at any temperature. | Can't tell friend from zombie. Misses anything standing still. Shows dots, not pictures. | 3 |
+| Daylight colour TV | Day missions only | — | 4 |
+
+**Cold-blooded zombies ("coldies").** They sit at the same temperature as their surroundings, a permanent version of *thermal crossover*: at dawn and dusk real objects and background reach similar temperatures and thermal contrast fades. **Coldies are faint, not invisible.** They show as dark smudges against sun-warmed roads and car parks, and they vanish against cool grass and gardens. Their visibility then follows the real map: they are traceable on the streets of your suburb and lost in its parks. A camera that simply locks or unlocks an enemy type tends to feel like a chore. Partial visibility that rewards skill is the design goal.
+
+**Intel in the briefing** gives the mix of enemies and how sure the intel is: *confirmed*, *probable* or *unconfirmed*. For example: "Unconfirmed reports of cold-blooded contacts near Banksia Reserve." Seeded rules generate this text like the rest of the mission.
+
+**Switching costs time:** about 0.7 s of blank screen while the new camera settles, so flicking between cameras constantly isn't free.
+
+**How it's built (one 3D pass, several views).** Every object's material writes three values into the image at once: heat (red channel), visible brightness (green) and near-infrared light from strobes and lamps (blue). The camera filter then chooses how to display them. Adding a camera is a filter change, not a second 3D scene, so performance stays flat. The radar is drawn as a HUD overlay from zombie and survivor movement, not from the 3D scene. Streetlights come from OpenStreetMap `highway=street_lamp` points where they are mapped. Where they aren't, they are generated along roads (coverage varies by suburb [INFERENCE]).
 
 ## 6. Delivery phases
 
 | Phase | What you get | Done when |
 |---|---|---|
 | **0. Scaffold** *(in progress)* | Repo, build tooling, tests, map loader, sample town | `npm test` passes; sample map loads |
-| **1. Playable slice** | Sample town; orbit + thermal camera; 3 guns; zombies and survivors; 3 mission types; HUD; win/lose | You can play all 3 mission types end to end in the browser |
+| **1. Playable slice** | Sample town; orbit camera; thermal + night-vision cameras built on the 3-value render; warm and cold-blooded zombies; 3 guns; survivors; 3 mission types; briefing intel; HUD; win/lose | You can play all 3 mission types end to end, and at least one mission needs both cameras |
 | **2. Your neighbourhood** | Address search → download → mission; save/load map files; loading progress; handling for missing or partial map data | Your own suburb loads in under 15 s and produces a winnable mission of each type |
 | **3. Feel** | Crew radio voice lines, better sound, screen shake, scoring and grades, campaign chain | Playtest: "feels like a gunship" |
 | **4. Depth** | Vehicles, evacuation/nest/convoy missions, day/night, ground height from elevation data | — |
@@ -139,6 +159,7 @@ World builder  Road network        Walk grid               Mission generator
 | Patchy map data (missing buildings, rural areas) | High outside cities | Few buildings returned | Warn the player; fill empty blocks with procedurally generated houses (phase 2) | Filled-in areas won't match reality |
 | Big, dense areas run slowly | Medium | Frame rate drops on load | Cap the play area at ~1.2 km; merge building meshes; draw zombies as one batch | Very old laptops may struggle |
 | **Privacy: your home's location** | Real | — | Map files from your area go in `maps/private/` (excluded from git); keep the repo private; sharing a mission link would reveal the location, so it stays opt-in | You decide what to share |
+| Players stay in one camera, so switching is pointless | Medium | Playtest log: >80% of time in one camera | Tune coldie contrast, night-vision bloom, switch delay; missions that mix threats | Some players will still prefer one view |
 | Tone: firing on a real neighbourhood | Low–medium | Unease in playtesting | Fictional zombies only; no real groups or people; protecting civilians is the core rule | It's a matter of taste |
 
 **Premortem** (imagine it has failed 18 months from now and ask why): the most likely cause is the game working perfectly on the sample town but feeling flat on real maps, because messy real road data breaks routes and spawn points. **Early warning:** in phase 2, test 5 real suburbs of different kinds (inner city, outer suburb, rural town, hilly area, coastal) before building anything else.
