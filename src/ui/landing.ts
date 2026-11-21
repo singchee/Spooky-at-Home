@@ -21,7 +21,7 @@ export type LandingChoice = 'scout' | 'sample' | 'training';
 export interface LandingOptions {
   /** A one-line notice above the title (e.g. after finishing training). Static text only. */
   notice?: string;
-  /** Has the player finished Training night before? */
+  /** Has the player finished Training night before? (Skipping it doesn't count.) */
   trained?: boolean;
 }
 
@@ -62,6 +62,8 @@ export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) =>
   const training = el('button', 'la-training', undefined, actions);
   el('span', 'la-label', 'Training night', training);
   el('span', 'la-sub', opts.trained ? '✓ done · fly it again' : 'first time? 3 minutes', training);
+  // Shown only on touch screens (CSS: pointer: coarse). The gunship needs a mouse to aim and a keyboard to switch.
+  el('p', 'landing-touch', 'Best with a mouse and keyboard.', main);
 
   el('p', 'landing-privacy', 'Your search goes straight from your browser to OpenStreetMap. Nothing is stored.', main);
   el('p', 'landing-credit', 'Map data © OpenStreetMap contributors (ODbL)', main);

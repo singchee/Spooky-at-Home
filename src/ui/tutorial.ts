@@ -16,19 +16,31 @@ import { el } from './dom';
  */
 export type TutorialExit = 'menu' | 'scout' | 'landing' | 'restart';
 
-const DONE_KEY = 'spooky.training';
+/** "Been through Training night", finished or skipped: value 'done' (the original key, kept as is). */
+const SEEN_KEY = 'spooky.training';
+/** How it went, tracked separately: 'completed' or 'skipped'. */
+const RESULT_KEY = 'spooky.training.result';
+export type TrainingStatus = 'completed' | 'skipped' | null;
 
-export function trainingDone(): boolean {
+export function trainingStatus(): TrainingStatus {
   try {
-    return localStorage.getItem(DONE_KEY) === 'done';
+    const r = localStorage.getItem(RESULT_KEY);
+    return r === 'completed' || r === 'skipped' ? r : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-function remember(): void {
+/** Has the player finished Training night (not just skipped it)? */
+export function trainingDone(): boolean {
+  return trainingStatus() === 'completed';
+}
+
+function remember(result: 'completed' | 'skipped'): void {
   try {
-    localStorage.setItem(DONE_KEY, 'done');
+    localStorage.setItem(SEEN_KEY, 'done');
+    // Skipping a replay never takes away a finished training.
+    if (result === 'completed' || trainingStatus() !== 'completed') localStorage.setItem(RESULT_KEY, result);
   } catch {
     /* private mode or blocked storage: fine, we just forget */
   }
@@ -49,6 +61,9 @@ const MARKS: Partial<Record<StepId, { at: keyof TrainingLayout; label: string }>
   night: { at: 'cold', label: 'CHECK HERE' },
   friendlies: { at: 'friendlies', label: 'FRIENDLIES' },
 };
+
+/** The crosshair counts as "on" the cold one within this many metres. */
+const ON_COLD_METRES = 10;
 
 /** Keep each step's targets stocked, so the player can't run out of zombies to practise on. */
 const STOCK: Partial<Record<StepId, { at: keyof TrainingLayout; n: number; cold: boolean }>> = {
@@ -139,7 +154,7 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
         go.focus({ preventScroll: true });
       } else if (steps.step === 'done') {
         kicker.textContent = 'TRAINING NIGHT · COMPLETE';
-        remember();
+        remember('completed');
         el('button', 'primary', 'Scout my neighbourhood', row).addEventListener('click', () => exit('scout'));
         el('button', undefined, 'Fly a mission', row).addEventListener('click', () => exit('menu'));
         el('button', undefined, 'Front page', row).addEventListener('click', () => exit('landing'));
@@ -159,7 +174,7 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
   };
   const skip = () => {
     steps.skip();
-    remember();
+    remember('skipped');
     exit('menu');
   };
   draw();
@@ -178,7 +193,10 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
     const paused = game.screen === 'paused';
     coach.classList.toggle('paused', paused);
     if (!paused) coach.classList.remove('dismissed');
-    if (game.screen !== 'playing') return;
+    if (game.screen !== 'playing') {
+      coach.classList.remove('aside');
+      return;
+    }
     clock += dt;
     const aim = game.aimPoint();
     const moved = dist(aim, lastAim);
@@ -190,16 +208,18 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
     if (moved > 0) steps.send({ type: 'aimMoved', metres: moved });
 
     const live = sim.zombies.filter((z) => z.alive && Math.abs(z.x) < map.half);
-    steps.send({ type: 'onCold', on: live.some((z) => z.cold && dist(z, aim) < 22) });
+    const coldOn = live.some((z) => z.cold && dist(z, aim) < ON_COLD_METRES);
+    steps.send({ type: 'onCold', on: coldOn });
     const r = weaponById(game.weaponId).radius * 1.6 + 4; // same rule as the HUD's DANGER CLOSE
-    steps.send({ type: 'danger', on: sim.survivors.some((s) => s.alive && !s.home && dist(s, aim) < r) });
+    const dangerOn = sim.survivors.some((s) => s.alive && !s.home && dist(s, aim) < r);
+    steps.send({ type: 'danger', on: dangerOn });
+    steps.send({ type: 'lens', fov: lensFov(game, sim, aim) });
     steps.send({ type: 'tick', dt });
 
     // Friendlies hit in training get patched up after a moment.
     for (let i = revive.length - 1; i >= 0; i--) {
       if (clock < revive[i].at) continue;
-      const s = sim.survivors[revive[i].id];
-      if (s) Object.assign(s, { alive: true, hp: 1, diedAt: -1 });
+      sim.revive(revive[i].id);
       revive.splice(i, 1);
     }
 
@@ -211,28 +231,63 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
       stockWait = have < need.n ? stockWait + dt : 0;
       if (stockWait > 2) {
         stockWait = 0;
-        for (let k = have; k < need.n + (need.cold ? 0 : 3); k++) spawn(sim, grid, centre, need.cold, rng);
+        for (let k = have; k < need.n + (need.cold ? 0 : 3); k++) spawn(sim, centre, need.cold, rng);
       }
     }
 
-    // Step marker.
+    // Step marker. On the night step it follows the cold one itself, so it marks what you're looking for.
     const mk = MARKS[steps.step];
-    const p = mk ? game.screenPos(layout[mk.at] as V2) : null;
+    let spot: V2 | null = mk ? (layout[mk.at] as V2) : null;
+    if (spot && steps.step === 'night') {
+      const c = spot;
+      const cold = live.filter((z) => z.cold && dist(z, c) < 60).sort((a, b) => dist(a, c) - dist(b, c))[0];
+      if (cold) spot = cold;
+    }
+    const p = spot ? game.screenPos(spot) : null;
     marker.style.display = p ? 'block' : 'none';
+    if (!mk || !p) coach.classList.remove('aside');
     if (mk && p) {
       // Off screen: pin the marker to the edge, with an arrow pointing the way.
       const w = parent.clientWidth || innerWidth;
       const h = parent.clientHeight || innerHeight;
-      const x = Math.max(70, Math.min(w - 70, p.x));
-      const y = Math.max(70, Math.min(h - 40, p.y));
+      let x = Math.max(70, Math.min(w - 70, p.x));
+      let y = Math.max(70, Math.min(h - 40, p.y));
       const edge = !p.visible || x !== p.x || y !== p.y;
+      // Keep the coach card and the marker apart. A spot on screen under the card would be hidden,
+      // so the card moves to the other side; a marker pinned to the edge slides clear of the card instead.
+      const pr = parent.getBoundingClientRect();
+      const rectOf = () => {
+        const c = coach.getBoundingClientRect();
+        return { l: c.left - pr.left, t: c.top - pr.top, r: c.right - pr.left, b: c.bottom - pr.top };
+      };
+      if (!coach.classList.contains('aside')) home = rectOf();
+      const aside = !edge && !!home && overlaps(markerBox(x, y), home, coach.classList.contains('aside') ? 24 : 8);
+      coach.classList.toggle('aside', aside);
+      if (edge) {
+        // Slide along the edge to the nearer side of the card; if there's no room (a full-width card on a
+        // phone), step off the edge to just past the card.
+        const c = rectOf();
+        if (overlaps(markerBox(x, y), c, 8)) {
+          const left = c.l - 68;
+          const right = c.r + 68;
+          const fits = (v: number) => v >= 70 && v <= w - 70;
+          const side = [left, right].filter(fits).sort((a, b) => Math.abs(a - p.x) - Math.abs(b - p.x))[0];
+          if (side !== undefined) x = side;
+          else y = c.t + c.b < h ? c.b + MARKER_ABOVE + 8 : c.t - MARKER_BELOW - 8;
+        }
+      }
       marker.classList.toggle('edge', edge);
-      if (edge) marker.style.setProperty('--a', `${Math.atan2(p.y - h / 2, p.x - w / 2).toFixed(2)}rad`);
+      if (edge) marker.style.setProperty('--a', `${Math.atan2(p.y - y, p.x - x).toFixed(2)}rad`);
+      // Once the crosshair is inside the ring (or on the target), the ring fades so it can't hide the target.
+      const onIt = (steps.step === 'night' && coldOn) || (steps.step === 'friendlies' && dangerOn);
+      marker.classList.toggle('inside', !edge && (onIt || Math.hypot(p.x - w / 2, p.y - h / 2) < 40));
       if (marker.textContent !== mk.label) marker.textContent = mk.label;
       marker.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
     }
     draw();
   };
+  /** Where the coach card sits when it isn't moved aside (measured while it's there). */
+  let home: Rect | null = null;
   raf = requestAnimationFrame(tick);
 
   return {
@@ -247,11 +302,43 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
   };
 }
 
-/** Add one zombie near a spot (the sim's own arrays are public; this is training-only plumbing). */
-function spawn(sim: Sim, grid: WalkGrid, at: V2, cold: boolean, rng: () => number): void {
+/** Add one zombie near a spot. */
+function spawn(sim: Sim, at: V2, cold: boolean, rng: () => number): void {
   const a = rng() * Math.PI * 2;
   const r = Math.sqrt(rng()) * 18;
-  const p = grid.nearestFree({ x: at.x + Math.cos(a) * r, z: at.z + Math.sin(a) * r });
-  const id = sim.zombies.reduce((m, z) => Math.max(m, z.id), 0) + 1;
-  sim.zombies.push({ id, x: p.x, z: p.z, vx: 0, vz: 0, speed: (cold ? 1.1 : 1.3) + rng() * 0.6, cold, alive: true, diedAt: -1, home: at, goal: null });
+  sim.addZombie({ x: at.x + Math.cos(a) * r, z: at.z + Math.sin(a) * r }, cold, at);
+}
+
+interface Rect {
+  l: number;
+  t: number;
+  r: number;
+  b: number;
+}
+
+/** The marker's label sits above its point, the ring (or edge arrow) on it: see .coach-marker in style.css. */
+const MARKER_ABOVE = 45;
+const MARKER_BELOW = 20;
+const markerBox = (x: number, y: number): Rect => ({ l: x - 60, t: y - MARKER_ABOVE, r: x + 60, b: y + MARKER_BELOW });
+const overlaps = (a: Rect, b: Rect, pad: number): boolean => a.l < b.r + pad && a.r > b.l - pad && a.t < b.b + pad && a.b > b.t - pad;
+
+/**
+ * The camera's field of view in degrees, measured from the picture itself: how many pixels a 10 m stretch
+ * of ground across the line of sight covers at the aim point. (The game keeps its zoom state private.)
+ */
+function lensFov(game: Game, sim: Sim, aim: V2): number {
+  const ac = sim.aircraft();
+  const dx = aim.x - ac.x;
+  const dz = aim.z - ac.z;
+  const flat = Math.hypot(dx, dz) || 1;
+  // The camera's right axis is level, so a ground segment at right angles to the flat view direction faces it square-on.
+  const ox = (-dz / flat) * 5;
+  const oz = (dx / flat) * 5;
+  const a = game.screenPos({ x: aim.x - ox, z: aim.z - oz }, 0);
+  const b = game.screenPos({ x: aim.x + ox, z: aim.z + oz }, 0);
+  const px = Math.hypot(b.x - a.x, b.y - a.y);
+  const h = game.renderer.domElement.clientHeight;
+  if (!px || !h) return 99;
+  const range = Math.hypot(dx, ac.y, dz);
+  return (2 * Math.atan((10 * h) / (2 * range * px)) * 180) / Math.PI;
 }

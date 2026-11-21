@@ -19,6 +19,8 @@ export type TutorialInput =
   | { type: 'impact'; weapon: string; kills: number }
   | { type: 'polarity'; polarity: number }
   | { type: 'sensor'; sensor: 'thermal' | 'night' }
+  /** The camera's current field of view in degrees (measured by the browser side each frame). */
+  | { type: 'lens'; fov: number }
   /** The crosshair is on a cold-blooded zombie (computed by the browser side). */
   | { type: 'onCold'; on: boolean }
   /** The DANGER CLOSE warning is showing. */
@@ -28,11 +30,24 @@ export type TutorialInput =
 
 /** How far the aim must travel to finish "look around" (metres on the ground). */
 export const AIM_METRES = 90;
-/** 25 mm rounds to fire (one second of trigger at 12 rounds a second). */
+/** 25 mm rounds to fire (one second of trigger at 12 rounds a second). At least one must also hit. */
 export const ROUNDS_25 = 12;
 /** Seconds the crosshair must rest on the cold one / the friendlies. */
 export const SPOT_TIME = 0.5;
 export const DANGER_TIME = 1;
+/** Seconds on thermal with the crosshair on the friendlies, looking at their ID panel. */
+export const PANEL_TIME = 1;
+/**
+ * The widest view (degrees) that counts as a "narrow lens". Only the 25 mm zoomed in (2.5 degrees) is
+ * this narrow: at the 105's 22 degrees, a zombie or a strobe is a pixel or two across.
+ */
+export const NARROW_FOV = 3;
+/**
+ * Seconds after a camera switch before looking counts: the switch shows static for 0.7 s (SWITCH_TIME in
+ * game.ts), and the player should actually see the thing on the new camera.
+ */
+export const SENSOR_SETTLE = 0.8;
+export const LENS_HINT = 'Press 1 and Z: small things need a narrow lens.';
 
 export class TutorialSteps {
   step: StepId = 'intro';
@@ -44,11 +59,18 @@ export class TutorialSteps {
   sensor: 'thermal' | 'night' = 'thermal';
   private aimed = 0;
   private rounds = 0;
+  private hits25 = 0;
   private onColdFor = 0;
   private dangerFor = 0;
-  private dangerSeen = false;
   private dangerOn = false;
   private coldOn = false;
+  /** Camera field of view in degrees; wide until the browser side reports otherwise. */
+  private fov = 99;
+  /** Friendlies: 0 spot the strobes on night vision, 1 see the ID panel on thermal, 2 move off. */
+  private stage = 0;
+  private panelFor = 0;
+  /** Seconds since the last camera switch. */
+  private sinceSwitch = SENSOR_SETTLE;
 
   constructor(opts: { weapon?: string; sensor?: 'thermal' | 'night' } = {}) {
     if (opts.weapon) this.weapon = opts.weapon;
@@ -70,9 +92,12 @@ export class TutorialSteps {
   send(i: TutorialInput): boolean {
     // Track state that later steps depend on, whatever the current step.
     if (i.type === 'weapon') this.weapon = i.weapon;
+    if (i.type === 'sensor' && i.sensor !== this.sensor) this.sinceSwitch = 0;
     if (i.type === 'sensor') this.sensor = i.sensor;
+    if (i.type === 'tick') this.sinceSwitch += i.dt;
     if (i.type === 'danger') this.dangerOn = i.on;
     if (i.type === 'onCold') this.coldOn = i.on;
+    if (i.type === 'lens') this.fov = i.fov;
     if (i.type === 'friendlyHit') this.note = 'CHECK FIRE! You hit a friendly. Ground patches them up this once; in a real sortie, that ends careers.';
 
     switch (this.step) {
@@ -87,14 +112,16 @@ export class TutorialSteps {
         }
         break;
       case 'fire25':
+        // Rounds alone aren't enough (you could hose down an empty road): at least one has to hit.
         if (i.type === 'fired') {
           if (i.weapon === '25') {
             this.rounds++;
-            this.progress = Math.min(1, this.rounds / ROUNDS_25);
             this.note = null;
-            if (this.rounds >= ROUNDS_25) return this.advance();
           } else this.note = 'That was a bigger gun. Press 1 for the 25 mm first.';
         }
+        if (i.type === 'impact' && i.weapon === '25' && i.kills > 0) this.hits25 += i.kills;
+        this.progress = 0.75 * Math.min(1, this.rounds / ROUNDS_25) + (this.hits25 > 0 ? 0.25 : 0);
+        if (this.rounds >= ROUNDS_25 && this.hits25 > 0) return this.advance();
         break;
       case 'switch':
         if (this.weapon === '105') return this.advance();
@@ -114,18 +141,31 @@ export class TutorialSteps {
         if (i.type === 'sensor' && i.sensor === 'night') this.note = 'H only works on thermal. Press V to go back to thermal.';
         break;
       case 'night':
-        // Dwell time only counts on night vision, with the crosshair on the cold one.
-        if (i.type === 'tick') this.onColdFor = this.coldOn && this.sensor === 'night' ? this.onColdFor + i.dt : 0;
-        this.progress = this.sensor === 'night' ? 0.5 + 0.5 * Math.min(1, this.onColdFor / SPOT_TIME) : 0;
+        // Dwell time only counts through a narrow lens, on night vision, with the crosshair on the cold one.
+        if (i.type === 'tick') this.onColdFor = this.coldOn && this.narrow && this.settled && this.sensor === 'night' ? this.onColdFor + this.seen(i.dt) : 0;
+        this.progress = (this.narrow ? 1 / 3 : 0) + (this.sensor === 'night' ? 1 / 3 : 0) + Math.min(1, this.onColdFor / SPOT_TIME) / 3;
         if (this.onColdFor >= SPOT_TIME) return this.advance();
         break;
       case 'friendlies':
+        // 0: the strobes on night vision (DANGER CLOSE for a moment); 1: V back to thermal and the dark
+        // ID panel, crosshair still on them; 2: move off.
         if (i.type === 'tick') {
-          this.dangerFor = this.dangerOn ? this.dangerFor + i.dt : 0;
-          if (this.dangerFor >= DANGER_TIME) this.dangerSeen = true;
+          const looking = this.dangerOn && this.narrow && this.settled;
+          if (this.stage === 0) {
+            this.dangerFor = looking && this.sensor === 'night' ? this.dangerFor + this.seen(i.dt) : 0;
+            if (this.dangerFor >= DANGER_TIME) this.stage = 1;
+          } else if (this.stage === 1) {
+            this.panelFor = looking && this.sensor === 'thermal' ? this.panelFor + this.seen(i.dt) : 0;
+            if (this.panelFor >= PANEL_TIME) this.stage = 2;
+          }
         }
-        this.progress = this.dangerSeen ? 0.5 : 0.5 * Math.min(1, this.dangerFor / DANGER_TIME);
-        if (this.dangerSeen && !this.dangerOn) return this.advance();
+        this.progress =
+          this.stage === 0
+            ? (1 / 3) * Math.min(1, this.dangerFor / DANGER_TIME)
+            : this.stage === 1
+              ? 1 / 3 + (1 / 3) * Math.min(1, this.panelFor / PANEL_TIME)
+              : 2 / 3;
+        if (this.stage === 2 && !this.dangerOn) return this.advance();
         break;
       case 'done':
         break;
@@ -146,20 +186,57 @@ export class TutorialSteps {
     this.note = null;
     this.onColdFor = 0;
     this.dangerFor = 0;
-    this.dangerSeen = false;
+    this.panelFor = 0;
+    this.stage = 0;
     // Some steps are already satisfied by what the player did earlier.
     if (this.step === 'switch' && this.weapon === '105') this.advance();
     return true;
+  }
+
+  /** Is the camera zoomed in far enough to see one figure? */
+  get narrow(): boolean {
+    return this.fov <= NARROW_FOV;
+  }
+
+  /** Has the picture settled since the last camera switch? */
+  private get settled(): boolean {
+    return this.sinceSwitch >= SENSOR_SETTLE;
+  }
+
+  /** The part of a tick spent looking at a settled picture (so one long tick and many short ones agree). */
+  private seen(dt: number): number {
+    return Math.max(0, Math.min(dt, this.sinceSwitch - SENSOR_SETTLE));
+  }
+
+  /** Friendlies sub-stage: 0 strobes on night vision, 1 ID panel on thermal, 2 move off. */
+  get friendliesStage(): number {
+    return this.step === 'friendlies' ? this.stage : 0;
   }
 
   /** Is the player on track for this step, or doing something that blocks it? Used for hints. */
   hint(): string | null {
     if (this.note) return this.note;
     if (this.step === 'fire25' && this.weapon !== '25') return 'Press 1 to pick the 25 mm.';
+    if (this.step === 'fire25' && this.rounds >= ROUNDS_25 && this.hits25 === 0) return 'Hits count, not rounds. Put the crosshair right on a zombie by the marker.';
     if (this.step === 'fire105' && this.weapon !== '105') return 'Press 3 (or Q) for the 105 mm.';
     if (this.step === 'polarity' && this.sensor !== 'thermal') return 'Press V to go back to thermal first.';
-    if (this.step === 'night' && this.sensor !== 'night') return 'Press V for night vision.';
-    if (this.step === 'friendlies' && this.dangerSeen && this.dangerOn) return 'Good. Now move the crosshair off them.';
+    if (this.step === 'night') {
+      if (!this.narrow) return LENS_HINT;
+      if (this.sensor !== 'night') return 'Now press V for night vision.';
+      if (!this.coldOn) return 'Find the figure by the marker and put the crosshair on it.';
+    }
+    if (this.step === 'friendlies') {
+      if (this.stage === 2) return this.dangerOn ? 'Good. Now move the crosshair off them.' : null;
+      if (!this.narrow) return LENS_HINT;
+      if (this.stage === 0) {
+        if (this.sensor !== 'night') return 'Press V for night vision: the strobes show there.';
+        if (!this.dangerOn) return 'Put the crosshair on the blinking lights by the marker.';
+      }
+      if (this.stage === 1) {
+        if (this.sensor !== 'thermal') return 'DANGER CLOSE: hold fire. Now press V for thermal and look for their dark ID panel.';
+        if (!this.dangerOn) return 'Keep the crosshair on them and look for the dark ID panel.';
+      }
+    }
     return null;
   }
 }
@@ -177,7 +254,7 @@ export const STEP_TEXT: Record<StepId, { title: string; body: string }> = {
   },
   fire25: {
     title: 'Fire the 25 mm',
-    body: 'Press 1 for the 25 mm: quick, precise, small bang. Put the crosshair on a zombie and hold the left mouse button.',
+    body: 'Press 1 for the 25 mm: quick, precise, small bang. Put the crosshair on a zombie by the marker and hold the left mouse button until one drops.',
   },
   switch: {
     title: 'Switch guns',
@@ -194,16 +271,16 @@ export const STEP_TEXT: Record<StepId, { title: string; body: string }> = {
   night: {
     title: 'The cold-blooded',
     body:
-      "Some zombies run cold. On thermal they're as cool as the road, so they nearly vanish. One is lurking by the marker. Press V for night vision, which sees light instead of heat, and put your crosshair on it.",
+      "Some zombies run cold. On thermal they match the grass and nearly vanish; on a road they're just a dark smudge. Night vision sees light, not heat, and picks them up. One lurks by the marker: press 1 and Z for a narrow lens, then V for night vision, and put your crosshair on it.",
   },
   friendlies: {
     title: 'Friendlies and DANGER CLOSE',
     body:
-      'The blinking lights are survivors: their infrared strobes show on night vision, and on thermal they wear a dark ID panel. Put your crosshair on them and watch for DANGER CLOSE. That means hold fire. Then move off them.',
+      'The blinking lights are survivors: their infrared strobes show on night vision. Put your crosshair on them: DANGER CLOSE means hold fire. Then press V for thermal, where they wear a dark ID panel, and move off them.',
   },
   done: {
     title: 'Training complete',
-    body: "You can aim, shoot, swap guns and cameras, and you haven't shelled a single neighbour. Probably. Your street is waiting.",
+    body: "You can aim, shoot, zoom, swap guns and cameras, and you haven't shelled a single neighbour. Probably. Your street is waiting.",
   },
 };
 

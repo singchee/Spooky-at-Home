@@ -233,3 +233,36 @@ describe('guardrail: waves stay away from schools, kindergartens and playgrounds
     expect(checked).toBeGreaterThan(100);
   }, 180_000);
 });
+
+describe('training helpers', () => {
+  it('addZombie gives every new zombie a fresh id, on walkable ground, even after waves have spawned', () => {
+    const sim = make('defend', 3, 2);
+    play(sim, null, 20); // waves add zombies through the sim's own counter
+    const before = sim.zombies.length;
+    const a = sim.addZombie({ x: 0, z: 0 }, true, { x: 0, z: 0 });
+    const b = sim.addZombie({ x: 5, z: 5 }, false, null);
+    expect(sim.zombies.length).toBe(before + 2);
+    expect(a.cold).toBe(true);
+    expect(b.cold).toBe(false);
+    expect(a.alive && b.alive).toBe(true);
+    expect(sim.grid.isBlocked(a.x, a.z)).toBe(false);
+    const ids = sim.zombies.map((z) => z.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(b.id).toBeGreaterThan(a.id);
+  });
+
+  it('revive brings back a fallen survivor by id, and only a fallen one', () => {
+    const sim = make('escort', 2, 3);
+    const s = sim.survivors[1];
+    expect(sim.revive(s.id)).toBe(false); // alive already
+    s.alive = false;
+    s.hp = 0;
+    s.diedAt = sim.t;
+    expect(sim.revive(s.id)).toBe(true);
+    expect(s.alive).toBe(true);
+    expect(s.hp).toBe(1);
+    expect(s.diedAt).toBe(-1);
+    expect(sim.revive(s.id)).toBe(false); // already up
+    expect(sim.revive(9999)).toBe(false);
+  });
+});

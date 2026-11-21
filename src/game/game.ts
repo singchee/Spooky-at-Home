@@ -37,6 +37,8 @@ interface TestHooks {
   fireAt?: (weapon: string, x?: number, z?: number) => boolean;
   aimAt?: (x: number, z: number) => void;
   survivors?: () => V2[];
+  /** Live zombies (test-only), so tests can aim at real targets instead of reading pixels. */
+  zombies?: () => V2[];
   /** Advance exactly `dt` game seconds per rendered frame (null: real time), so a slow test machine sees every frame a 60 fps player would. */
   fixedStep?: (dt: number | null) => void;
   /** Hold or release the trigger, as holding the left button does (without needing pointer lock). */
@@ -62,6 +64,16 @@ const STEP = 1 / 60;
 const SWITCH_TIME = 0.7;
 /** Reduce flicker: the switch cover fades in over this long before the picture changes, then fades out. */
 const CALM_RISE = 0.18;
+/** Big-kill radio calls. They take turns (starting from the mission seed), so the same line never plays twice running. */
+const KILL_LINES: readonly ((n: number) => string)[] = [
+  (n) => `Good effect on target, ${n} down. That's a lot of former neighbours.`,
+  (n) => `Splash ${n}. The residents' committee will want a word.`,
+  (n) => `${n} down. Someone's going to need a very big rake.`,
+  (n) => `That's ${n} fewer at the bus stop. Nice shooting.`,
+  (n) => `${n} down in one go. Neighbourhood watch, upgraded.`,
+];
+/** Blasts landing this close together (seconds) are reported as one call with the combined count. */
+const KILL_MERGE = 1.5;
 
 export class Game {
   readonly sim: Sim;
@@ -156,6 +168,7 @@ export class Game {
         this.aim = { x, z };
       };
       hooks.survivors = () => this.sim.survivors.filter((s) => s.alive && !s.home).map((s) => ({ x: s.x, z: s.z }));
+      hooks.zombies = () => this.sim.zombies.filter((z) => z.alive).map((z) => ({ x: z.x, z: z.z }));
       hooks.fixedStep = (dt) => {
         this.fixedDt = dt;
       };
@@ -404,8 +417,13 @@ export class Game {
     this.sim.fire(this.weapon, p);
   }
 
+  /** Kills waiting to be called in (merged over KILL_MERGE seconds), and which line goes next. */
+  private killCall = { n: 0, at: -1, next: -1 };
+
   private handleEvents(events: SimEvent[]): void {
     const now = this.clock;
+    const kc = this.killCall;
+    if (kc.next < 0) kc.next = this.sim.mission.seed % KILL_LINES.length;
     for (const e of events) {
       this.opts.onAction?.({ type: 'sim', event: e });
       switch (e.type) {
@@ -416,7 +434,12 @@ export class Game {
         case 'impact':
           this.effects.impact(e.weapon, e.x, e.z, now);
           this.sfx.impact(e.weapon);
-          if (e.kills >= 5) this.radio(`Good effect on target, ${e.kills} down. That's a lot of former neighbours.`);
+          // A big blast opens a call; anything else that lands in the next moment joins its count.
+          if (kc.at >= 0) kc.n += e.kills;
+          else if (e.kills >= 5) {
+            kc.n = e.kills;
+            kc.at = now;
+          }
           break;
         case 'friendly-hit':
           this.radio('CHECK FIRE! CHECK FIRE! Friendly down!', true);
@@ -440,6 +463,12 @@ export class Game {
           this.showResult(e.won, e.reason);
           break;
       }
+    }
+    if (kc.at >= 0 && now - kc.at >= KILL_MERGE) {
+      this.radio(KILL_LINES[kc.next](kc.n));
+      kc.next = (kc.next + 1) % KILL_LINES.length;
+      kc.at = -1;
+      kc.n = 0;
     }
   }
 
@@ -572,6 +601,7 @@ export class Game {
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     for (const [t, type, fn] of this.listeners) t.removeEventListener(type, fn);

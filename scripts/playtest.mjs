@@ -229,12 +229,20 @@ async function restOfPlaytest(browser) {
     await p.waitForTimeout(800);
     await p.screenshot({ path: shots.step });
     // Fire the 25 mm (needs the pointer captured, which headless Chromium allows), then switch to the 105.
+    // The 25 mm step needs a kill, not just rounds fired. Aim the trigger at a live zombie through the
+    // test-only hooks (no pixel reading, no wall-clock waits) and fire bursts in game time until one drops.
     await p.mouse.move(640, 560);
-    await p.mouse.down();
-    // 1.6 s of game time, not wall time: on a loaded test machine (and under headless pointer lock)
-    // frames slow down and the game clock with them, so a wall-clock wait fired too few rounds.
-    await untilGameTime(p, (await gameTime(p)) + 1.6);
-    await p.mouse.up();
+    for (let i = 0; i < 10 && (await p.evaluate(() => window.__spooky.tutorialStep())) === 'fire25'; i++) {
+      await p.evaluate(() => {
+        const zs = window.__spooky.zombies?.() ?? [];
+        const z = zs[0];
+        if (z) window.__spooky.aimAt(z.x, z.z);
+        window.__spooky.holdFire(true);
+      });
+      await untilGameTime(p, (await gameTime(p)) + 1.0);
+      await p.evaluate(() => window.__spooky.holdFire(false));
+      await untilGameTime(p, (await gameTime(p)) + 1.5); // let shells land
+    }
     const afterFire = await p.evaluate(() => window.__spooky.tutorialStep());
     if (afterFire !== 'switch') errs.push(`after firing the 25 mm the step is ${afterFire}, expected switch`);
     await p.keyboard.press('q');

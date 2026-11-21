@@ -178,6 +178,25 @@ export class Sim {
     });
   }
 
+  /**
+   * Add one zombie at a walkable spot near `p` (used by Training night to restock its targets).
+   * Ids come from the same counter as every other zombie, so they never collide.
+   */
+  addZombie(p: V2, cold: boolean, home: V2 | null): Zombie {
+    this.spawnZombie(this.grid.nearestFree(p), cold, home);
+    return this.zombies[this.zombies.length - 1];
+  }
+
+  /** Bring a fallen survivor back to their feet where they fell (Training night patches up friendly fire). */
+  revive(survivorId: number): boolean {
+    const s = this.survivors.find((x) => x.id === survivorId);
+    if (!s || s.alive || s.home) return false;
+    s.alive = true;
+    s.hp = 1;
+    s.diedAt = -1;
+    return true;
+  }
+
   weaponReady(id: string): boolean {
     const s = this.weapons.find((w) => w.id === id);
     return !!s && this.phase === 'running' && s.reloading <= 0 && s.cooldown <= 0 && s.ammo > 0;

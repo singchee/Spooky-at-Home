@@ -48,8 +48,12 @@ window.__spooky = {
 function clear(): void {
   closeScreen?.();
   closeScreen = null;
-  tutorial?.dispose();
-  tutorial = null;
+  if (tutorial) {
+    // The tutorial owns its game and disposes it.
+    tutorial.dispose();
+    tutorial = null;
+    game = null;
+  }
   game?.dispose();
   game = null;
   window.__spooky!.ready = false;
