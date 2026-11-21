@@ -110,11 +110,123 @@ try {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: scale });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
-  await page.goto(`http://localhost:${PORT}/`);
+  await page.goto(`http://localhost:${PORT}/?screen=menu`);
   await page.waitForSelector('.menu h1');
   await page.screenshot({ path: `${out}/menu-phone.png` });
   results.push({ type: 'menu (phone width)', errors, shots: { menu: `${out}/menu-phone.png` } });
   if (errors.length) exitCode = 1;
+  await page.close();
+
+  // Landing page (the default screen): desktop, phone and the narrowest phones. Text >= 14 px, no sideways
+  // scrolling, the three ways in are on screen, and leaving it frees the WebGL canvas.
+  for (const [name, viewport, extra] of [
+    ['desktop', { width: 1280, height: 720 }, {}],
+    ['phone', { width: 390, height: 844 }, {}],
+    ['narrow-320', { width: 320, height: 640 }, {}],
+    ['reduced-motion', { width: 1280, height: 720 }, { reducedMotion: 'reduce' }],
+  ]) {
+    const p = await browser.newPage({ viewport, deviceScaleFactor: scale, ...extra });
+    const errs = [];
+    p.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+    p.on('pageerror', (e) => errs.push(String(e)));
+    await p.goto(`http://localhost:${PORT}/`);
+    await p.waitForSelector('.landing h1');
+    await p.waitForTimeout(2500); // the boot static fades and the zombies get moving
+    const shot = `${out}/landing-${name}.png`;
+    await p.screenshot({ path: shot });
+    const check = await p.evaluate(() => {
+      const textEls = [...document.querySelectorAll('.landing *')].filter((e) => [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()));
+      const small = textEls.filter((e) => parseFloat(getComputedStyle(e).fontSize) < 14).map((e) => e.textContent.trim().slice(0, 40));
+      const land = document.querySelector('.landing');
+      const buttons = [...document.querySelectorAll('.landing-actions button')].map((b) => {
+        const r = b.getBoundingClientRect();
+        return { text: b.textContent, onScreen: r.width > 0 && r.left >= 0 && r.right <= innerWidth };
+      });
+      return {
+        small,
+        sideways: document.documentElement.scrollWidth > innerWidth || land.scrollWidth > land.clientWidth,
+        buttons,
+        canvas: !!document.querySelector('canvas.landing-canvas'),
+        screen: window.__spooky?.screen,
+      };
+    });
+    const problems = [];
+    if (check.screen !== 'landing') problems.push(`default screen is ${check.screen}, not landing`);
+    if (check.small.length) problems.push(`text under 14 px: ${check.small.join(' | ')}`);
+    if (check.sideways) problems.push('page scrolls sideways');
+    if (check.buttons.length !== 3 || check.buttons.some((b) => !b.onScreen)) problems.push(`buttons: ${JSON.stringify(check.buttons)}`);
+    if (!check.canvas) problems.push('no live background canvas');
+    if (name === 'desktop') {
+      // "Try the sample town" goes to the menu with the sample selected, and the background is released.
+      await p.click('.la-sample');
+      await p.waitForSelector('.menu h1');
+      const after = await p.evaluate(() => ({ canvases: document.querySelectorAll('canvas').length, status: document.querySelector('.menu .status')?.textContent ?? '' }));
+      if (after.canvases !== 0) problems.push(`${after.canvases} canvas(es) left after leaving the landing page`);
+      if (!/sample/i.test(after.status)) problems.push(`menu doesn't show the sample town: ${after.status}`);
+      // Back to the front page, then "Scout my neighbourhood" focuses the address box.
+      await p.click('.menu-back');
+      await p.waitForSelector('.landing h1');
+      await p.click('.la-scout');
+      await p.waitForSelector('.menu h1');
+      const focused = await p.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName);
+      if (!/address/i.test(String(focused))) problems.push(`address box not focused (focus on ${focused})`);
+    }
+    errs.push(...problems);
+    results.push({ type: `landing (${name})`, errors: errs, shots: { landing: shot } });
+    if (errs.length) exitCode = 1;
+    await p.close();
+  }
+
+  // Training night: the coach appears, the intro can be started, the first steps advance, and Skip works.
+  {
+    const p = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: scale });
+    const errs = [];
+    p.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+    p.on('pageerror', (e) => errs.push(String(e)));
+    await p.goto(`http://localhost:${PORT}/?screen=tutorial`);
+    await p.waitForSelector('.coach h2');
+    await p.waitForTimeout(1500);
+    const shots = { intro: `${out}/tutorial-intro.png`, step: `${out}/tutorial-step.png` };
+    await p.screenshot({ path: shots.intro });
+    await p.click('.coach button.primary');
+    // Look around with the keyboard (works without pointer lock).
+    await p.keyboard.down('d');
+    await p.waitForTimeout(1600);
+    await p.keyboard.up('d');
+    await p.keyboard.down('s');
+    await p.waitForTimeout(600);
+    await p.keyboard.up('s');
+    const afterAim = await p.evaluate(() => window.__spooky.tutorialStep());
+    if (afterAim !== 'fire25') errs.push(`after looking around the step is ${afterAim}, expected fire25`);
+    await p.keyboard.press('1');
+    await p.waitForTimeout(800);
+    await p.screenshot({ path: shots.step });
+    // Fire the 25 mm (needs the pointer captured, which headless Chromium allows), then switch to the 105.
+    await p.mouse.move(640, 560);
+    await p.mouse.down();
+    await p.waitForTimeout(1600);
+    await p.mouse.up();
+    const afterFire = await p.evaluate(() => window.__spooky.tutorialStep());
+    if (afterFire !== 'switch') errs.push(`after firing the 25 mm the step is ${afterFire}, expected switch`);
+    await p.keyboard.press('q');
+    await p.keyboard.press('q');
+    await p.waitForTimeout(1500);
+    const afterSwitch = await p.evaluate(() => window.__spooky.tutorialStep());
+    if (afterSwitch !== 'fire105') errs.push(`after switching guns the step is ${afterSwitch}, expected fire105`);
+    shots.fire105 = `${out}/tutorial-fire105.png`;
+    await p.screenshot({ path: shots.fire105 });
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(300);
+    await p.click('.coach-skip');
+    await p.waitForSelector('.menu h1');
+    const remembered = await p.evaluate(() => localStorage.getItem('spooky.training'));
+    if (remembered !== 'done') errs.push('skipping did not remember training');
+    const canvases = await p.evaluate(() => document.querySelectorAll('canvas').length);
+    if (canvases !== 0) errs.push(`${canvases} canvas(es) left after leaving the tutorial`);
+    results.push({ type: 'tutorial (training night)', errors: errs, steps: { afterAim, afterFire, afterSwitch }, shots });
+    if (errs.length) exitCode = 1;
+    await p.close();
+  }
   await browser.close();
 } catch (e) {
   console.error(e);
