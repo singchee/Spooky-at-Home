@@ -251,9 +251,9 @@ function context(map: MapData, g: RoadGraph, grid: WalkGrid, rng: Rng, d: number
   // in src/game/agentAnim.ts): they vanish on grass (0.19-0.2) and show dark against warmer roads (0.33).
   const coldIntel = (where: string) =>
     coldShare > 0
-      ? `Intel: cold-blooded contacts are mixed in ${where}. They match grass on thermal and show as a dark smudge on roads. Night vision picks them up.`
+      ? `Intel: cold-blooded contacts are mixed in ${where}. They match grass on thermal and show as a cold smudge on warm roads (dark in white-hot, light in black-hot). Night vision picks them up.`
       : 'Intel: no cold-blooded contacts in this area.';
-  const roe = `Rules of engagement: friendlies carry IR strobes (visible on night vision) and a cold ID panel (a dark square on thermal). ${base.friendlyFireLimit} friendly-fire incidents ends the mission.`;
+  const roe = `Rules of engagement: friendlies carry IR strobes (visible on night vision) and a cold ID panel on the chest (on thermal: dark in white-hot, light in black-hot). ${base.friendlyFireLimit} friendly-fire incidents ends the mission.`;
   return { map, g, grid, rng, d, base, coldShare, coldIntel, roe };
 }
 

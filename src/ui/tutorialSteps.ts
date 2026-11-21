@@ -233,8 +233,8 @@ export class TutorialSteps {
         if (!this.dangerOn) return 'Put the crosshair on the blinking lights by the marker.';
       }
       if (this.stage === 1) {
-        if (this.sensor !== 'thermal') return 'DANGER CLOSE: hold fire. Now press V for thermal and look for their dark ID panel.';
-        if (!this.dangerOn) return 'Keep the crosshair on them and look for the dark ID panel.';
+        if (this.sensor !== 'thermal') return 'DANGER CLOSE: hold fire. Now press V for thermal and look for their cold ID panel on the chest.';
+        if (!this.dangerOn) return 'Keep the crosshair on them and look for the cold ID panel on their chest.';
       }
     }
     return null;
@@ -271,12 +271,12 @@ export const STEP_TEXT: Record<StepId, { title: string; body: string }> = {
   night: {
     title: 'The cold-blooded',
     body:
-      "Some zombies run cold. On thermal they match the grass and nearly vanish; on a road they're just a dark smudge. Night vision sees light, not heat, and picks them up. One lurks by the marker: press 1 and Z for a narrow lens, then V for night vision, and put your crosshair on it.",
+      "Some zombies run cold. On thermal they match the grass and nearly vanish; on a warm road they're a cold smudge (dark in white-hot, light in black-hot). Night vision sees light, not heat, and picks them up. One lurks by the marker: press 1 and Z for a narrow lens, then V for night vision, and put your crosshair on it.",
   },
   friendlies: {
     title: 'Friendlies and DANGER CLOSE',
     body:
-      'The blinking lights are survivors: their infrared strobes show on night vision. Put your crosshair on them: DANGER CLOSE means hold fire. Then press V for thermal, where they wear a dark ID panel, and move off them.',
+      'The blinking lights are survivors: their infrared strobes show on night vision. Put your crosshair on them: DANGER CLOSE means hold fire. Then press V for thermal, where they wear a cold ID panel on the chest (dark in white-hot, light in black-hot), and move off them.',
   },
   done: {
     title: 'Training complete',

@@ -82,7 +82,7 @@ describe('mission templates on the sample town (G5 for templates)', () => {
       const m = build(id, 4, 1);
       if (/no cold-blooded/.test(m.intel[0])) continue;
       expect(m.intel[0], id).not.toMatch(/faint on cool grass|barely show/);
-      if (id !== 'forest-sweep') expect(m.intel[0], id).toMatch(/match grass on thermal and show as a dark smudge on roads\. Night vision picks them up\./);
+      if (id !== 'forest-sweep') expect(m.intel[0], id).toMatch(/match grass on thermal and show as a cold smudge on warm roads \(dark in white-hot, light in black-hot\)\. Night vision picks them up\./);
       else expect(m.intel[0]).toMatch(/match the ground on thermal/);
     }
   });
