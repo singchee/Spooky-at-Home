@@ -25,5 +25,17 @@ Status: `todo` · `in-progress` · `waiting-on-you` · `done`
 | 1.12 | Phone-width HUD: the sensor label overlaps the radio log at 390 px and 320 px. Hit the 2-round fix limit, so it's parked (the game is mouse-and-keyboard for now) | waiting-on-you |
 | 1.11 | "Build this place" (address → real map) can't be tested in the cloud container: OpenStreetMap hosts are blocked. Test on your machine, or allow the hosts | waiting-on-you |
 
-## Phase 2 — your neighbourhood (not yet approved)
+## Phase 2 — your neighbourhood, for real (approved by owner in chat, 22 Nov)
+
+| # | Item | Needs checks | Status |
+|---|---|---|---|
+| 2.1 | W1 Landing page + Training night tutorial | review, playtest, feel, player-test | in-progress |
+| 2.2 | W2 Recon (extended OSM features incl. schools, sports, tennis, forests, bus routes), mission matching (3 suggested missions), tactical map + minimap | review, map-check, playtest | in-progress |
+| 2.3 | W3 Animated zombies (procedural shader animation) + layered explosions, smoke, fires | review, playtest, feel | in-progress |
+| 2.4 | W4 Map detail: trees, parked cars, roof shapes, pools, field markings, lit windows | review, playtest | todo (after 2.2) |
+| 2.5 | W5 Music and voice (service choice pending) | feel, player-test | waiting-on-you |
+| 2.6 | "Last bus home" bus-route escort | — | later |
+| 2.7 | School evacuation missions (guardrails pending) | — | waiting-on-you |
+
+### Earlier phase 2 notes
 Address search → download → mission (basic version already in phase 1); real-map fixtures; procedural fill for empty areas. Scout ideas to consider: `docs/ideas/2026-11-21-scout.md`.
