@@ -11,7 +11,7 @@ import { SensorShader, type SensorId } from '../render/sensors';
 import { AgentsView } from './agentsView';
 import { Effects } from './effects';
 import { Hud } from '../ui/hud';
-import { briefingMap } from '../ui/tacticalMap';
+import { briefingVisuals } from '../ui/briefingDiorama';
 import { el } from '../ui/dom';
 import { Sfx } from '../audio/sfx';
 
@@ -118,6 +118,8 @@ export class Game {
   private camUp = new THREE.Vector3();
   /** Test hook only (see TestHooks.fixedStep): seconds per frame, or null for real time. */
   private fixedDt: number | null = null;
+  /** The briefing's map and 3D diorama (disposed when the briefing closes). */
+  private briefingView: { dispose(): void } | null = null;
 
   constructor(private container: HTMLElement, private map: MapData, sim: Sim, private opts: GameOptions) {
     this.sim = sim;
@@ -194,7 +196,9 @@ export class Game {
     const m = this.sim.mission;
     this.overlay.replaceChildren();
     const card = el('div', 'card briefing', undefined, this.overlay);
-    card.appendChild(briefingMap(this.map, m, this.sim.graph));
+    const visuals = briefingVisuals(this.map, m, this.sim.graph);
+    this.briefingView = visuals;
+    card.appendChild(visuals.el);
     el('div', 'card-kicker', `MISSION · DIFFICULTY ${m.difficulty} · SEED ${m.seed}`, card);
     el('h2', undefined, m.title, card);
     for (const line of m.briefing) el('p', undefined, line, card);
@@ -210,6 +214,8 @@ export class Game {
   }
 
   private start(): void {
+    this.briefingView?.dispose();
+    this.briefingView = null;
     this.screen = 'playing';
     this.overlay.style.display = 'none';
     this.hud.say(`Spooky, Ground. ${this.sim.mission.title}. You're cleared hot.`, this.clock);
@@ -616,6 +622,7 @@ export class Game {
     const hooks = window.__spooky as TestHooks | undefined;
     if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
+    this.briefingView?.dispose();
     for (const [t, type, fn] of this.listeners) t.removeEventListener(type, fn);
     if (document.pointerLockElement) document.exitPointerLock?.();
     this.world.dispose();
