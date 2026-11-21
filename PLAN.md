@@ -121,7 +121,7 @@ Each camera answers one question well and others badly. No single camera is enou
 
 **Cold-blooded zombies ("coldies").** They sit at the same temperature as their surroundings, a permanent version of *thermal crossover*: at dawn and dusk real objects and background reach similar temperatures and thermal contrast fades. **Coldies are faint, not invisible.** They show as dark smudges against sun-warmed roads and car parks, and they vanish against cool grass and gardens. Their visibility then follows the real map: they are traceable on the streets of your suburb and lost in its parks. A camera that simply locks or unlocks an enemy type tends to feel like a chore. Partial visibility that rewards skill is the design goal.
 
-**Intel in the briefing** gives the mix of enemies and how sure the intel is: *confirmed*, *probable* or *unconfirmed*. For example: "Unconfirmed reports of cold-blooded contacts near Banksia Reserve." Seeded rules generate this text like the rest of the mission.
+**Intel in the briefing is always true** (decision, Nov 2026). It says which enemy types are present and roughly where, for example: "Cold-blooded contacts are moving through Banksia Reserve." The challenge comes from imprecise *locations* ("near", "around the reserve"), never from false *facts*. Since intel can't be wrong, briefings use no confidence labels such as "unconfirmed"; they would suggest it might be. Seeded rules generate this text like the rest of the mission. *Possible later option:* a hard mode where intel can be wrong, flagged clearly on the mission select screen.
 
 **Switching costs time:** about 0.7 s of blank screen while the new camera settles, so flicking between cameras constantly isn't free.
 
