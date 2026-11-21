@@ -108,7 +108,8 @@ export class BriefingTour {
         total: () => this.tl.total,
         seek: (t) => {
           if (this.mode !== 'anim') return;
-          if (this.state !== 'playing') this.play();
+          // Back to the start is a fresh run (as Replay): the visited log starts again.
+          if (this.state !== 'playing' || t <= 0) this.play();
           this.t = t;
           this.apply();
         },

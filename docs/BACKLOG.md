@@ -36,7 +36,7 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 |---|---|---|---|
 | 3.5 | Briefing diorama: blocky 3D model of the mission area with landmark labels and mission markers | review, playtest, feel | in-progress |
 | 3.6 | Recorded audio wired in (ElevenLabs music, effects, 20 radio lines; generated score as fallback) | review, playtest, player-test | in-progress |
-| 3.7 | "Hello, home" flyover: 15–20 s skippable thermal approach labelling real public landmarks (owner approved #9) | review, playtest, feel | todo |
+| 3.7 | "Hello, home" flyover: 15–20 s skippable thermal approach labelling real public landmarks (owner approved #9) | review, playtest, feel | built (branch feat/3.7-walkthrough: a guided walk-through inside the briefing diorama; awaiting checks) |
 | 3.8 | School guardrail gaps: escort routes avoid schools, straggler starts clear of them, wider horde spacing (owner decision #11) | review, map-check | todo |
 
 ### Decision (owner, 22 Nov): schools are left out of the game
