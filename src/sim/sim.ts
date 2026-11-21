@@ -3,6 +3,7 @@ import { dist, pointAlong, polylineLength } from '../map/geom';
 import type { RoadGraph } from '../map/roadGraph';
 import type { WalkGrid } from '../map/grid';
 import { hashString, mulberry32, type Rng } from '../util/rng';
+import { nearChildPlace } from '../map/recon';
 import type { Mission } from './missions';
 import { WEAPONS, weaponById, type WeaponDef } from './weapons';
 
@@ -88,6 +89,8 @@ export interface SimState {
 export const ORBIT = { radius: 1000, altitude: 1500, period: 120 };
 /** New zombies never appear closer than this to a survivor (metres). Spawn points sit 12 m wide, so this leaves ~60 m. */
 export const MIN_SPAWN_GAP = 75;
+/** Waves never spawn this close to a school, kindergarten or playground (guardrail, PLAN §9). */
+export const WAVE_CHILD_GAP = 60;
 
 export class Sim {
   readonly mission: Mission;
@@ -113,6 +116,8 @@ export class Sim {
   private nextId = 0;
   private safeField: Int32Array | null = null;
   private lastDangerClose = -99;
+  /** Road nodes waves may not spawn at: near schools, kindergartens, playgrounds. Computed once. */
+  private noSpawn: Uint8Array;
 
   constructor(mission: Mission, map: MapData, graph: RoadGraph, grid: WalkGrid) {
     this.mission = mission;
@@ -140,6 +145,8 @@ export class Sim {
     });
     if (mission.safehouse && mission.type === 'defend') this.safeField = grid.flowField(grid.perimeterCells(mission.safehouse.poly));
     if (mission.waves) this.waveTimer = 3; // first wave arrives quickly
+    this.noSpawn = new Uint8Array(graph.nodes.length);
+    if (mission.waves) graph.nodes.forEach((n, i) => (this.noSpawn[i] = nearChildPlace(map, n, WAVE_CHILD_GAP) ? 1 : 0));
   }
 
   /** Aircraft position: a steady left-hand orbit around the mission's centre. */
@@ -309,7 +316,7 @@ export class Sim {
         const ahead = Math.min(lead.routeLen, lead.s + 90 + this.rng() * 140);
         ref = pointAlong(lead.route, ahead);
         for (let i = 0; i < g.nodes.length; i++) {
-          if (g.comp[i] !== g.mainComp) continue;
+          if (g.comp[i] !== g.mainComp || this.noSpawn[i]) continue;
           const d = dist(g.nodes[i], ref);
           // Routes can double back, so also keep ambushes well clear of where the survivors are now.
           if (d >= 30 && d <= 90 && active.every((s) => dist(g.nodes[i], s) >= MIN_SPAWN_GAP)) cands.push(i);
@@ -318,7 +325,7 @@ export class Sim {
     }
     if (!cands.length) {
       for (let i = 0; i < g.nodes.length; i++) {
-        if (g.comp[i] !== g.mainComp) continue;
+        if (g.comp[i] !== g.mainComp || this.noSpawn[i]) continue;
         const n = g.nodes[i];
         if (Math.abs(n.x) > lim || Math.abs(n.z) > lim) continue;
         const d = dist(n, ref);

@@ -202,3 +202,34 @@ describe('regressions from the phase 1 playtest', () => {
     expect(generateMission(map, graph, grid, { type: 'foo' as MissionType, difficulty: 2, seed: 1 }).ok).toBe(false);
   });
 });
+
+describe('guardrail: waves stay away from schools, kindergartens and playgrounds (PLAN §9)', () => {
+  it('no wave zombie ever spawns within 60 m of one, even when schools line half the map', async () => {
+    const { nearChildPlace } = await import('../src/map/recon');
+    // Schools at every road junction on the west side: without the guard, waves land there.
+    const schools = graph.nodes
+      .filter((n, i) => n.x <= -200 && i % 2 === 0)
+      .map((n, i) => ({ id: `testschool${i}`, p: { x: n.x + 8, z: n.z + 8 }, kind: 'school', name: `Test School ${i}` }));
+    const schoolMap: MapData = { ...map, name: 'school-test', pois: [...map.pois, ...schools] };
+    let checked = 0;
+    for (const type of ['escort', 'defend'] as MissionType[]) {
+      for (let seed = 1; seed <= 6; seed++) {
+        const r = createSim(schoolMap, { type, difficulty: 4, seed });
+        if (!r.ok) continue;
+        const sim = r.sim;
+        const seen = new Set<number>();
+        for (let t = 0; t < 150 && sim.phase === 'running'; t += 1) {
+          play(sim, null, t + 1);
+          for (const z of sim.zombies) {
+            if (seen.has(z.id)) continue;
+            seen.add(z.id);
+            checked++;
+            // spawn spread is 12 m around the node, so allow that much inside the 60 m gap
+            expect(nearChildPlace(schoolMap, { x: z.x, z: z.z }, 45), `${type} seed ${seed} zombie ${z.id}`).toBe(false);
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(100);
+  }, 180_000);
+});
