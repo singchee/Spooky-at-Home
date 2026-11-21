@@ -231,7 +231,9 @@ async function restOfPlaytest(browser) {
     // Fire the 25 mm (needs the pointer captured, which headless Chromium allows), then switch to the 105.
     await p.mouse.move(640, 560);
     await p.mouse.down();
-    await p.waitForTimeout(1600);
+    // 1.6 s of game time, not wall time: on a loaded test machine (and under headless pointer lock)
+    // frames slow down and the game clock with them, so a wall-clock wait fired too few rounds.
+    await untilGameTime(p, (await gameTime(p)) + 1.6);
     await p.mouse.up();
     const afterFire = await p.evaluate(() => window.__spooky.tutorialStep());
     if (afterFire !== 'switch') errs.push(`after firing the 25 mm the step is ${afterFire}, expected switch`);
