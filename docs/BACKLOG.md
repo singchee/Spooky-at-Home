@@ -20,8 +20,9 @@ Status: `todo` · `in-progress` · `waiting-on-you` · `done`
 ### Found during phase 1 (for the owner's playtest)
 | # | Item | Status |
 |---|---|---|
-| 1.9 | **Get them home difficulty curve is flat**: the human-like bot wins 30–50% at every difficulty. Needs your playtest before tuning | waiting-on-you |
+| 1.9 | **Difficulty needs a human.** After tonight's fixes: doing nothing loses almost every mission; the human-like bot wins most (Get them home 88–100%, Hold the safehouse d5 25%). The bot finds targets instantly, so you'll find it harder. Needs your playtest before more tuning | waiting-on-you |
 | 1.10 | Clear the horde is quick for the bot (21–76 s) because it never has to search; real players will be slower. Re-measure with your playtest | waiting-on-you |
+| 1.12 | Phone-width HUD: the sensor label overlaps the radio log at 390 px and 320 px. Hit the 2-round fix limit, so it's parked (the game is mouse-and-keyboard for now) | waiting-on-you |
 | 1.11 | "Build this place" (address → real map) can't be tested in the cloud container: OpenStreetMap hosts are blocked. Test on your machine, or allow the hosts | waiting-on-you |
 
 ## Phase 2 — your neighbourhood (not yet approved)
