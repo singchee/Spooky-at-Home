@@ -143,6 +143,7 @@ Each camera answers one question well and others badly. No single camera is enou
 
 | Service | Needed? | What for | Notes |
 |---|---|---|---|
+| **Vercel** (free Hobby plan) | **Yes, for hosting** | Live site + a preview link on every PR | See `docs/DEPLOY.md`; you connect it once with your GitHub login |
 | **GitHub** | **Yes** | Hosting the repo | Repo: `singchee/Spooky-at-Home` (private). |
 | **OpenStreetMap: Overpass + Nominatim** | **Yes (no connector, no key)** | Map data and address search | Called from your browser at play time. These sites are blocked from this cloud container, so I test with the sample town and saved map files. To test real downloads here, the environment would need `overpass-api.de` and `nominatim.openstreetmap.org` allowed. Their usage rules: keep requests small, at most 1 address search per second, and credit OpenStreetMap on screen. |
 | **ElevenLabs** | Useful, phase 3 (**already connected**) | Crew radio callouts ("Good hits", "Check fire, friendlies!") and sound effects | Generate about 30–60 short lines once and save them in the repo. Uses your credits, so I'll confirm the list before generating. |

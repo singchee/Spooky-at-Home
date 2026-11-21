@@ -9,6 +9,8 @@ A browser gunship game set over **your own neighbourhood**. Type an address, and
 | [`PLAN.md`](PLAN.md) | Design, architecture, phases, connectors, risks |
 | [`docs/CREW.md`](docs/CREW.md) | The agent team: who checks what, and how work flows |
 | [`docs/QUALITY.md`](docs/QUALITY.md) | Release gates, budgets, test hooks |
+| [`docs/AUTONOMY.md`](docs/AUTONOMY.md) | What the crew decides alone and what comes to you |
+| [`docs/DEPLOY.md`](docs/DEPLOY.md) | Hosting on Vercel |
 | [`CLAUDE.md`](CLAUDE.md) | Rules for Claude working in this repo |
 
 ```bash

@@ -26,7 +26,8 @@ A request the owner makes in chat **is approval for exactly what it covers**, in
 2. **Done since last check-in**: merged A items (one line total), B items (one line each, veto window open).
 3. **In progress / next up**: the backlog item and where it is.
 4. **Health**: main CI, gates, budget use, any class D events.
-5. **Recommendation**: the single most useful thing to do next.
+5. **Ideas**: the Scout's current top pick, one line, if there's a new one.
+6. **Recommendation**: the single most useful thing to do next.
 
 ## Run: one work cycle
 Repo `singchee/Spooky-at-Home`; GitHub calls via `gh api repos/singchee/Spooky-at-Home/...` (REST only).
@@ -55,6 +56,7 @@ Skip anything marked `waiting-on-you`. If nothing is workable, put "idle: waitin
 | Gameplay, mission or weapon change | `/balance` too |
 | Map pipeline change | `/map-check` too |
 | 7+ days since the last debrief | `/debrief` at the end of the run |
+| 7+ days since the last scout report, or a phase just finished | `/scout` (can run in the background while you build) |
 
 **4. Decide and merge**: `/preflight` must say READY. Then `npm run -s classify`, raising the class if any checker flagged scope, taste, safety or privacy.
 - **A/B:** open the PR, wait for green CI, squash-merge (`gh api -X PUT …/pulls/<n>/merge -f merge_method=squash`), then confirm main is still green.

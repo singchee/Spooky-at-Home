@@ -28,6 +28,7 @@ So this crew is built the same way:
 | `/map-check` | **Map Checker** (scout) | Does the mission generator survive messy real maps? | No (writes reports) | `map-checker` |
 | `/preflight` + `/release` | **Release Engineer** (loadmaster) | Has everything been checked, with evidence? | Version and changelog only | — |
 | `/chief` | **Chief of Staff**: your single point of contact | What's next, who does it, and what needs you? | Builds and coordinates; never signs off its own work | main session |
+| `/scout` | **Scout** (looks ahead) | What are others doing, and what would bring players back? Ethics guardrail: no manipulative hooks | No (writes idea reports) | `scout` |
 | `/debrief` | **Debrief** (whole crew) | What went wrong this week, and which crew roles earned their keep? | Docs only | — |
 
 **Later, when the phase arrives:**
