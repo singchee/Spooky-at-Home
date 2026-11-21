@@ -69,3 +69,22 @@ export function distToSegment(p: V2, a: V2, b: V2): number {
   const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.z - a.z) * dz) / len2));
   return Math.hypot(p.x - (a.x + dx * t), p.z - (a.z + dz * t));
 }
+
+/** Convex hull (monotone chain), counter-clockwise; fewer than 3 distinct points returns them as given. */
+export function convexHull(pts: V2[]): V2[] {
+  const p = [...new Map(pts.map((q) => [`${q.x.toFixed(2)},${q.z.toFixed(2)}`, q])).values()].sort((a, b) => a.x - b.x || a.z - b.z);
+  if (p.length < 3) return p;
+  const cross = (o: V2, a: V2, b: V2) => (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x);
+  const lower: V2[] = [];
+  for (const q of p) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], q) <= 0) lower.pop();
+    lower.push(q);
+  }
+  const upper: V2[] = [];
+  for (let i = p.length - 1; i >= 0; i--) {
+    const q = p[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], q) <= 0) upper.pop();
+    upper.push(q);
+  }
+  return lower.slice(0, -1).concat(upper.slice(0, -1));
+}

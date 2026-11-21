@@ -28,6 +28,8 @@ So this crew is built the same way:
 | `/map-check` | **Map Checker** (scout) | Does the mission generator survive messy real maps? | No (writes reports) | `map-checker` |
 | `/preflight` + `/release` | **Release Engineer** (loadmaster) | Has everything been checked, with evidence? | Version and changelog only | — |
 | `/chief` | **Chief of Staff**: your single point of contact | What's next, who does it, and what needs you? | Builds and coordinates; never signs off its own work | main session |
+| `/player-test` | **Experience Playtester** (the player's chair) | Is it fun, clear and complete? What would a player miss (music, settings, progression)? | No (writes reports) | `player-tester` |
+| `/critic` | **Critic** (the magazine reviewer) | How would a reviewer score it against the genre, and what would raise the score? | No (writes reviews) | `critic` |
 | `/scout` | **Scout** (looks ahead) | What are others doing, and what would bring players back? Ethics guardrail: no manipulative hooks | No (writes idea reports) | `scout` |
 | `/debrief` | **Debrief** (whole crew) | What went wrong this week, and which crew roles earned their keep? | Docs only | — |
 
@@ -73,7 +75,8 @@ idea ──/pitch──► spec (docs/specs/NNN-name.md)
 | `src/map/**` | review-code, map-check |
 | `src/game/**`, `src/sim/**` | review-code, playtest, balance |
 | `src/render/**`, `src/world/**` | review-code, playtest (with screenshots of each camera) |
-| `src/ui/**`, `index.html`, CSS | review-code, playtest |
+| `src/ui/**`, `index.html`, CSS | review-code, playtest, player-test |
+| End of a phase | all of the above + player-test + critic |
 | Docs only | none |
 
 ## Who decides

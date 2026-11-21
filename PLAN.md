@@ -165,3 +165,36 @@ Each camera answers one question well and others badly. No single camera is enou
 | Tone: firing on a real neighbourhood | Low–medium | Unease in playtesting | Fictional zombies only; no real groups or people; protecting civilians is the core rule | It's a matter of taste |
 
 **Premortem** (imagine it has failed 18 months from now and ask why): the most likely cause is the game working perfectly on the sample town but feeling flat on real maps, because messy real road data breaks routes and spawn points. **Early warning:** in phase 2, test 5 real suburbs of different kinds (inner city, outer suburb, rural town, hilly area, coastal) before building anything else.
+
+## 9. Phase 2 — "Your neighbourhood, for real" (approved by the owner in chat, 22 Nov 2026)
+
+The owner's brief: a cool landing page and a tutorial that sells the concept; type an address, and the game **scouts the area** (schools, sports grounds, tennis clubs, forests…), **proposes missions that fit what's there**, and shows a **tactical map**; graphics that feel alive (zombies that move like zombies, real explosions, detailed maps); music.
+
+### Workstreams (built in parallel by sub-agents, each in its own git worktree)
+
+| # | Workstream | What the player gets | Main files |
+|---|---|---|---|
+| W1 | **Landing page + "Training night" tutorial** | A striking front page (live thermal orbit behind the title, three steps: *Type your address → We scout it → You fly overwatch*). A short, skippable first sortie on the sample town that teaches aiming, the three guns, white/black-hot, night vision for cold-blooded zombies, and the friendly-fire rules | `src/ui/landing.ts`, `src/ui/tutorial.ts`, `src/main.ts`, CSS |
+| W2 | **Recon: map intelligence → mission matching → tactical map** | After the address: a "Recon complete" screen listing what was found (3 schools, 2 sports grounds, 1 tennis club, 4 parks, 2 bus routes…), **three suggested missions that fit those places**, and a 2D tactical map (symbols, routes, spawn zones) in the briefing and as a HUD minimap | `src/map/overpass.ts`, `src/map/recon.ts`, `src/sim/missions.ts`, `src/ui/tacticalMap.ts` |
+| W3 | **Visual upgrade: motion and blasts** | Zombies as animated figures (shamble, lunge, attack, fall) with hotter heads and torsos on thermal; layered explosions (flash, fireball, sparks, ground shockwave, smoke, lingering fires that cool) | `src/game/agentsView.ts`, `src/game/effects.ts`, shaders |
+| W4 | **Map detail** (after W2's data) | Street and park trees, parked cars (some with warm engines), roof shapes, swimming pools (cold on thermal), sports-field markings, fences, lit windows; later terrain height | `src/world/*` |
+| W5 | **Music and voice** | Background music, crew radio voice lines, better sound effects | owner's choice of service (see §7) |
+
+### How the graphics get better (the answer to "blocks aren't good enough")
+
+- **Zombie motion: procedural animation in a shader** [INFERENCE: chosen for cost]. Each zombie is a low-poly human figure, and every vertex knows which body part it belongs to. A vertex shader swings legs, sways the torso, raises arms and bobs heads, with a per-zombie phase and speed. One instanced draw still renders over 1,000 animated zombies.
+  - **Alternative for hero detail:** baked "vertex animation textures" from rigged models (free CC0 animated characters, retargeted in Blender; a Blender MCP connection would help there).
+- **Explosions: GPU particles.** Instanced quads with procedural noise fireballs, sparks, debris, an expanding ground ring, rising smoke, and fires that burn on and cool over time.
+  - **Smoke behaves like real smoke on sensors:** it hides things from night vision (visible light) but thermal largely sees through it. That's physically accurate (long-wave infrared passes through smoke better than visible light) and creates a reason to switch cameras.
+- **Map detail comes from more OpenStreetMap data,** with generated fill where it's missing (street trees, parked cars). The thermal look still forgives the lack of textures. Photo-real 3D city models (Google) remain out of scope: they need a key, billing, and terms checks (§7).
+
+### Later (owner said "down the road")
+- **"Last bus home":** escort a bus along a real bus route (OpenStreetMap `route=bus`) to its stops.
+- **School evacuation missions.** Needs an owner decision on the guardrails below before building.
+
+### Guardrails proposed for school missions (decision pending, see issue)
+A heavy gunship firing near a real, named primary school with children in the scene is the most sensitive thing this game could depict, and screenshots would identify a real school. Proposed:
+1. **The school grounds are a no-fire zone for the 40 mm and 105 mm** (realistic rules of engagement near protected sites); only the 25 mm works within 50 m.
+2. **Children can't be harmed on screen.** If zombies reach the group, the mission fails with "the bus had to turn back", with no casualties shown, and player fire can't hit the group.
+3. **The rescue is an evacuation by bus,** which combines naturally with "Last bus home".
+4. **Real school names only appear in the briefing for the player's own map,** never in shareable cards.

@@ -5,3 +5,6 @@ dist/
 # Map files exported from your own neighbourhood stay on your machine
 maps/private/
 reports/
+
+# Builder agents work in their own git worktrees here; never commit them
+.claude/worktrees/

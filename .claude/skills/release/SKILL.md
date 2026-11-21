@@ -13,4 +13,6 @@ description: Ship a Spooky at Home branch - version bump, changelog, push and op
    - the gate table from preflight;
    - links to the review, playtest, balance and map-check reports, with key screenshots;
    - any gate overrides or weakened tests, by name.
+**Never leave work stranded on a side branch.** If a PR is stacked on another PR (its base isn't `main`), then after the lower PR merges you must retarget the upper PR to `main` before it merges (`gh api -X PATCH repos/singchee/Spooky-at-Home/pulls/<n> -f base=main`). Otherwise its merge lands on the old branch and never reaches `main`; this happened with phases 1 and 2. Prefer one PR into `main` per piece of work. After any merge, check that the commit is on `main` (`git merge-base --is-ancestor <sha> origin/main`).
+
 5. **Merging follows `docs/AUTONOMY.md`.** Run `npm run -s classify`. For class A/B with green CI, squash-merge and record it in the digest. For class C, leave it as a draft PR and open a `needs-you` issue. Give the user the PR link either way.
