@@ -2,7 +2,7 @@ import type { MapData, V2 } from '../map/types';
 import type { RoadGraph } from '../map/roadGraph';
 import type { WalkGrid } from '../map/grid';
 import { dist } from '../map/geom';
-import type { Mission } from '../sim/missions';
+import type { TrainingMission } from './hud';
 
 /**
  * "Training night": the tutorial's step logic, as a pure state machine with no DOM or three.js,
@@ -335,7 +335,7 @@ export function planLayout(map: MapData, graph: RoadGraph, grid: WalkGrid): Trai
 }
 
 /** A mission that never ends on its own: no time pressure worth mentioning, generous friendly-fire limit. */
-export function trainingMission(map: MapData, l: TrainingLayout): Mission {
+export function trainingMission(map: MapData, l: TrainingLayout): TrainingMission {
   return {
     type: 'clear',
     difficulty: 1,
@@ -359,5 +359,7 @@ export function trainingMission(map: MapData, l: TrainingLayout): Mission {
       { centre: l.reserve, count: 1, cold: 0, label: 'reserve' },
     ],
     friendlyFireLimit: 99,
+    // The HUD hides the clock and friendly-fire count, and leaves out the two reserves above.
+    training: { reserveHostiles: 1, reserveFriendlies: 1 },
   };
 }

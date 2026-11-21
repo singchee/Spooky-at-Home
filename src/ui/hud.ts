@@ -22,6 +22,13 @@ const CROSSHAIRS: Record<string, string> = Object.fromEntries(
 
 export interface HudMarker { label: string; x: number; y: number; visible: boolean }
 
+/**
+ * Training night's mission (tutorialSteps.ts) carries this: the HUD hides the clock and the
+ * friendly-fire count, and leaves out the placeholders parked off the map to keep the mission open.
+ */
+export interface TrainingHud { reserveHostiles: number; reserveFriendlies: number }
+export type TrainingMission = Mission & { training?: TrainingHud };
+
 export class Hud {
   readonly root: HTMLDivElement;
   private weapons: HTMLDivElement;
@@ -65,15 +72,25 @@ export class Hud {
       el('span', 'hud-wammo', st.reloading > 0 ? `RELOAD ${st.reloading.toFixed(1)}` : `${st.ammo}/${w.magazine}`, row);
     }
     // Mission
+    const training = (m as TrainingMission).training;
+    // Training night has no clock and no friendly-fire limit: "99:57" and "0/99" read like bugs.
+    this.timer.hidden = !!training;
     this.timer.textContent = m.type === 'defend' ? `HOLD ${fmtTime(s.timeLeft)}` : `TIME ${fmtTime(s.timeLeft)}`;
     const obj: string[] = [];
-    if (m.type === 'clear') obj.push(`HOSTILES ${s.zombiesAlive}/${s.zombiesTotal}`);
+    if (training) {
+      // The far-off placeholders that keep the training mission open aren't counted.
+      obj.push(`CONTACTS ${Math.max(0, s.zombiesAlive - training.reserveHostiles)}`);
+      const friends = Math.max(0, s.survivorsAlive - training.reserveFriendlies);
+      if (friends) obj.push(`FRIENDLIES ${friends}`);
+    } else if (m.type === 'clear') obj.push(`HOSTILES ${s.zombiesAlive}/${s.zombiesTotal}`);
     else obj.push(`CONTACTS ${s.zombiesAlive}`);
-    if (m.type === 'escort') obj.push(`HOME ${s.survivorsHome}/${s.survivorsTotal} (NEED ${s.needHome})`, `MOVING ${s.survivorsAlive}`);
-    if (m.type === 'defend') obj.push(`SAFEHOUSE ${Math.round(s.integrity * 100)}%`);
-    if (m.type === 'clear' && s.survivorsTotal) obj.push(`FRIENDLIES ${s.survivorsAlive}`);
+    if (!training) {
+      if (m.type === 'escort') obj.push(`HOME ${s.survivorsHome}/${s.survivorsTotal} (NEED ${s.needHome})`, `MOVING ${s.survivorsAlive}`);
+      if (m.type === 'defend') obj.push(`SAFEHOUSE ${Math.round(s.integrity * 100)}%`);
+      if (m.type === 'clear' && s.survivorsTotal) obj.push(`FRIENDLIES ${s.survivorsAlive}`);
+    }
     if (s.coldAlive > 0) obj.push(`COLD-BLOODED ${s.coldAlive}${sensor === 'night' ? '' : ' (V: NIGHT VISION)'}`);
-    obj.push(`FRIENDLY FIRE ${s.friendlyHits}/${m.friendlyFireLimit}`);
+    if (!training) obj.push(`FRIENDLY FIRE ${s.friendlyHits}/${m.friendlyFireLimit}`);
     this.objective.replaceChildren(...obj.map((o) => el('div', undefined, o)));
     // Radio
     this.lines = this.lines.filter((l) => now - l.t < 12);
