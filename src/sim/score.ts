@@ -99,7 +99,8 @@ export function rank(g: Grade): number {
   return GRADES.indexOf(g);
 }
 
-function savedPhrase(i: ScoreInput): string {
+/** "both friendlies safe", "3 of 5 home", "safehouse 87% intact, stragglers safe": who was saved, in words. */
+export function savedPhrase(i: Pick<ScoreInput, 'type' | 'survivorsTotal' | 'survivorsSaved' | 'integrity'>): string {
   const n = i.survivorsTotal;
   const s = i.survivorsSaved;
   if (i.type === 'escort') return s >= n ? 'all survivors home' : s === 0 ? 'nobody made it home' : `${s} of ${n} home`;
