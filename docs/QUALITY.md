@@ -28,6 +28,8 @@
 | **Full-screen flashes** | **≤ 3 per second** | Photosensitive epilepsy guideline (WCAG 2.3.1 "Three Flashes"). The 25 mm gun fires 12/s, so its flashes must stay local, never full-screen |
 | Smallest on-screen text | 14 px | Readability |
 
+**About the cloud browser.** The crew's playtester runs the real game in headless Chromium on the cloud machine: it loads pages, clicks, plays, reads the console and takes screenshots. That machine has **no graphics card** (3D is drawn in software). So screenshots and correctness checks are trustworthy, but **frame rates are not your laptop's**. Compare them only with earlier cloud runs, to spot regressions. Real frame rate is checked by you at each phase sign-off.
+
 ## 3. Balance target bands (provisional; set after phase 1 playtests)
 
 | Measure | Difficulty 1 | Difficulty 5 |

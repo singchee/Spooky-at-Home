@@ -27,6 +27,8 @@ So this crew is built the same way:
 | `/balance` | **Balance Analyst** (fire control officer) | Are missions fair and fun across seeds and difficulties? | No (writes reports) | `balance-analyst` |
 | `/map-check` | **Map Checker** (scout) | Does the mission generator survive messy real maps? | No (writes reports) | `map-checker` |
 | `/preflight` + `/release` | **Release Engineer** (loadmaster) | Has everything been checked, with evidence? | Version and changelog only | — |
+| `/chief` | **Chief of Staff**: your single point of contact | What's next, who does it, and what needs you? | Builds and coordinates; never signs off its own work | main session |
+| `/scout` | **Scout** (looks ahead) | What are others doing, and what would bring players back? Ethics guardrail: no manipulative hooks | No (writes idea reports) | `scout` |
 | `/debrief` | **Debrief** (whole crew) | What went wrong this week, and which crew roles earned their keep? | Docs only | — |
 
 **Later, when the phase arrives:**
@@ -35,7 +37,15 @@ So this crew is built the same way:
 
 ## How work flows
 
+**You talk only to the Chief of Staff.** It briefs you, calls the other roles as needed, and checks in when something needs you. You can still call any command directly.
+
 ```
+            YOU (CEO: direction, taste, money)
+                 ▲  check-ins, decisions
+                 ▼
+          CHIEF OF STAFF (/chief, main session)
+                 │ delegates
+                 ▼
 idea ──/pitch──► spec (docs/specs/NNN-name.md)
                     │
                  /plan  (tech + feel review; both must approve)
@@ -67,9 +77,13 @@ idea ──/pitch──► spec (docs/specs/NNN-name.md)
 | Docs only | none |
 
 ## Who decides
-- **You** decide anything about taste, tone, scope and spending (ElevenLabs credits, API keys, new services). Agents ask; they don't assume.
-- **The Game Director** can recommend cutting a feature but can't cut it alone.
-- **A failed gate blocks release.** Overriding a gate needs your explicit "ship anyway", recorded in the PR.
+
+**The crew runs on its own; `docs/AUTONOMY.md` sets the limits.** In short:
+- **Class A/B** (fixes, tests, refactors, building items you already approved): the crew builds, checks, fixes minor findings and merges, with two keys: the builder plus an independent checker. Then it tells you in the digest.
+- **Class C** (taste, scope, spending, new services, weakening tests, its own rules, next phase): draft PR + `needs-you` issue, then it works on something else.
+- **Class D** (main broken, secret or privacy leak, runaway): safe action, then stop and alert.
+- The class comes from fixed rules (`tools/classify-change.ts`); agents can only raise it.
+- The **Chief of Staff** (`/chief`) runs one work cycle whenever you say "keep going", and twice a day on a schedule. **Pause the crew** by opening an issue with the label `crew-paused`.
 
 ## Keeping the crew honest
 - `/debrief` tracks, per check: findings raised, findings that were real, and bugs that escaped to you anyway. A role that finds nothing real for 4 weeks gets simplified or cut. A check that only makes things *look* checked is worse than no check.
