@@ -418,6 +418,7 @@ export class Game {
   }
 
   /** Kills waiting to be called in (merged over KILL_MERGE seconds), and which line goes next. */
+  private waveCall = 0;
   private killCall = { n: 0, at: -1, next: -1 };
 
   private handleEvents(events: SimEvent[]): void {
@@ -453,9 +454,17 @@ export class Game {
         case 'survivor-home':
           this.radio("One survivor home. Kettle's on.");
           break;
-        case 'wave':
-          this.radio(`New contacts: ${e.count} from the ${e.from}${e.cold ? `, ${e.cold} of them cold-blooded` : ''}.`);
+        case 'wave': {
+          const cold = e.cold ? `, ${e.cold} of them cold-blooded` : '';
+          const lines = [
+            `New contacts: ${e.count} coming in from ${e.place}${cold}.`,
+            `${e.count} more heading your way from ${e.place}${cold}.`,
+            `Movement near ${e.place}: ${e.count} contacts${cold}.`,
+            `Here they come: ${e.count} from the ${e.from}, near ${e.place}${cold}.`,
+          ];
+          this.radio(lines[this.waveCall++ % lines.length]);
           break;
+        }
         case 'radio':
           this.radio(e.text);
           break;

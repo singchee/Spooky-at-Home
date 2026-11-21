@@ -46,3 +46,26 @@ describe('geocode', () => {
     await expect(geocode('91, 200')).rejects.toThrow(/out of range/);
   });
 });
+
+describe('sheltering friendlies are under real pressure (critic: Clear could only be lost on the clock)', () => {
+  it('with nobody firing, the nearest horde closes in: the warning fires and the friendlies are overrun before time runs out', () => {
+    let overrun = 0;
+    let warned = 0;
+    const runs = 10;
+    for (let seed = 1; seed <= runs; seed++) {
+      const s = matchMissions(map, seed).find((x) => x.base === 'clear') ?? { base: 'clear' as const, template: undefined, anchor: undefined };
+      const r = generateMission(map, graph, grid, { type: 'clear', difficulty: 2, seed, template: s.template, anchor: s.anchor?.id });
+      if (!r.ok) continue;
+      const sim = new Sim(r.mission, map, graph, grid);
+      let sawWarning = false;
+      while (sim.phase === 'running') {
+        sim.step(1 / 30);
+        for (const e of sim.drainEvents()) if (e.type === 'radio' && /UNDER ATTACK/.test(e.text)) sawWarning = true;
+      }
+      if (sawWarning) warned++;
+      if (/overrun/i.test(sim.reason)) overrun++;
+    }
+    expect(warned).toBeGreaterThanOrEqual(runs - 1);
+    expect(overrun).toBeGreaterThanOrEqual(runs - 2);
+  }, 240_000);
+});
