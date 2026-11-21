@@ -134,10 +134,16 @@ export function parseOverpass(json: OverpassJson, origin: LatLon, half: number, 
   };
 }
 
+let lastGeocode = 0;
+
 /** Accepts "lat, lon" directly, otherwise asks OpenStreetMap's Nominatim geocoder (max 1 request/second). */
 export async function geocode(query: string, signal?: AbortSignal): Promise<LatLon & { label: string }> {
   const m = query.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
   if (m) return { lat: parseFloat(m[1]), lon: parseFloat(m[2]), label: `${parseFloat(m[1]).toFixed(4)}, ${parseFloat(m[2]).toFixed(4)}` };
+  // Nominatim's usage policy: at most one request per second from this client.
+  const wait = lastGeocode + 1100 - Date.now();
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastGeocode = Date.now();
   const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`;
   const res = await fetch(url, { signal, headers: { Accept: 'application/json' } });
   if (!res.ok) throw new Error(`Place search failed (${res.status})`);
