@@ -1,6 +1,6 @@
 # 001 — Three Nights: a three-sortie campaign over your own street
 
-*Status: draft* · *Owner: Game Director* · *Date: 21 Nov 2026*
+*Status: ready* · *Owner: Game Director* · *Date: 21 Nov 2026*
 
 **Mode: HOLD, with two amendments.** Build the Story Writer's campaign as designed in `docs/story/campaign.md`, `docs/story/radio-script.md` and `docs/story/voice.md`. The two amendments are both about mission shape: (1) a longer, staged finale on night three, and (2) replaying a won night to beat your grade. **Class C:** it's a new narrative feature, it changes balance for the finale, and recording the lines costs credits. It needs the owner's yes before `/build`.
 
