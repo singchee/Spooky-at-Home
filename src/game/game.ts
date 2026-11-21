@@ -23,7 +23,16 @@ export interface GameOptions {
   onRetry(): void;
   onNext(): void;
   onMenu(): void;
+  /** Optional listener for player actions and sim events (used by the tutorial). */
+  onAction?(a: GameAction): void;
 }
+
+/** What the player just did, or what the simulation just reported. */
+export type GameAction =
+  | { type: 'weapon'; weapon: string }
+  | { type: 'sensor'; sensor: SensorId }
+  | { type: 'polarity'; polarity: number }
+  | { type: 'sim'; event: SimEvent };
 
 type Screen = 'briefing' | 'playing' | 'paused' | 'ended';
 /** One audio context for the whole page; browsers limit how many can exist. */
@@ -182,7 +191,7 @@ export class Game {
     this.listeners.push([t, type, fn]);
   }
 
-  private lockPointer(): void {
+  lockPointer(): void {
     try {
       const p = this.renderer.domElement.requestPointerLock?.() as unknown;
       if (p instanceof Promise) p.catch(() => undefined);
@@ -210,6 +219,8 @@ export class Game {
     this.on(window, 'mousemove', (e) => {
       if (document.pointerLockElement !== canvas || this.screen !== 'playing') return;
       const me = e as MouseEvent;
+      // Some browsers send a bogus huge jump under pointer lock (e.g. on click); ignore it.
+      if (Math.abs(me.movementX) > 300 || Math.abs(me.movementY) > 300) return;
       this.nudgeAim(me.movementX, me.movementY);
     });
     this.on(window, 'keydown', (e) => {
@@ -227,13 +238,16 @@ export class Game {
       if (k === 'm') this.sfx.muted = !this.sfx.muted;
       if (this.screen === 'paused' && k === 'r') this.opts.onRetry();
       if (this.screen !== 'playing') return;
+      const gun = this.weapon;
       if (k === '1' || k === '2' || k === '3') this.weapon = WEAPONS[Number(k) - 1].id;
       if (k === 'q') this.weapon = WEAPONS[(WEAPONS.findIndex((w) => w.id === this.weapon) + 1) % WEAPONS.length].id;
+      if (this.weapon !== gun) this.opts.onAction?.({ type: 'weapon', weapon: this.weapon });
       if (k === 'v' && this.switchLeft <= 0) this.setSensor(this.sensor === 'thermal' ? 'night' : 'thermal');
       // At most one white/black-hot flip per 0.35 s, so rapid tapping stays under 3 flashes a second.
       if (k === 'h' && this.sensor === 'thermal' && this.clock - this.lastFlip >= 0.35) {
         this.polarity = 1 - this.polarity;
         this.lastFlip = this.clock;
+        this.opts.onAction?.({ type: 'polarity', polarity: this.polarity });
       }
       if (k === 'z') this.zoom = !this.zoom;
     });
@@ -252,6 +266,24 @@ export class Game {
     if (s === this.sensor) return;
     this.sensor = s;
     this.switchLeft = SWITCH_TIME;
+    this.opts.onAction?.({ type: 'sensor', sensor: s });
+  }
+
+  /** The ground point the camera is aimed at (a copy). */
+  aimPoint(): V2 {
+    return { ...this.aim };
+  }
+
+  /** The selected gun's id. */
+  get weaponId(): string {
+    return this.weapon;
+  }
+
+  /** Where a ground point appears on screen, in CSS pixels. */
+  screenPos(p: V2, y = 4): { x: number; y: number; visible: boolean } {
+    const v = new THREE.Vector3(p.x, y, p.z).project(this.camera);
+    const c = this.renderer.domElement;
+    return { x: ((v.x + 1) / 2) * c.clientWidth, y: ((1 - v.y) / 2) * c.clientHeight, visible: v.z < 1 && Math.abs(v.x) < 1 && Math.abs(v.y) < 1 };
   }
 
   /** Move the aim point on the ground by a screen-space amount, so it feels the same at any zoom. */
@@ -314,6 +346,7 @@ export class Game {
   private handleEvents(events: SimEvent[]): void {
     const now = this.clock;
     for (const e of events) {
+      this.opts.onAction?.({ type: 'sim', event: e });
       switch (e.type) {
         case 'fire':
           this.effects.fire(e.weapon, e.from, e.to, e.tof, now);
