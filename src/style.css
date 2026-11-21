@@ -300,8 +300,45 @@ button:disabled { opacity: 0.5; }
 @media (prefers-reduced-motion: reduce) {
   .lh-rec::before { animation: none; }
 }
-.menu-back { position: absolute; left: 16px; top: 16px; z-index: 11; background: rgba(12, 16, 14, 0.92); }
-@media (max-width: 640px) { .menu { padding-top: 68px; } }
+/* ---------- Scout, recon and custom screens (menu.ts) ---------- */
+/* A column: the "← Front page" bar sits in the flow above the card, so it can't cover a heading. */
+.menu { flex-direction: column; justify-content: flex-start; align-items: center; }
+.menu [hidden] { display: none !important; }
+.menu-top { align-self: stretch; display: flex; flex: 0 0 auto; margin-bottom: 12px; }
+.menu-back { background: rgba(12, 16, 14, 0.92); }
+.card.scout { max-width: 680px; }
+.card h1.scout-title { letter-spacing: 0.04em; font-size: clamp(26px, 5vw, 36px); }
+.scout-lede { color: var(--muted); }
+.scout-form { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 6px; }
+.scout-input { flex: 1 1 260px; min-width: 0; font-size: 19px; min-height: 56px; padding: 10px 14px; border-color: rgba(231, 239, 233, 0.45); }
+.scout-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.scout-go { flex: 0 0 auto; min-height: 56px; padding: 10px 22px; font-size: 17px; }
+.scout-form.busy .scout-input { opacity: 0.7; }
+.scout-progress { margin: 12px 0 4px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255, 255, 255, 0.03); }
+/* Calm "working" sweep: a dim bar gliding back and forth. Constant brightness, so nothing flashes. */
+.scout-sweep { position: relative; height: 4px; border-radius: 2px; background: rgba(184, 255, 138, 0.12); overflow: hidden; margin-bottom: 12px; }
+.scout-sweep span { position: absolute; top: 0; bottom: 0; left: 0; width: 30%; border-radius: 2px; background: rgba(184, 255, 138, 0.55); animation: scout-sweep 2.4s ease-in-out infinite alternate; }
+@keyframes scout-sweep { from { transform: translateX(0); } to { transform: translateX(233%); } }
+.scout-stages { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.scout-stages li { position: relative; padding-left: 26px; color: var(--muted); }
+.scout-stages li::before { content: '·'; position: absolute; left: 6px; }
+.scout-stages li[data-state='done'] { color: var(--ink); }
+.scout-stages li[data-state='done']::before { content: '✓'; left: 4px; color: var(--accent); }
+.scout-stages li[data-state='active'] { color: var(--ink); font-weight: 700; }
+.scout-stages li[data-state='active']::before { content: '▸'; left: 5px; color: var(--accent); }
+.scout-place { overflow-wrap: anywhere; }
+.scout-cancel { margin-top: 6px; }
+.scout-msg { margin: 12px 0 4px; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line); }
+.scout-msg.error { border-color: var(--danger); background: rgba(255, 107, 94, 0.08); }
+.scout-msg p { margin: 0; }
+.scout-alt { margin-top: 14px; }
+@media (prefers-reduced-motion: reduce) {
+  .scout-sweep span { animation: none; width: 100%; opacity: 0.6; }
+}
+@media (max-width: 640px) {
+  .scout-go { width: 100%; }
+  .scout-alt > * { flex: 1 1 100%; }
+}
 
 /* ---------- Training night coach ---------- */
 .coach { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); width: min(460px, calc(100% - 32px)); z-index: 12;

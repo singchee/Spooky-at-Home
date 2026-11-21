@@ -1,9 +1,10 @@
 // Headless browser playtest (gates G7, G8 and visual evidence).
-// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio]
+// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin]
 // Starts `vite preview`, loads each mission type with the bot playing, switches cameras,
 // takes screenshots, and records console errors and draw calls. Chromium is preinstalled.
 // It also runs the photosensitivity flash checks and survivor-kit screenshots (`--only safety`
-// runs just those).
+// runs just those), and the way in from the front page with OpenStreetMap stubbed out
+// (`--only wayin` runs just that).
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -26,7 +27,7 @@ const KICK_LIMIT_PX = 5.5; // 105 camera kick: 5 px cap, plus half a pixel for r
 const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort'], { stdio: 'pipe' });
 const ready = new Promise((res, rej) => {
   server.stdout.on('data', (d) => String(d).includes(String(PORT)) && res());
-  setTimeout(() => rej(new Error('preview server did not start')), 20000);
+  setTimeout(() => rej(new Error('preview server did not start')), 60000); // slow when other builders share the machine
 });
 
 const results = [];
@@ -114,15 +115,23 @@ try {
     await page.close();
   }
   // Photosensitivity flash counts (WCAG 2.3.1) and the survivor kit on every camera.
-  for (const r of only === 'audio' ? [] : await safetyChecks(browser)) {
-    results.push(r);
-    if (r.errors.length) exitCode = 1;
+  if (!only || only === 'safety') {
+    for (const r of await safetyChecks(browser)) {
+      results.push(r);
+      if (r.errors.length) exitCode = 1;
+    }
   }
   // Sound: one shared AudioContext after a click, bounded nodes across restarts, mute silences the master.
   if (!only || only === 'audio') {
     const r = await audioChecks(browser);
     results.push(r);
     if (r.errors.length) exitCode = 1;
+  }
+  if (!only || only === 'wayin') {
+    for (const r of await wayInChecks(browser)) {
+      results.push(r);
+      if (r.errors.length) exitCode = 1;
+    }
   }
   if (!only) await restOfPlaytest(browser);
   await browser.close();
@@ -190,17 +199,24 @@ async function restOfPlaytest(browser) {
     if (check.buttons.length !== 3 || check.buttons.some((b) => !b.onScreen)) problems.push(`buttons: ${JSON.stringify(check.buttons)}`);
     if (!check.canvas) problems.push('no live background canvas');
     if (name === 'desktop') {
-      // "Try the sample town" goes to the menu with the sample selected, and the background is released.
+      // "Try the sample town" goes straight to the sample town's recon screen (not a form), and the
+      // background is released.
       await p.click('.la-sample');
-      await p.waitForSelector('.menu h1');
-      const after = await p.evaluate(() => ({ canvases: document.querySelectorAll('canvas').length, status: document.querySelector('.menu .status')?.textContent ?? '' }));
+      await p.waitForSelector('.menu .recon .mission-card');
+      const after = await p.evaluate(() => ({
+        canvases: document.querySelectorAll('canvas').length,
+        map: document.querySelector('.menu .recon h2')?.textContent ?? '',
+        attrib: document.querySelector('.menu .recon .attrib')?.textContent ?? '',
+        form: !!document.querySelector('.menu .custom:not([hidden]), .menu .scout:not([hidden])'),
+      }));
       if (after.canvases !== 0) problems.push(`${after.canvases} canvas(es) left after leaving the landing page`);
-      if (!/sample/i.test(after.status)) problems.push(`menu doesn't show the sample town: ${after.status}`);
+      if (!/sample/i.test(after.attrib)) problems.push(`recon doesn't show the sample town: ${after.map} / ${after.attrib}`);
+      if (after.form) problems.push('"Try the sample town" showed a form as well as recon');
       // Back to the front page, then "Scout my neighbourhood" focuses the address box.
       await p.click('.menu-back');
       await p.waitForSelector('.landing h1');
       await p.click('.la-scout');
-      await p.waitForSelector('.menu h1');
+      await p.waitForSelector('.menu .scout h1');
       const focused = await p.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName);
       if (!/address/i.test(String(focused))) problems.push(`address box not focused (focus on ${focused})`);
     }
@@ -222,6 +238,20 @@ async function restOfPlaytest(browser) {
     const shots = { intro: `${out}/tutorial-intro.png`, step: `${out}/tutorial-step.png` };
     await p.screenshot({ path: shots.intro });
     await p.click('.coach button.primary');
+    // Training HUD (BACKLOG 2.9): no clock, no friendly-fire count, and the two placeholders parked off
+    // the map aren't counted (CONTACTS = live zombies on the map; FRIENDLIES = the two real ones).
+    await p.waitForTimeout(400); // the HUD redraws every 0.1 s
+    const hud = await p.evaluate(() => {
+      const half = 600; // the sample town reaches 550 m each way; the placeholders sit 420 m beyond its edge
+      const on = (window.__spooky.zombies?.() ?? []).filter((z) => Math.abs(z.x) < half && Math.abs(z.z) < half).length;
+      const timer = document.querySelector('.hud-timer');
+      return { text: document.querySelector('.hud-mission')?.innerText ?? '', timerShown: !!timer && getComputedStyle(timer).display !== 'none' && timer.getBoundingClientRect().height > 0, on };
+    });
+    if (hud.timerShown || /TIME|HOLD \d/.test(hud.text)) errs.push(`training HUD shows a clock: ${JSON.stringify(hud.text)}`);
+    if (/FRIENDLY FIRE/.test(hud.text)) errs.push(`training HUD shows the friendly-fire count: ${JSON.stringify(hud.text)}`);
+    const contacts = Number(/CONTACTS (\d+)/.exec(hud.text)?.[1] ?? NaN);
+    if (contacts !== hud.on) errs.push(`training HUD counts ${contacts} contacts, ${hud.on} are on the map`);
+    if (!/FRIENDLIES 2\b/.test(hud.text)) errs.push(`training HUD should count the 2 friendlies on the map: ${JSON.stringify(hud.text)}`);
     // Look around with the keyboard (works without pointer lock).
     await p.keyboard.down('d');
     await p.waitForTimeout(1600);
@@ -261,7 +291,8 @@ async function restOfPlaytest(browser) {
     await p.keyboard.press('Escape');
     await p.waitForTimeout(300);
     await p.click('.coach-skip');
-    await p.waitForSelector('.menu h1');
+    // Skipping lands on the sample town's recon screen (it used to be the old form).
+    await p.waitForSelector('.menu .recon .mission-card');
     const remembered = await p.evaluate(() => localStorage.getItem('spooky.training'));
     if (remembered !== 'done') errs.push('skipping did not remember training');
     const canvases = await p.evaluate(() => document.querySelectorAll('canvas').length);
@@ -753,4 +784,290 @@ async function audioChecks(browser) {
   errors.push(...errs);
   await page.close();
   return out;
+}
+
+// ---------- The way in: front page → scout → recon, with OpenStreetMap stubbed (BACKLOG 2.8, 2.9) ----------
+// OpenStreetMap is blocked from the cloud container, and the crew never sends test traffic to it anyway:
+// every request to an OSM host is answered here (a made-up town in the open ocean, or an error), and any
+// other outside request fails the check.
+async function wayInChecks(browser) {
+  const OSM_HOST = /^https:\/\/(nominatim\.openstreetmap\.org|overpass-api\.de|overpass\.kumi\.systems)\//;
+  const OCEAN = { lat: -10, lon: 100 }; // open ocean: never anyone's street
+  const PLACE = 'Test Reef, Open Ocean';
+  const MSG = {
+    offline: "Couldn't reach OpenStreetMap. Check your connection, or try the sample town.",
+    notFound: /^Couldn't find that place\./,
+    tooLittle: /^There's too little on the map there to fly a mission \(1 building and 0 roads\)\./,
+    busy: /busy right now\. Try again in a minute/,
+    badCoords: /^That isn't a real latitude\/longitude\./,
+  };
+
+  const oceanLL = (x, z) => ({ lat: OCEAN.lat - z / 110574, lon: OCEAN.lon + x / (111320 * Math.cos((OCEAN.lat * Math.PI) / 180)) });
+
+  /** A small made-up grid town at OCEAN, as Overpass would send it: 22 streets, ~390 houses, a park, a school, a wood. */
+  function oceanTown() {
+    const ll = oceanLL;
+    const box = (x, z, w, h) => [ll(x, z), ll(x + w, z), ll(x + w, z + h), ll(x, z + h), ll(x, z)];
+    const names = ['Kelp', 'Coral', 'Reef', 'Tide', 'Shoal', 'Brine', 'Gull', 'Dune', 'Spray', 'Harbour', 'Jetty'];
+    const els = [];
+    let id = 1;
+    // Streets share a point at every crossing, as OpenStreetMap ways share nodes (that's what joins the road graph).
+    const along = [-520, ...Array.from({ length: 11 }, (_, k) => -500 + k * 100), 520];
+    for (let i = 0; i <= 10; i++) {
+      const c = -500 + i * 100;
+      els.push({ type: 'way', id: id++, tags: { highway: i === 5 ? 'secondary' : 'residential', name: `${names[i]} Street` }, geometry: along.map((t) => ll(c, t)) });
+      els.push({ type: 'way', id: id++, tags: { highway: i === 5 ? 'secondary' : 'residential', name: `${names[i]} Avenue` }, geometry: along.map((t) => ll(t, c)) });
+    }
+    for (let bx = 0; bx < 10; bx++) {
+      for (let bz = 0; bz < 10; bz++) {
+        const x0 = -500 + bx * 100;
+        const z0 = -500 + bz * 100;
+        if (bx === 3 && bz === 3) els.push({ type: 'way', id: id++, tags: { leisure: 'park', name: 'Gull Reserve' }, geometry: box(x0 + 12, z0 + 12, 76, 76) });
+        else if (bx === 2 && bz === 7) els.push({ type: 'way', id: id++, tags: { natural: 'wood', name: 'Seagrass Wood' }, geometry: box(x0 + 12, z0 + 12, 76, 76) });
+        else if (bx === 6 && bz === 4) {
+          els.push({ type: 'way', id: id++, tags: { amenity: 'school', name: 'Driftwood Primary School' }, geometry: box(x0 + 12, z0 + 12, 76, 76) });
+          els.push({ type: 'way', id: id++, tags: { building: 'school' }, geometry: box(x0 + 20, z0 + 20, 40, 24) });
+        } else for (const [dx, dz] of [[14, 14], [56, 14], [14, 56], [56, 56]]) els.push({ type: 'way', id: id++, tags: { building: 'house' }, geometry: box(x0 + dx, z0 + dz, 28, 28) });
+      }
+    }
+    els.push({ type: 'node', id: id++, ...ll(150, 250), tags: { shop: 'supermarket', name: 'Tidemark Grocer' } });
+    return { elements: els };
+  }
+
+  const cors = { 'access-control-allow-origin': '*' };
+  const sendJson = (route, body, status = 200) => route.fulfill({ status, headers: cors, contentType: 'application/json', body: JSON.stringify(body) });
+  const isGeocode = (url) => url.includes('nominatim.openstreetmap.org');
+  const foundPlace = (route) => sendJson(route, [{ lat: String(OCEAN.lat), lon: String(OCEAN.lon), display_name: `${PLACE}, Nowhere` }]);
+  /** How the fake OpenStreetMap answers in each scenario. */
+  const OSM = {
+    ok: (delay) => async (route, url) => {
+      if (isGeocode(url)) return foundPlace(route);
+      await new Promise((r) => setTimeout(r, delay));
+      return sendJson(route, oceanTown()).catch(() => undefined); // the page may have cancelled meanwhile
+    },
+    offline: () => (route) => route.abort('internetdisconnected'),
+    notFound: () => (route, url) => (isGeocode(url) ? sendJson(route, []) : route.abort('failed')),
+    tooLittle: () => (route, url) => {
+      if (isGeocode(url)) return foundPlace(route);
+      const p = oceanLL;
+      return sendJson(route, { elements: [{ type: 'way', id: 1, tags: { building: 'house' }, geometry: [p(0, 0), p(10, 0), p(10, 10), p(0, 10), p(0, 0)] }] });
+    },
+    busy: () => (route, url) => {
+      if (isGeocode(url)) return foundPlace(route);
+      return route.fulfill({ status: 504, headers: cors, contentType: 'text/html', body: '<html><body>504 Gateway Timeout</body></html>' });
+    },
+    none: () => (route) => route.abort('failed'),
+  };
+
+  async function wayInPage(browser, viewport, answer, path = '/?screen=scout') {
+    const page = await browser.newPage({ viewport, deviceScaleFactor: scale });
+    const errs = [];
+    const osmCalls = [];
+    page.on('pageerror', (e) => errs.push(String(e)));
+    // A refused request logs "Failed to load resource" in the console: expected here, not a page error.
+    page.on('console', (m) => m.type() === 'error' && !/Failed to load resource/.test(m.text()) && errs.push(m.text()));
+    await page.route('**/*', (route) => {
+      const url = route.request().url();
+      if (url.startsWith(`http://localhost:${PORT}/`)) return route.continue();
+      if (OSM_HOST.test(url)) {
+        osmCalls.push(url);
+        return answer(route, url);
+      }
+      errs.push(`request to a host that isn't allowed: ${url}`);
+      return route.abort('blockedbyclient');
+    });
+    await page.goto(`http://localhost:${PORT}${path}`);
+    return { page, errs, osmCalls };
+  }
+
+  /** Type a place and send it (Enter, or the main button). Records each loading stage as it becomes active. */
+  async function scoutFor(page, text, how = 'enter') {
+    await page.waitForSelector('.menu .scout h1');
+    await page.evaluate(() => {
+      window.__stages = [];
+      const ol = document.querySelector('.scout-stages');
+      new MutationObserver(() => {
+        const a = ol.querySelector('li[data-state=active]')?.textContent;
+        if (a && window.__stages[window.__stages.length - 1] !== a) window.__stages.push(a);
+      }).observe(ol, { subtree: true, attributes: true, childList: true, characterData: true });
+    });
+    await page.fill('.scout-input', text);
+    if (how === 'enter') await page.press('.scout-input', 'Enter');
+    else await page.click('.scout-go');
+  }
+  const waitOutcome = (page) => page.waitForSelector('.menu .recon .recon-cards > *, .scout-msg:not([hidden])', { timeout: 20000 });
+  const scoutState = (page) => page.evaluate(() => ({
+    msg: document.querySelector('.scout-msg:not([hidden]) p')?.textContent ?? null,
+    role: document.querySelector('.scout-msg:not([hidden])')?.getAttribute('role') ?? null,
+    recon: !!document.querySelector('.menu .recon'),
+    input: document.querySelector('.scout-input')?.value ?? '',
+    inputEnabled: !document.querySelector('.scout-input')?.disabled,
+    loading: !!document.querySelector('.scout-progress:not([hidden])'),
+    rawError: /failed to fetch|typeerror|networkerror/i.test(document.body.innerText),
+    stages: window.__stages ?? [],
+  }));
+
+  /** Does box `a` overlap any of `bs`? Also flags sideways scrolling. */
+  const overlapCheck = (page, a, bs) => page.evaluate(([a, bs]) => {
+    const ra = document.querySelector(a)?.getBoundingClientRect();
+    if (!ra) return [`${a} missing`];
+    const found = [];
+    for (const b of bs) {
+      const rb = document.querySelector(b)?.getBoundingClientRect();
+      if (!rb || !rb.width) continue;
+      if (ra.left < rb.right && ra.right > rb.left && ra.top < rb.bottom && ra.bottom > rb.top) found.push(`${a} overlaps ${b}`);
+    }
+    const menu = document.querySelector('.menu');
+    if (document.documentElement.scrollWidth > innerWidth || menu.scrollWidth > menu.clientWidth) found.push('page scrolls sideways');
+    return found;
+  }, [a, bs]);
+
+  const res = [];
+  const desktop = { width: 1280, height: 720 };
+  const phone = { width: 390, height: 844 };
+
+  // 1. The happy path, from the front page: "Scout my neighbourhood" → type → Enter (desktop) or the main
+  //    button (phone) → staged readout → recon on the typed place → that mission's briefing.
+  for (const [name, viewport] of [['desktop', desktop], ['phone', phone]]) {
+    const { page, errs, osmCalls } = await wayInPage(browser, viewport, OSM.ok(2500), name === 'desktop' ? '/?screen=landing' : '/?screen=scout');
+    const shots = {};
+    if (name === 'desktop') {
+      await page.waitForSelector('.landing h1');
+      await page.click('.la-scout');
+    }
+    await page.waitForSelector('.menu .scout h1');
+    shots.scout = `${out}/wayin-scout-${name}.png`;
+    await page.screenshot({ path: shots.scout });
+    errs.push(...(await overlapCheck(page, '.menu-back', ['.scout .card-kicker', '.scout h1'])));
+    await scoutFor(page, 'Test Reef', name === 'desktop' ? 'enter' : 'click');
+    await page.waitForFunction(() => /Downloading/.test(document.querySelector('.scout-stages li[data-state=active]')?.textContent ?? ''), null, { timeout: 10000 });
+    const busy = await page.evaluate(() => ({
+      cancel: !!document.querySelector('.scout-progress:not([hidden]) .scout-cancel'),
+      sweep: getComputedStyle(document.querySelector('.scout-sweep span')).animationName,
+      place: document.querySelector('.scout-place')?.textContent ?? '',
+    }));
+    if (!busy.cancel) errs.push('no Cancel button while scouting');
+    if (busy.sweep !== 'scout-sweep') errs.push(`loading indicator isn't animated (${busy.sweep})`);
+    if (!busy.place.includes(PLACE)) errs.push(`the readout doesn't name the place found: ${busy.place}`);
+    shots.loading = `${out}/wayin-loading-${name}.png`;
+    await page.screenshot({ path: shots.loading });
+    await waitOutcome(page);
+    const st = await scoutState(page);
+    const recon = await page.evaluate(() => ({ map: document.querySelector('.recon h2')?.textContent ?? '', cards: document.querySelectorAll('.recon .mission-card').length, attrib: document.querySelector('.recon .attrib')?.textContent ?? '' }));
+    shots.recon = `${out}/wayin-recon-${name}.png`;
+    await page.screenshot({ path: shots.recon });
+    const want = [/^Finding the place…$/, /^Downloading streets and buildings…$/, /^Reading the map \([\d,]+ buildings, [\d,]+ roads\)…$/, /^Recon$/];
+    let k = 0;
+    for (const s of st.stages) if (k < want.length && want[k].test(s)) k++;
+    if (k < want.length) errs.push(`loading stages out of order or missing: ${JSON.stringify(st.stages)}`);
+    if (!st.recon || recon.map !== PLACE) errs.push(`recon isn't on the typed place: ${JSON.stringify(recon)} ${st.msg ?? ''}`);
+    if (recon.cards < 1) errs.push('no suggested missions on the typed place');
+    if (!/OpenStreetMap/.test(recon.attrib)) errs.push(`no OpenStreetMap credit on recon: ${recon.attrib}`);
+    if (!osmCalls.some(isGeocode) || !osmCalls.some((u) => !isGeocode(u))) errs.push(`expected a place search and a map download: ${osmCalls.join(', ')}`);
+    errs.push(...(await overlapCheck(page, '.menu-back', ['.recon .card-kicker', '.recon h2'])));
+    if (name === 'desktop') {
+      const title = await page.textContent('.recon .mission-card h4');
+      await page.click('.recon .mission-card button.primary');
+      await page.waitForFunction(() => window.__spooky?.screen === 'game', null, { timeout: 30000 });
+      await page.waitForSelector('.card.briefing h2');
+      const brief = await page.evaluate(() => ({ title: document.querySelector('.card.briefing h2')?.textContent ?? '', attrib: document.querySelector('.hud-attrib')?.textContent ?? '' }));
+      // The card reads "Forest sweep: Seagrass Wood", the briefing "Forest sweep — Seagrass Wood": same place.
+      const place = (title ?? '').split(': ').pop();
+      if (!place || !brief.title.includes(place)) errs.push(`briefing "${brief.title}" isn't the chosen mission "${title}"`);
+      if (!/OpenStreetMap/.test(brief.attrib)) errs.push(`no OpenStreetMap credit in the game: ${brief.attrib}`);
+      shots.briefing = `${out}/wayin-briefing-${name}.png`;
+      await page.screenshot({ path: shots.briefing });
+    }
+    res.push({ type: `way in: typed place → recon (${name})`, errors: errs, stages: st.stages.join(' → '), shots });
+    await page.close();
+  }
+
+  // 2. Each failure says what happened in plain English, keeps the typed text, and never flies the sample town.
+  for (const [name, answer, text, want, views] of [
+    ['offline', OSM.offline(), 'Test Reef', MSG.offline, [desktop, phone]],
+    ['no place found', OSM.notFound(), 'Nowhere Lane', MSG.notFound, [desktop]],
+    ['too little map data', OSM.tooLittle(), 'Test Reef', MSG.tooLittle, [desktop]],
+    ['map server busy', OSM.busy(), 'Test Reef', MSG.busy, [desktop]],
+    ['out-of-range coordinates', OSM.none(), '91, 200', MSG.badCoords, [desktop]],
+  ]) {
+    for (const viewport of views) {
+      const tag = viewport === phone ? 'phone' : 'desktop';
+      const { page, errs, osmCalls } = await wayInPage(browser, viewport, answer);
+      await scoutFor(page, text);
+      await waitOutcome(page);
+      const st = await scoutState(page);
+      if (!st.msg || (typeof want === 'string' ? st.msg !== want : !want.test(st.msg))) errs.push(`message: ${JSON.stringify(st.msg)}`);
+      if (st.role !== 'alert') errs.push(`the error isn't announced (role ${st.role})`);
+      if (st.rawError) errs.push('raw browser error text on screen');
+      if (st.recon) errs.push('went to recon anyway (silent fallback)');
+      if (st.input !== text || !st.inputEnabled || st.loading) errs.push(`typed text not kept or box not ready again: ${JSON.stringify(st)}`);
+      if (name === 'out-of-range coordinates') {
+        if (osmCalls.length) errs.push(`asked OpenStreetMap about impossible coordinates: ${osmCalls.join(', ')}`);
+        if (/minute/i.test(st.msg ?? '')) errs.push('bad coordinates told to "try again in a minute"');
+      }
+      const shot = `${out}/wayin-error-${name.replace(/\W+/g, '-')}-${tag}.png`;
+      await page.screenshot({ path: shot });
+      res.push({ type: `way in: ${name} (${tag})`, errors: errs, message: st.msg, shots: { error: shot } });
+      await page.close();
+    }
+  }
+
+  // 3. Cancel stops a slow download at once (and its late answer doesn't pop up recon); an empty box asks
+  //    for a place instead of flying the sample town.
+  {
+    const { page, errs, osmCalls } = await wayInPage(browser, desktop, OSM.ok(4000));
+    await scoutFor(page, 'Test Reef');
+    await page.waitForFunction(() => /Downloading/.test(document.querySelector('.scout-stages li[data-state=active]')?.textContent ?? ''), null, { timeout: 10000 });
+    const t0 = Date.now();
+    await page.click('.scout-cancel');
+    await page.waitForSelector('.scout-msg:not([hidden])', { timeout: 2000 }).catch(() => undefined);
+    const st = await scoutState(page);
+    if (st.msg !== 'Scouting cancelled.' || st.loading || !st.inputEnabled || st.recon) errs.push(`cancel: ${JSON.stringify(st)}`);
+    if (Date.now() - t0 > 2000) errs.push('cancel took over 2 s');
+    await page.fill('.scout-input', '');
+    await page.press('.scout-input', 'Enter');
+    await page.waitForTimeout(4500); // past the moment the cancelled download would have answered
+    const empty = await scoutState(page);
+    if (empty.recon || !/Type an address/.test(empty.msg ?? '')) errs.push(`empty box or late answer: ${JSON.stringify(empty)}`);
+    if (osmCalls.length > 2) errs.push(`an empty box still searched: ${osmCalls.join(', ')}`);
+    res.push({ type: 'way in: cancel and empty box', errors: errs });
+    await page.close();
+  }
+
+  // 4. "Custom mission" and "Try the sample town" from the scout screen; "Other suggestions" shows
+  //    different missions on each click.
+  {
+    const { page, errs } = await wayInPage(browser, desktop, OSM.none());
+    await page.waitForSelector('.menu .scout h1');
+    await page.click('.scout-custom');
+    await page.waitForSelector('.menu .custom h2');
+    const status = await page.textContent('.custom .status');
+    if (!/sample town/i.test(status ?? '')) errs.push(`custom mission doesn't say which map: ${status}`);
+    await page.click('.custom button:has-text("Scout a place")');
+    await page.waitForSelector('.menu .scout h1');
+    await page.click('.scout-sample');
+    await page.waitForSelector('.menu .recon .mission-card');
+    const sets = [];
+    for (let i = 0; i < 4; i++) {
+      sets.push(await page.$$eval('.recon .mission-card h4', (hs) => hs.map((h) => h.textContent)));
+      await page.click('.recon-more');
+    }
+    for (let i = 1; i < sets.length; i++) if (!sets[i].some((t) => !sets[i - 1].includes(t))) errs.push(`"Other suggestions" showed the same missions: ${JSON.stringify(sets[i])}`);
+    const shot = `${out}/wayin-other-suggestions-desktop.png`;
+    await page.screenshot({ path: shot });
+    res.push({ type: 'way in: sample town, custom mission, other suggestions', errors: errs, sets: sets.map((s) => s.join(' | ')), shots: { suggestions: shot } });
+    await page.close();
+  }
+
+  // 5. The "← Front page" button never covers the recon heading, from the narrowest phone up.
+  for (const width of [320, 390, 768, 1280]) {
+    const { page, errs } = await wayInPage(browser, { width, height: 720 }, OSM.none(), '/?screen=recon');
+    await page.waitForSelector('.menu .recon .mission-card');
+    errs.push(...(await overlapCheck(page, '.menu-back', ['.recon .card-kicker', '.recon h2', '.recon .status'])));
+    const shot = `${out}/wayin-recon-header-${width}.png`;
+    await page.screenshot({ path: shot });
+    res.push({ type: `way in: front-page button clear of the recon heading (${width} px)`, errors: errs, shots: { recon: shot } });
+    await page.close();
+  }
+  return res;
 }
