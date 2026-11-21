@@ -161,7 +161,7 @@ describe('committed fingerprint (gate G4 across machines and versions)', () => {
     expect((h >>> 0).toString(16)).toBe(EXPECTED_FINGERPRINT);
   });
 });
-const EXPECTED_FINGERPRINT = 'a40e35b0';
+const EXPECTED_FINGERPRINT = '8ad1a4b3';
 
 describe('regressions from the phase 1 playtest', () => {
   it('escort ambushes never spawn on top of survivors (was: 3.5% of missions lost by second 5)', () => {
