@@ -8,6 +8,9 @@ import type { RoadGraph } from '../map/roadGraph';
 import { briefingMap, focusView } from './tacticalMap';
 import { getSettings, onSettingsChange } from './settings';
 import { el } from './dom';
+import type { WalkGrid } from '../map/grid';
+import { blendPose, easeInOut, framingDist, tourSeen, tourStops, type Pose, type TourMark, type TourStop } from './briefingTour';
+import { BriefingTour } from './briefingTourView';
 
 /**
  * The briefing's "blocky" diorama: a small, slowly turning 3D model of the mission area, built
@@ -784,6 +787,13 @@ export interface DioramaInfo {
   still: boolean;
 }
 
+/** Highlight colours for the walk-through's pulse ring (the label colours). */
+const MARK_TONE = { safe: C.safe, hostile: C.hostile, friendly: C.friendly, orbit: C.orbit } as const;
+/** The pulse: a slow, smooth swell (well under 3 a second; it never flashes). */
+const PULSE_HZ = 0.8;
+/** Handing the camera back after the tour is interrupted: the view eases out to the whole area over this long, seconds. */
+const RELEASE_S = 0.9;
+
 export class BriefingDiorama {
   readonly el: HTMLDivElement;
   private renderer: THREE.WebGLRenderer;
@@ -811,6 +821,20 @@ export class BriefingDiorama {
   readonly buildMs: number;
   private hint: HTMLSpanElement;
   private v = new THREE.Vector3();
+  /** The walk-through drives the camera through this while it runs (null: the free turntable). */
+  private pose: Pose | null = null;
+  /** After the walk-through lets go: where the camera was, easing out to the whole area (k 0..1). `stay`: keep that framing. */
+  private release: { from: Pose; k: number; stay: boolean } | null = null;
+  /** Called when the player drags or turns the model (the walk-through hands over). */
+  onInteract: (() => void) | null = null;
+  /** Labels the walk-through is talking about (placed first, emphasised), and how many landmarks to show (null: the usual). */
+  private focusIds = new Set<string>();
+  private placesCap: number | null = null;
+  /** The walk-through's highlight: a flat ring on the ground (or the orbit ring), pulsing slowly unless still. */
+  private mark: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  private orbitMark: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  private markR = 1;
+  private pulseT = 0;
 
   constructor(map: MapData, mission: Mission, waves: WaveDirection[]) {
     const t0 = performance.now();
@@ -835,6 +859,15 @@ export class BriefingDiorama {
     el('span', 'dio-attrib', map.attribution, foot);
 
     this.scene.add(this.built.group);
+    const ringMat = () => new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
+    // A unit ring, laid flat and scaled to the subject (drawn over everything, so a building can't hide it).
+    this.mark = new THREE.Mesh(new THREE.RingGeometry(0.8, 1, 64).rotateX(-Math.PI / 2), ringMat());
+    this.orbitMark = new THREE.Mesh(new THREE.RingGeometry(0.97, 1.03, 160).rotateX(-Math.PI / 2), ringMat());
+    for (const x of [this.mark, this.orbitMark]) {
+      x.visible = false;
+      x.renderOrder = 5;
+      this.scene.add(x);
+    }
     const b = this.built.box;
     this.target.set((b.x0 + b.x1) / 2, Math.min(12, this.built.maxH * 0.3), (b.z0 + b.z1) / 2);
     this.radius = Math.hypot(b.x1 - b.x0, b.z1 - b.z0) / 2;
@@ -869,6 +902,7 @@ export class BriefingDiorama {
       this.cleanups.push(() => t.removeEventListener(type, fn as EventListener));
     };
     on(c, 'pointerdown', (e) => {
+      this.onInteract?.();
       this.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, mouse: e.pointerType === 'mouse' };
       try {
         c.setPointerCapture(e.pointerId);
@@ -900,6 +934,7 @@ export class BriefingDiorama {
       const step = e.key === 'ArrowLeft' ? 1 : e.key === 'ArrowRight' ? -1 : 0;
       if (!step) return;
       e.preventDefault();
+      this.onInteract?.();
       this.az += (step * Math.PI) / 12;
       this.idleUntil = performance.now() + IDLE_MS;
       this.requestRender();
@@ -944,10 +979,17 @@ export class BriefingDiorama {
       this.size = { w, h };
       this.renderer.setSize(w, h, false);
     }
-    const turning = !this.still && !this.drag && now >= this.idleUntil;
+    const turning = !this.pose && !this.still && !this.drag && now >= this.idleUntil;
     if (turning) this.az += SPIN * dt;
+    const easing = !!this.release && !this.release.stay;
+    if (this.release && easing) {
+      this.release.k = Math.min(1, this.release.k + dt / RELEASE_S);
+      if (this.release.k >= 1) this.release = null;
+    }
+    const pulsing = (this.mark.visible || this.orbitMark.visible) && !this.still;
+    if (pulsing) this.pulseT += dt;
     this.draw(w, h);
-    if (turning || now < this.idleUntil) this.raf = requestAnimationFrame(this.frame);
+    if (turning || easing || pulsing || now < this.idleUntil) this.raf = requestAnimationFrame(this.frame);
     else this.last = 0;
   };
 
@@ -1006,10 +1048,17 @@ export class BriefingDiorama {
   private draw(w: number, h: number): void {
     const cam = this.camera;
     cam.aspect = w / h;
-    if (this.fit.aspect !== cam.aspect || this.fit.elev !== this.elev) this.computeFit(cam.aspect);
-    this.place(cam, this.az, this.fit.dist);
-    // Centre the model vertically: shift the picture in screen space (NDC y) without tilting the view.
-    cam.projectionMatrix.elements[9] -= this.fit.shift;
+    let pose = this.pose;
+    if (!pose) {
+      pose = this.overviewPose(this.az, this.elev, cam.aspect);
+      // Handed back mid-tour: the player turns (az, tilt) while the view eases out to the whole area.
+      if (this.release) {
+        const from = { ...this.release.from, az: this.az, elev: this.elev };
+        pose = this.release.stay ? from : blendPose(from, pose, easeInOut(this.release.k));
+      }
+    }
+    this.placePose(cam, pose);
+    this.updateMarks();
     this.renderer.render(this.scene, cam);
     this.layoutLabels(w, h);
     this.el.dataset.drawCalls = String(this.renderer.info.render.calls);
@@ -1019,7 +1068,7 @@ export class BriefingDiorama {
     const items: LabelIn[] = [];
     const pts: { x: number; y: number; visible: boolean }[] = [];
     // Landmarks are context, not intel: only the top few, fewer on a small (phone) picture.
-    let places = w < 360 ? 1 : 3;
+    let places = this.placesCap !== null ? Math.min(this.placesCap, w < 360 ? 2 : this.placesCap) : w < 360 ? 1 : 3;
     for (const l of this.labels) {
       if (!l.w) {
         // Measure once (it's on screen now); fall back to an estimate.
@@ -1031,7 +1080,7 @@ export class BriefingDiorama {
       const p = { x: ((this.v.x + 1) / 2) * w, y: ((1 - this.v.y) / 2) * h, visible: this.v.z < 1 && this.v.z > -1 && Math.abs(this.v.x) <= 1 && Math.abs(this.v.y) <= 1 };
       if (l.spec.kind === 'place' && p.visible && places-- <= 0) p.visible = false;
       pts.push(p);
-      items.push({ id: l.spec.id, x: p.x, y: p.y, visible: p.visible, w: l.w, h: l.h, priority: l.spec.priority, gap: l.spec.gap });
+      items.push({ id: l.spec.id, x: p.x, y: p.y, visible: p.visible, w: l.w, h: l.h, priority: l.spec.priority + (this.focusIds.has(l.spec.id) ? 200 : 0), gap: l.spec.gap });
     }
     const placed = new Map(placeLabels(items, w, h, this.sides).map((o) => [o.id, o]));
     this.labels.forEach((l, i) => {
@@ -1054,6 +1103,135 @@ export class BriefingDiorama {
       }
       l.pin.style.transform = `translate(${Math.round(pts[i].x)}px, ${Math.round(pts[i].y)}px)`;
     });
+  }
+
+  /** Places the camera at a pose: a turntable around its target, then the vertical picture shift. */
+  private placePose(cam: THREE.PerspectiveCamera, p: Pose): void {
+    const savedElev = this.elev;
+    this.v.copy(this.target);
+    this.target.set(p.x, p.y, p.z);
+    this.elev = p.elev;
+    this.place(cam, p.az, p.dist);
+    this.target.copy(this.v);
+    this.elev = savedElev;
+    // Centre the model vertically: shift the picture in screen space (NDC y) without tilting the view.
+    cam.projectionMatrix.elements[9] -= p.shift;
+  }
+
+  /** The picture's aspect (the stage is square; 1 until it has been drawn). */
+  get aspect(): number {
+    return this.size.w && this.size.h ? this.size.w / this.size.h : 1;
+  }
+
+  /** The free turntable's azimuth (where a walk-through starts from). */
+  get azimuth(): number {
+    return this.az;
+  }
+
+  get isStill(): boolean {
+    return this.still;
+  }
+
+  private fits = new Map<string, { dist: number; shift: number }>();
+
+  /** The whole-area view at azimuth `az` and tilt `elev` (the free turntable's framing). */
+  overviewPose(az = this.az, elev = this.elev, aspect = this.aspect): Pose {
+    const key = `${aspect.toFixed(4)}|${elev.toFixed(4)}`;
+    let f = this.fits.get(key);
+    if (!f) {
+      const keep = this.elev;
+      this.elev = elev;
+      this.computeFit(aspect);
+      this.elev = keep;
+      f = { dist: this.fit.dist, shift: this.fit.shift };
+      if (this.fits.size > 64) this.fits.clear();
+      this.fits.set(key, f);
+    }
+    return { x: this.target.x, y: this.target.y, z: this.target.z, dist: f.dist, az, elev, shift: f.shift };
+  }
+
+  /** A close framing of one subject (never further out than the whole-area view). */
+  framePose(focus: TourStop['focus'], az: number, elev: number): Pose {
+    const whole = this.overviewPose(az, 0.98);
+    const d = Math.max(170, Math.min(whole.dist, framingDist(focus.r, this.aspect, FOV)));
+    return { x: focus.p.x, y: focus.y, z: focus.p.z, dist: d, az, elev, shift: 0 };
+  }
+
+  /** The walk-through drives the camera (see releasePose to hand it back). */
+  setPose(p: Pose): void {
+    this.pose = p;
+    this.release = null;
+    this.requestRender();
+  }
+
+  /**
+   * The walk-through lets go of the camera; the turntable carries on from where it is looking.
+   * `ease`: glide out to the whole area (a natural end, or an interrupt with motion on); otherwise
+   * keep the current framing (reduced motion: no camera flight). `idle`: wait before turning on its
+   * own (the player has just grabbed it).
+   */
+  releasePose(opts: { ease: boolean; idle: boolean }): void {
+    const p = this.pose;
+    this.pose = null;
+    if (p) {
+      this.az = p.az;
+      this.elev = Math.max(0.35, Math.min(1.25, p.elev));
+      this.release = { from: p, k: 0, stay: !opts.ease };
+    }
+    if (opts.idle) this.idleUntil = performance.now() + IDLE_MS;
+    this.requestRender();
+  }
+
+  /** Back to the plain whole-area turntable, at azimuth `az` (default: where it is). */
+  resetView(az = this.az): void {
+    this.pose = null;
+    this.release = null;
+    this.az = az;
+    this.elev = 0.98;
+    this.requestRender();
+  }
+
+  /** Emphasise these labels (placed first, highlighted); `places`: how many landmarks to label (null: the usual). */
+  setFocusLabels(ids: string[], places: number | null = null): void {
+    this.focusIds = new Set(ids);
+    this.placesCap = places;
+    for (const l of this.labels) {
+      const on = this.focusIds.has(l.spec.id);
+      l.el.classList.toggle('cur', on);
+      l.pin.classList.toggle('cur', on);
+    }
+    this.requestRender();
+  }
+
+  /**
+   * The walk-through's highlight (null: none): a ring on the ground for a place, the schematic orbit
+   * ring for the orbit. For a route, `at` is where the ring is now (the tour moves it along).
+   */
+  setMark(m: TourMark | null, at?: V2): void {
+    this.mark.visible = false;
+    this.orbitMark.visible = false;
+    if (m?.kind === 'ring' || (m?.kind === 'path' && at)) {
+      const p = m.kind === 'ring' ? m.p : at!;
+      this.markR = m.kind === 'ring' ? m.r : 16;
+      this.mark.position.set(p.x, 2, p.z);
+      this.mark.material.color.setHex(MARK_TONE[m.kind === 'ring' ? m.tone : 'safe']);
+      this.mark.visible = true;
+    } else if (m?.kind === 'orbit') {
+      const o = this.built.orbit;
+      this.orbitMark.position.set(o.c.x, o.y + 0.5, o.c.z);
+      this.orbitMark.scale.setScalar(o.r);
+      this.orbitMark.material.color.setHex(MARK_TONE.orbit);
+      this.orbitMark.visible = true;
+    }
+    this.requestRender();
+  }
+
+  /** The pulse: the ring swells and brightens slowly and smoothly (PULSE_HZ); steady when still. */
+  private updateMarks(): void {
+    const s = this.still ? 0.6 : 0.5 + 0.5 * Math.sin(this.pulseT * Math.PI * 2 * PULSE_HZ);
+    this.mark.material.opacity = 0.5 + 0.4 * s;
+    this.mark.scale.setScalar(this.markR * (1 + 0.12 * s));
+    this.orbitMark.material.opacity = 0.55 + 0.35 * s;
   }
 
   info(): DioramaInfo {
@@ -1089,11 +1267,32 @@ let live = 0;
 export const liveDioramas = (): number => live;
 
 /**
- * The briefing's picture block: the 3D diorama beside the tactical map (wide screens), or a Map / 3D
- * toggle (narrow screens), with the map's legend under both. Call dispose() when the briefing closes.
- * If WebGL isn't available, it's just the tactical map.
+ * The walk-through's stops for a mission (briefingTour.ts), over the same box, labels and wave
+ * arrows the diorama draws. `grid`: the sim's walk grid, so wave place names follow the sim's spawn
+ * rules exactly (optional; without it, places zombies can't walk from may be named too).
  */
-export function briefingVisuals(map: MapData, mission: Mission, graph: RoadGraph): { el: HTMLDivElement; dispose(): void } {
+export function planTour(map: MapData, mission: Mission, graph: RoadGraph, grid?: WalkGrid, waves = likelyWaveDirections(mission, map, graph)): TourStop[] {
+  const box = dioramaExtent(map, mission);
+  const defend = !!(mission.waves && mission.type === 'defend' && mission.safehouse);
+  return tourStops({
+    map,
+    mission,
+    waves,
+    graph,
+    grid,
+    box,
+    labels: labelSpecs(map, mission, waves, box),
+    waveArrows: waves.map((w) => (defend ? arrowShape(w.from, w.to, mission.waves!.minDist * 0.45, box) : null)),
+  });
+}
+
+/**
+ * The briefing's picture block: the 3D diorama beside the tactical map (wide screens), or a Map / 3D
+ * toggle (narrow screens), with the walk-through's caption and controls and the map's legend under
+ * both. Call dispose() when the briefing closes. If WebGL isn't available, it's just the tactical map
+ * (the walk-through then highlights on the map alone).
+ */
+export function briefingVisuals(map: MapData, mission: Mission, graph: RoadGraph, grid?: WalkGrid): { el: HTMLDivElement; dispose(): void } {
   const wrap = el('div', 'briefing-visuals show-3d');
   const toggle = el('div', 'bv-toggle', undefined, wrap);
   toggle.setAttribute('role', 'group');
@@ -1101,15 +1300,25 @@ export function briefingVisuals(map: MapData, mission: Mission, graph: RoadGraph
   const panels = el('div', 'bv-panels', undefined, wrap);
   const mapBlock = briefingMap(map, mission, graph);
   const legend = mapBlock.querySelector('.tmap-legend');
+  const waves = likelyWaveDirections(mission, map, graph);
   let dio: BriefingDiorama | null = null;
   try {
-    dio = new BriefingDiorama(map, mission, likelyWaveDirections(mission, map, graph));
+    dio = new BriefingDiorama(map, mission, waves);
     live++;
   } catch {
     dio = null; // no WebGL: the tactical map alone
   }
   if (dio) panels.appendChild(dio.el);
   panels.appendChild(mapBlock);
+  // The walk-through: plays on a mission's first briefing; re-opened (from pause, or a retry) it starts done, with Replay.
+  let tour: BriefingTour | null = null;
+  try {
+    tour = new BriefingTour(dio, mapBlock, planTour(map, mission, graph, grid, waves), mission, tourSeen(mission));
+    wrap.appendChild(tour.el);
+  } catch (e) {
+    console.warn('Briefing walk-through unavailable:', e);
+    tour = null;
+  }
   if (legend) wrap.appendChild(legend);
   if (dio) {
     const btn = (text: string, show: '3d' | 'map') => {
@@ -1135,6 +1344,8 @@ export function briefingVisuals(map: MapData, mission: Mission, graph: RoadGraph
     dispose() {
       if (done) return;
       done = true;
+      tour?.dispose();
+      tour = null;
       if (dio) {
         dio.dispose();
         live--;

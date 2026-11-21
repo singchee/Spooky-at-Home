@@ -219,7 +219,7 @@ export class Game {
     const m = this.sim.mission;
     this.overlay.replaceChildren();
     const card = el('div', 'card briefing', undefined, this.overlay);
-    const visuals = briefingVisuals(this.map, m, this.sim.graph);
+    const visuals = briefingVisuals(this.map, m, this.sim.graph, this.sim.grid);
     this.briefingView = visuals;
     card.appendChild(visuals.el);
     el('div', 'card-kicker', `MISSION · DIFFICULTY ${m.difficulty} · SEED ${m.seed}`, card);
