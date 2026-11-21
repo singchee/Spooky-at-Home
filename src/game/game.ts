@@ -11,6 +11,7 @@ import { SensorShader, type SensorId } from '../render/sensors';
 import { AgentsView } from './agentsView';
 import { Effects } from './effects';
 import { Hud } from '../ui/hud';
+import { briefingMap } from '../ui/tacticalMap';
 import { el } from '../ui/dom';
 import { Sfx } from '../audio/sfx';
 
@@ -90,6 +91,7 @@ export class Game {
     this.composer.addPass(this.sensorPass);
 
     this.hud = new Hud(container, map.attribution);
+    this.hud.setMinimap(map, sim.mission);
     this.overlay = el('div', 'overlay', undefined, container);
     this.bot = opts.bot ? new Bot(sim, SKILL.human) : null;
     if (opts.sensor) this.sensor = opts.sensor;
@@ -108,7 +110,8 @@ export class Game {
   private showBriefing(): void {
     const m = this.sim.mission;
     this.overlay.replaceChildren();
-    const card = el('div', 'card', undefined, this.overlay);
+    const card = el('div', 'card briefing', undefined, this.overlay);
+    card.appendChild(briefingMap(this.map, m, this.sim.graph));
     el('div', 'card-kicker', `MISSION · DIFFICULTY ${m.difficulty} · SEED ${m.seed}`, card);
     el('h2', undefined, m.title, card);
     for (const line of m.briefing) el('p', undefined, line, card);
@@ -390,6 +393,7 @@ export class Game {
     if (this.hudTimer <= 0) {
       this.hudTimer = 0.1;
       this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose());
+      this.hud.updateMinimap(ac, this.aim, this.sim.survivors.filter((s) => s.alive && !s.home));
     }
     this.hud.setMarkers(this.markers());
   }

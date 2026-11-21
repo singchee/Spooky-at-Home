@@ -2,7 +2,9 @@ import type { SimState } from '../sim/sim';
 import type { Mission } from '../sim/missions';
 import { WEAPONS } from '../sim/weapons';
 import { fmtTime } from '../sim/missions';
+import type { MapData, V2 } from '../map/types';
 import { el } from './dom';
+import { TacticalMap } from './tacticalMap';
 
 /** Static crosshair artwork per gun (constants we wrote, not map data). */
 const SHAPES: Record<string, string> = {
@@ -96,6 +98,19 @@ export class Hud {
         return d;
       }),
     );
+  }
+
+  private minimap: TacticalMap | null = null;
+
+  /** Small tactical map in the corner (W2): the mission overlay plus aircraft, aim point and survivors. */
+  setMinimap(map: MapData, mission: Mission): void {
+    const box = el('div', 'hud-minimap', undefined, this.root);
+    this.minimap = new TacticalMap(map, { mission, compact: true, size: 180, label: 'Minimap' });
+    box.appendChild(this.minimap.svg);
+  }
+
+  updateMinimap(aircraft: V2, aim: V2, survivors: V2[]): void {
+    this.minimap?.update({ aircraft, aim, survivors });
   }
 
   dispose(): void {
