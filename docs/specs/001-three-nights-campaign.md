@@ -106,3 +106,6 @@ After a night is won, the campaign screen lets you fly it again. It's the identi
 ## Technical design  *(added by tech-lead)*
 
 ## Feel & access  *(added by feel-designer)*
+
+## Owner decision (2026-11-21)
+Approved as specced: the name "Three Nights", the longer finale (about 4.5 minutes, campaign only), replaying a won night, "Fly Three Nights" as the main choice after recon, and recording the lines within the ElevenLabs cap. Upgrades between nights are deferred until after human playtests. The dawn fade is cut for now.
