@@ -77,6 +77,16 @@ describe('mission templates on the sample town (G5 for templates)', () => {
     }
   });
 
+  it('cold-blooded intel says what thermal really shows: they match grass, and show dark on roads', () => {
+    for (const id of TEMPLATE_IDS) {
+      const m = build(id, 4, 1);
+      if (/no cold-blooded/.test(m.intel[0])) continue;
+      expect(m.intel[0], id).not.toMatch(/faint on cool grass|barely show/);
+      if (id !== 'forest-sweep') expect(m.intel[0], id).toMatch(/match grass on thermal and show as a dark smudge on roads\. Night vision picks them up\./);
+      else expect(m.intel[0]).toMatch(/match the ground on thermal/);
+    }
+  });
+
   it('intel is truthful for every template: it mentions cold-blooded contacts exactly when there are some', () => {
     for (const id of TEMPLATE_IDS) {
       for (const d of [1, 4]) {
