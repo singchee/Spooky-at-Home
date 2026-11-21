@@ -41,6 +41,8 @@ interface TestHooks {
   fixedStep?: (dt: number | null) => void;
   /** Hold or release the trigger, as holding the left button does (without needing pointer lock). */
   holdFire?: (on: boolean) => void;
+  /** Where the aim point appears relative to the screen centre, CSS px (the camera kick, as last drawn). */
+  aimOffset?: () => [number, number];
 }
 
 /** The OS asks for reduced motion (live: it can change while the page is open). */
@@ -156,6 +158,11 @@ export class Game {
       hooks.survivors = () => this.sim.survivors.filter((s) => s.alive && !s.home).map((s) => ({ x: s.x, z: s.z }));
       hooks.fixedStep = (dt) => {
         this.fixedDt = dt;
+      };
+      hooks.aimOffset = () => {
+        const p = this.screenPos(this.aim, 0);
+        const c = this.renderer.domElement;
+        return [p.x - c.clientWidth / 2, p.y - c.clientHeight / 2];
       };
       hooks.holdFire = (on) => {
         this.firing = on && this.screen === 'playing';
