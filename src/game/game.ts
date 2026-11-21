@@ -507,6 +507,7 @@ export class Game {
           break;
         case 'impact':
           this.effects.impact(e.weapon, e.x, e.z, now);
+          this.agents.impact(e.x, e.z, weaponById(e.weapon).radius, now); // flinches, falls away from the blast, ducking
           this.sfx.impact(e.weapon);
           // A big blast opens a call; anything else that lands in the next moment joins its count.
           if (kc.at >= 0) kc.n += e.kills;
