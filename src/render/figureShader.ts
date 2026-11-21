@@ -18,9 +18,6 @@ export const PART = { torso: 0, head: 1, armL: 2, armR: 3, legL: 4, legR: 5, pan
 /** Figures are drawn ~20% larger than life (about 2.7 m) so their poses read from the gunship. */
 export const FIGURE_SCALE = 1.2;
 
-/** Floats per instance in each per-instance attribute (iA, iB, iC are all vec4). */
-export const FIGURE_STRIDE = 4;
-
 const HIP_Y = 1.0;
 const SHOULDER_Y = 1.76;
 const NECK_Y = 1.82;
@@ -52,7 +49,7 @@ function tagPart(geo: THREE.BufferGeometry, part: number, pivot: THREE.Vector3, 
 }
 
 /**
- * The rest pose: standing, facing +z, feet at y = 0, about 2.25 m tall. Proportions are a little
+ * The rest pose: standing, facing +z, feet at y = 0, about 2.25 m tall (drawn at FIGURE_SCALE). Proportions are a little
  * exaggerated (big head, broad shoulders, long arms) so the silhouette reads from 1.8 km.
  */
 export function buildFigureGeometry(withSurvivorKit: boolean): THREE.BufferGeometry {
