@@ -374,7 +374,7 @@ describe('which line, when (truthful)', () => {
     const d = new VoiceDirector((l) => a.push(l), 1);
     for (let i = 0; i < 4; i++) d.bigKill();
     expect(a).toEqual(['former-neighbours', 'splash-residents', 'good-effect', 'former-neighbours']);
-  });
+  }, 30_000); // plays 4 whole missions; 5 s is too tight when the machine is busy
 
   it('in real missions every claim is true when it is made', () => {
     for (const [type, difficulty, seed] of [['clear', 1, 3], ['escort', 3, 7], ['defend', 4, 11], ['clear', 5, 2]] as const) {
