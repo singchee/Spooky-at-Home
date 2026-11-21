@@ -116,3 +116,44 @@ The 20 lines in `public/audio/voice/` (filenames are the ids). I can't hear them
 At about US$0.25–0.35, that brings the running total from 7,912 to roughly **9,300–9,800 of the 50,000 cap** (under 4% of what's left). The 20 existing lines average 2.8 s; these are similar length, so the whole new set is about 1.5 minutes of audio.
 
 Direction for the session: the same voice as the existing 20 ("Robert - Measured Thriller Narrator"), so Ground sounds like one person. See `docs/story/voice.md` for delivery notes.
+
+---
+
+## Recordings: wiring table (audio director, 21 Nov 2026)
+
+27 lines recorded in Ground's voice ("Robert - Measured Thriller Narrator", `eleven_v4`). Each is mono 44.1 kHz 128 kb/s MP3 at −21 LUFS (spend in `public/audio/CREDITS.md`). They aren't wired yet: `src/audio` belongs to another team right now. The priority and repeat rules are in the tables above; the triggers below are short forms of those.
+
+| id | File | Length | Trigger | Pri |
+|---|---|---|---|---|
+| `n1-open` | `public/audio/voice/n1-open.mp3` | 3.6 s | Campaign night 1, sim start, before `cleared-hot`; first attempt only | P2 |
+| `n2-open` | `public/audio/voice/n2-open.mp3` | 3.6 s | Campaign night 2, sim start; first attempt only | P2 |
+| `n3-open` | `public/audio/voice/n3-open.mp3` | 3.8 s | Campaign night 3, sim start; first attempt only | P2 |
+| `previously` | `public/audio/voice/previously.mp3` | 2.5 s | Night card for nights 2 and 3 opens (summary text on screen) | P3 |
+| `welcome-back` | `public/audio/voice/welcome-back.mp3` | 3.1 s | Saved campaign opened in a new session; replaces `previously` that time | P3 |
+| `first-cold` | `public/audio/voice/first-cold.mp3` | 3.2 s | Sim start, first campaign night with `hadCold`; never in single missions | P2 |
+| `n1-close` | `public/audio/voice/n1-close.mp3` | 3.0 s | Night 1 won | P3 |
+| `n2-close` | `public/audio/voice/n2-close.mp3` | 4.4 s | Night 2 won | P3 |
+| `n3-close` | `public/audio/voice/n3-close.mp3` | 3.5 s | Night 3 won (after `dawn-thermal` once that exists) | P2 |
+| `campaign-thanks` | `public/audio/voice/campaign-thanks.mp3` | 4.2 s | Campaign tally screen opens | P3 |
+| `night-lost` | `public/audio/voice/night-lost.mp3` | 4.0 s | Campaign night lost (`result.won === false`); every loss | P2 |
+| `night-won-losses` | `public/audio/voice/night-won-losses.mp3` | 2.4 s | Mission won, `0 < survivorsSaved < survivorsTotal` (count on screen) | P2 |
+| `night-won-clean` | `public/audio/voice/night-won-clean.mp3` | 4.0 s | Mission won, all survivors saved and `friendlyHits === 0` | P3 |
+| `tennis-open` | `public/audio/voice/tennis-open.mp3` | 2.9 s | Sim start, `mission.template === 'clear-tennis'` | P3 |
+| `park-open` | `public/audio/voice/park-open.mp3` | 2.8 s | Sim start, `clear-park` | P3 |
+| `forest-open` | `public/audio/voice/forest-open.mp3` | 3.6 s | Sim start, `forest-sweep` | P3 |
+| `shops-open` | `public/audio/voice/shops-open.mp3` | 3.7 s | Sim start, `escort-shops` | P3 |
+| `station-open` | `public/audio/voice/station-open.mp3` | 3.7 s | Sim start, `escort-station` | P3 |
+| `sports-open` | `public/audio/voice/sports-open.mp3` | 3.0 s | Sim start, `hold-sports` | P3 |
+| `landmark-open` | `public/audio/voice/landmark-open.mp3` | 4.5 s | Sim start, `hold-landmark` | P3 |
+| `ff-one-left` | `public/audio/voice/ff-one-left.mp3` | 2.6 s | `friendly-hit` when `friendlyHits === friendlyFireLimit − 1`, right after `check-fire` | P1 |
+| `need-met` | `public/audio/voice/need-met.mp3` | 2.9 s | Escort: `survivorsHome` reaches `needHome` while `survivorsAlive > 0` | P2 |
+| `few-left` | `public/audio/voice/few-left.mp3` | 3.3 s | Clear: `0 < zombiesAlive ≤ 5`, unless `cold-leftovers` applies | P2 |
+| `cold-leftovers` | `public/audio/voice/cold-leftovers.mp3` | 3.0 s | Clear: `0 < zombiesAlive ≤ 5` and `coldAlive === zombiesAlive` (beats `few-left`) | P2 |
+| `one-minute` | `public/audio/voice/one-minute.mp3` | 1.8 s | `timeLeft` crosses 60 s while `phase === 'running'` | P2 |
+| `doors-failing` | `public/audio/voice/doors-failing.mp3` | 2.2 s | Defend: `integrity` crosses below 0.5 | P2 |
+| `idle` | `public/audio/voice/idle.mp3` | 3.9 s | No `fire` event for 30 s while `zombiesAlive > 0`; never in Training night | P3 |
+
+**Not recorded (no file yet):**
+- `dawn-thermal`: held until the dawn fade visual is built.
+- `reload-105`: held until the unlimited-ammo 25 mm is merged.
+- `big-expected`: marked "Yes" above, but its voiced text says "Save a **105** for it". That's a number, which the recording rule at the top of this file doesn't allow (it's also a pronunciation risk: "one hundred and five" or "one-oh-five"). Story Writer or owner: either confirm the weapon name is fine to voice, or reword it (for example "Save the big gun for it."). It's about 90 credits to record once decided.
