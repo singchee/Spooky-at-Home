@@ -109,13 +109,6 @@ export function nearChildPlace(map: MapData, p: V2, buffer = CHILD_BUFFER): bool
   return childZones(map).some((z) => zoneDist(p, z) < buffer);
 }
 
-/** Metres from a point to the nearest school, kindergarten or playground (0 inside one; Infinity if the map has none). */
-export function childPlaceDist(map: MapData, p: V2): number {
-  let d = Infinity;
-  for (const z of childZones(map)) d = Math.min(d, zoneDist(p, z));
-  return d;
-}
-
 /** Twice the signed area of a, b, c: which side of a->b the point c is on. */
 const orient = (a: V2, b: V2, c: V2) => (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
 
