@@ -708,7 +708,10 @@ async function safetyChecks(browser) {
 // (installed only under browser automation), check: no AudioContext before a gesture, exactly one
 // after a click and still one after 10 restarts, live sources bounded across those restarts,
 // gunfire ducks the music, M (the shared muted setting) silences the master gain, and quitting to
-// the menu frees the mission score and engine drone.
+// the menu frees the mission score and engine drone. Recorded audio (public/audio): every file
+// fetches and decodes, the recorded score and ambience bed take over from the generated ones, and
+// radio voice lines never overlap (one at a time, a gap between, urgent calls cutting in), including
+// across the restarts.
 async function audioChecks(browser) {
   const errors = [];
   const { page, errs } = await gamePage(browser, 'autostart=1&type=clear&difficulty=1&seed=3');
@@ -728,7 +731,42 @@ async function audioChecks(browser) {
     if (first?.state !== 'running') errors.push(`AudioContext is ${first?.state}, not running`);
     if (first?.playing !== 'mission' || !first?.ambience) errors.push(`mission score/ambience not playing: ${JSON.stringify(first)}`);
 
-    // Gunfire ducks the music.
+    // Recorded files: all 34 load (fetched lazily after the click), and the recorded score and bed take over.
+    // Headless on a busy machine, decoding the 60 s music files can take a while (152 s measured under a load average of 14 on 4 cores): allow up to 4 min.
+    const t0 = Date.now();
+    await page
+      .waitForFunction(() => { const a = window.__spooky.audio?.(); return a?.assets?.pending === 0 && a.recorded?.score && a.recorded?.bed; }, null, { timeout: 240000, polling: 250 })
+      .catch(() => undefined);
+    out.loadSeconds = Math.round((Date.now() - t0) / 100) / 10;
+    const loaded = await read();
+    out.assets = loaded?.assets;
+    out.recorded = loaded?.recorded;
+    if (!(loaded?.assets?.ready === 34) || loaded.assets.failed || loaded.assets.pending) errors.push(`recorded audio not all loaded: ${JSON.stringify(loaded?.assets)}`);
+    if (!loaded?.recorded?.score || !loaded?.recorded?.bed) errors.push(`recorded score/bed not playing: ${JSON.stringify(loaded?.recorded)}`);
+
+    // Radio voice: a barrage of requests plays one line at a time; CHECK FIRE cuts in.
+    await page.evaluate(() => { for (const l of ['new-contacts', 'good-effect', 'more-coming', 'rushers', 'survivor-lost']) window.__spooky.audioSay(l); });
+    // (Headless, the audio clock and the engine's tick can lag the wall clock: wait for the duck rather than sleep.)
+    await page.waitForFunction(() => window.__spooky.audio().gains.duck > 0.2, null, { timeout: 5000, polling: 50 }).catch(() => undefined);
+    const speaking = await read();
+    out.duckUnderVoice = speaking?.gains?.duck;
+    if (!(speaking?.gains?.duck > 0.2)) errors.push(`music not ducked under the voice (duck ${speaking?.gains?.duck})`);
+    await page.evaluate(() => window.__spooky.audioSay('check-fire'));
+    await page.waitForTimeout(9000);
+    const talked = await read();
+    out.voice = talked?.voice;
+    const log = talked?.voice?.log ?? [];
+    if (!(talked?.voice?.said >= 3)) errors.push(`expected at least 3 voice lines, got ${talked?.voice?.said}`);
+    if (talked?.voice?.overlaps !== 0) errors.push(`voice lines overlapped: ${JSON.stringify(log)}`);
+    if (!log.some((e) => e.line === 'check-fire')) errors.push(`CHECK FIRE was not said: ${JSON.stringify(log)}`);
+    if (log.some((e) => e.line === 'good-effect')) errors.push('low-priority banter played while the radio was busy');
+    for (let i = 1; i < log.length; i++) {
+      const urgent = ['check-fire', 'friendlies-under-attack', 'mission-complete', 'mission-failed', 'cleared-hot'].includes(log[i].line);
+      if (!urgent && log[i].start - log[i - 1].end < 2.9) errors.push(`only ${(log[i].start - log[i - 1].end).toFixed(2)} s between voice lines ${log[i - 1].line} and ${log[i].line}`);
+    }
+
+    // Gunfire ducks the music (first let any duck from the radio voice above recover).
+    await page.waitForFunction(() => window.__spooky.audio().gains.duck < 0.01, null, { timeout: 10000, polling: 100 }).catch(() => undefined);
     await page.evaluate(() => window.__spooky.holdFire(true));
     await page.waitForTimeout(600);
     const firing = await read();
@@ -767,6 +805,8 @@ async function audioChecks(browser) {
     const limit = Math.max(80, (first?.voices ?? 0) * 2);
     if (voices.some((v) => !(v <= limit))) errors.push(`live sources not bounded across restarts: ${voices.join(', ')} (limit ${limit})`);
     if (after?.fading > 0) errors.push(`${after.fading} score(s) still fading 3 s after the last restart`);
+    if (after?.voice?.overlaps !== 0) errors.push(`voice lines overlapped across restarts: ${JSON.stringify(after?.voice?.log)}`);
+    if (!after?.recorded?.score) errors.push('recorded score not playing after the restarts');
 
     // Quit to the menu: the mission score and drone fade out and are freed; the menu theme plays.
     await page.keyboard.press('Escape');

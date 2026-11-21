@@ -14,6 +14,8 @@ const LEVEL = 0.25;
 export class Ambience {
   private kit: Kit;
   private out: GainNode;
+  /** The synthesised engines, air and town (not the car alarms): turned down under a recorded bed. */
+  private synth: GainNode;
   private rng: Rng;
   private nextAlarm: number;
   private stopAt = -1;
@@ -34,6 +36,8 @@ export class Ambience {
     this.out.gain.value = 0;
     this.out.gain.setTargetAtTime(LEVEL, now, 1.2);
     this.out.connect(dest);
+    this.synth = k.own(ctx.createGain());
+    this.synth.connect(this.out);
 
     // Engines: two slightly detuned blade-pass tones (a slow 0.4 Hz beat) and a sub, low-passed.
     const eng = k.own(ctx.createBiquadFilter());
@@ -42,7 +46,7 @@ export class Ambience {
     eng.Q.value = 0.5;
     const engGain = k.own(ctx.createGain());
     engGain.gain.value = 0.16;
-    eng.connect(engGain).connect(this.out);
+    eng.connect(engGain).connect(this.synth);
     for (const [type, f, v] of [['sawtooth', 68, 0.5], ['sawtooth', 68.4, 0.5], ['triangle', 34, 0.9]] as const) {
       const o = ctx.createOscillator();
       o.type = type;
@@ -81,7 +85,7 @@ export class Ambience {
     f.Q.value = q;
     const g = kit.own(ctx.createGain());
     g.gain.value = vol;
-    src.connect(f).connect(g).connect(this.out);
+    src.connect(f).connect(g).connect(this.synth);
     kit.play(src, ctx.currentTime);
     this.lfo(rate, depth, g.gain);
   }
@@ -108,6 +112,11 @@ export class Ambience {
     g.gain.linearRampToValueAtTime(0, end);
     o.connect(f).connect(g).connect(this.out);
     this.kit.play(o, t, end + 0.05, f, g);
+  }
+
+  /** Turn the synthesised bed to `level` (0..1) over a few seconds, e.g. under the recorded one. */
+  blend(level: number): void {
+    this.synth.gain.setTargetAtTime(Math.max(0, Math.min(1, level)), this.ctx.currentTime, 1.5);
   }
 
   tick(now: number): void {
