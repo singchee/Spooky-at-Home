@@ -98,6 +98,11 @@ export const WAVE_SPREAD = 12;
  */
 export const WAVE_CHILD_GAP = WAVE_SPREAD + MAX_KILL_REACH + CHILD_FIRE_CLEARANCE;
 
+/** Road nodes waves may never spawn at (1): within WAVE_CHILD_GAP of a school, kindergarten or playground. */
+export function noWaveSpawn(map: MapData, graph: RoadGraph): Uint8Array {
+  return Uint8Array.from(graph.nodes, (n) => (nearChildPlace(map, n, WAVE_CHILD_GAP) ? 1 : 0));
+}
+
 export class Sim {
   readonly mission: Mission;
   readonly map: MapData;
@@ -173,8 +178,7 @@ export class Sim {
     if (mission.safehouse && mission.type === 'defend') this.safeField = grid.flowField(grid.perimeterCells(mission.safehouse.poly));
     if (mission.waves) this.waveTimer = FIRST_WAVE; // first wave arrives quickly
     this.shelterGrace = Math.max(15, 45 - 6 * mission.difficulty);
-    this.noSpawn = new Uint8Array(graph.nodes.length);
-    if (mission.waves) graph.nodes.forEach((n, i) => (this.noSpawn[i] = nearChildPlace(map, n, WAVE_CHILD_GAP) ? 1 : 0));
+    this.noSpawn = mission.waves ? noWaveSpawn(map, graph) : new Uint8Array(graph.nodes.length);
   }
 
   /** Aircraft position: a steady left-hand orbit around the mission's centre. */

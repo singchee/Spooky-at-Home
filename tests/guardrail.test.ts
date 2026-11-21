@@ -7,7 +7,7 @@ import { CHILD_FIRE_CLEARANCE, HORDE_SPREAD, HORDE_WANDER, generateMission } fro
 import { nearChildPlace, childZones, TEMPLATE_IDS } from '../src/map/recon';
 import { parseOverpass, featureCategory, type OverpassJson } from '../src/map/overpass';
 import { KILL_REACH, WEAPONS } from '../src/sim/weapons';
-import { Sim } from '../src/sim/sim';
+import { Sim, WAVE_SPREAD, noWaveSpawn } from '../src/sim/sim';
 import type { Building, Feature, MapData, Road, V2 } from '../src/map/types';
 
 /**
@@ -188,6 +188,24 @@ describe('item 3.8: school guardrail gaps', () => {
     }
   }, 240_000);
 
+  it('waves: a wave never spawns where a 105 round on it would land within 30 m of a child place', () => {
+    // A wave's zombies appear within WAVE_SPREAD of its spawn point. The school-heavy town has a kindergarten
+    // 64 m from a junction 280 m from the safehouse: allowed by the old 60 m gap, too close by this rule.
+    const gap = WAVE_SPREAD + reach105 + CHILD_FIRE_CLEARANCE;
+    for (const town of [makeSampleTown(), schoolHeavyTown()]) {
+      const g = buildRoadGraph(town);
+      const zones = childPlaces(town);
+      const banned = noWaveSpawn(town, g);
+      let allowed = 0;
+      g.nodes.forEach((n, i) => {
+        if (banned[i]) return;
+        allowed++;
+        expect(nearestChildPlace(zones, n), `${town.name} spawn point ${n.x}, ${n.z}`).toBeGreaterThanOrEqual(gap);
+      });
+      expect(allowed, town.name).toBeGreaterThan(g.nodes.length / 2);
+    }
+  });
+
   it('in play: no zombie, horde or fresh wave, ever stands where a 105 round would land within 30 m of a child place', () => {
     // End to end: run the real sim with nobody firing and watch every zombie. Horde zombies are watched all the
     // time; wave zombies walk on toward the survivors, so they are checked where they appear.
@@ -261,8 +279,8 @@ function schoolHeavyTown(opts: { playgroundBesideSafehouse?: boolean } = {}): Ma
   school('s1', 1, -2, 'Gridville Primary School');
   school('s2', -3, 1, 'Gridville High School');
   school('s3', 2, 2, 'Saint Gridley College');
-  pois.push({ id: 'k1', p: { x: -150, z: -250 }, kind: 'kindergarten', name: 'Little Squares Kindergarten' });
-  features.push({ id: 'f-k1', category: 'kindergarten', name: 'Little Squares Kindergarten', p: { x: -150, z: -250 } });
+  pois.push({ id: 'k1', p: { x: -145, z: -245 }, kind: 'kindergarten', name: 'Little Squares Kindergarten' });
+  features.push({ id: 'f-k1', category: 'kindergarten', name: 'Little Squares Kindergarten', p: { x: -145, z: -245 } });
   features.push({ id: 'f-play', category: 'playground', name: 'Grid Playground', p: { x: -50, z: 340 }, pts: rect(-70, 320, -30, 360) });
   if (opts.playgroundBesideSafehouse) features.push({ id: 'f-play2', category: 'playground', name: 'Corner Playground', p: { x: -10, z: -10 } });
   // The hospital (safehouse), its centre nearest the junction at (0, 0).
