@@ -13,7 +13,7 @@ const scale = Number(arg('--scale', 1));
 const out = arg('--out', 'reports/playtest');
 mkdirSync(out, { recursive: true });
 
-const PORT = 4179;
+const PORT = Number(arg('--port', 4179));
 const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort'], { stdio: 'pipe' });
 const ready = new Promise((res, rej) => {
   server.stdout.on('data', (d) => String(d).includes(String(PORT)) && res());
