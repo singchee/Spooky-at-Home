@@ -27,6 +27,7 @@ So this crew is built the same way:
 | `/balance` | **Balance Analyst** (fire control officer) | Are missions fair and fun across seeds and difficulties? | No (writes reports) | `balance-analyst` |
 | `/map-check` | **Map Checker** (scout) | Does the mission generator survive messy real maps? | No (writes reports) | `map-checker` |
 | `/preflight` + `/release` | **Release Engineer** (loadmaster) | Has everything been checked, with evidence? | Version and changelog only | — |
+| `/autopilot` | **Crew chief** | What's next, and who needs to decide it? Runs one unattended cycle | Via the other roles | — |
 | `/debrief` | **Debrief** (whole crew) | What went wrong this week, and which crew roles earned their keep? | Docs only | — |
 
 **Later, when the phase arrives:**
@@ -67,9 +68,13 @@ idea ──/pitch──► spec (docs/specs/NNN-name.md)
 | Docs only | none |
 
 ## Who decides
-- **You** decide anything about taste, tone, scope and spending (ElevenLabs credits, API keys, new services). Agents ask; they don't assume.
-- **The Game Director** can recommend cutting a feature but can't cut it alone.
-- **A failed gate blocks release.** Overriding a gate needs your explicit "ship anyway", recorded in the PR.
+
+**The crew runs on its own; `docs/AUTONOMY.md` sets the limits.** In short:
+- **Class A/B** (fixes, tests, refactors, building items you already approved): the crew builds, checks, fixes minor findings and merges, with two keys: the builder plus an independent checker. Then it tells you in the digest.
+- **Class C** (taste, scope, spending, new services, weakening tests, its own rules, next phase): draft PR + `needs-you` issue, then it works on something else.
+- **Class D** (main broken, secret or privacy leak, runaway): safe action, then stop and alert.
+- The class comes from fixed rules (`tools/classify-change.ts`); agents can only raise it.
+- `/autopilot` runs one cycle and is triggered by a scheduled task twice a day. **Pause it** by opening an issue with the label `autopilot-paused`.
 
 ## Keeping the crew honest
 - `/debrief` tracks, per check: findings raised, findings that were real, and bugs that escaped to you anyway. A role that finds nothing real for 4 weeks gets simplified or cut. A check that only makes things *look* checked is worse than no check.

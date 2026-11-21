@@ -13,4 +13,4 @@ description: Ship a Spooky at Home branch - version bump, changelog, push and op
    - the gate table from preflight;
    - links to the review, playtest, balance and map-check reports, with key screenshots;
    - any gate overrides or weakened tests, by name.
-5. Give the user the PR link. **Don't merge**; the user merges.
+5. **Merging follows `docs/AUTONOMY.md`.** Run `npm run -s classify`. For class A/B with green CI, squash-merge and record it in the digest. For class C, leave it as a draft PR and open a `needs-you` issue. Give the user the PR link either way.

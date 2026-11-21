@@ -20,6 +20,9 @@ Work runs through a small crew of roles, described in `docs/CREW.md`. Use the ma
 | Checks | `/review-code`, `/playtest`, `/balance`, `/map-check` | Independent checkers (subagents) |
 | Release | `/preflight` then `/release` | Release Engineer |
 | Weekly | `/debrief` | Retro |
+| Unattended | `/autopilot` | One full crew cycle, within `docs/AUTONOMY.md` |
+
+**Autonomy:** the crew merges class A/B changes itself and escalates class C/D to the user. Read `docs/AUTONOMY.md` before merging anything. Run `npm run -s classify` to get a change's class.
 
 **Rule: whoever builds a change never signs it off.** Sign-off comes from a checker subagent with fresh context (see `docs/CREW.md`).
 
