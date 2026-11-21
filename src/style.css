@@ -263,6 +263,9 @@ button:disabled { opacity: 0.5; }
 .la-sub { font-size: 14px; color: var(--muted); }
 .landing-actions button:focus-visible, .coach button:focus-visible, .menu-back:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .landing-privacy, .landing-credit { color: var(--muted); font-size: 14px; margin: 4px 0; line-height: 1.45; max-width: 560px; }
+/* Only on touch screens: the gunship wants a mouse and keyboard. */
+.landing-touch { display: none; color: var(--ink); font-size: 14px; margin: 0 0 12px; }
+@media (pointer: coarse) { .landing-touch { display: block; } }
 @media (min-width: 900px) {
   /* Inside the camera frame, like the game's own map credit. */
   .landing-credit { position: fixed; right: 40px; bottom: 30px; margin: 0; text-shadow: 0 0 3px #000, 0 0 2px #000; color: rgba(231, 239, 233, 0.8); }
@@ -281,6 +284,18 @@ button:disabled { opacity: 0.5; }
   .landing-actions { grid-template-columns: 1fr; }
   .landing-title .lt-2 { letter-spacing: 0.22em; }
   .landing-content { padding-top: 28vh; }
+}
+/* Phones: the ways in come before the three steps, so "Scout my neighbourhood" is on the first screen. */
+@media (max-width: 899px) {
+  .landing-actions, .landing-touch { order: 1; }
+  .landing-steps { order: 2; margin-top: 6px; }
+  .landing-privacy, .landing-credit { order: 3; }
+}
+/* Short phones: less sky above the title. */
+@media (max-width: 899px) and (max-height: 700px) {
+  .landing-content { padding-top: 16vh; }
+  .landing-tagline { margin-bottom: 14px; }
+  .lh-cross { display: none; } /* no room for it above the title */
 }
 @media (prefers-reduced-motion: reduce) {
   .lh-rec::before { animation: none; }
@@ -310,7 +325,10 @@ button:disabled { opacity: 0.5; }
 .coach-marker::after { content: ''; display: block; width: 34px; height: 34px; margin: 6px auto 0; border: 2px dashed currentColor; border-radius: 50%; }
 .coach-marker.edge::after { width: 0; height: 0; border: 0; border-radius: 0; border-left: 18px solid currentColor; border-top: 11px solid transparent; border-bottom: 11px solid transparent;
   margin-top: 8px; transform: rotate(var(--a, 0rad)); filter: drop-shadow(0 0 2px #000); }
-@media (prefers-reduced-motion: reduce) { .coach-bar span { transition: none; } }
+/* Crosshair inside the ring (or on the target): the ring fades so it can't hide a figure a few pixels wide. */
+.coach-marker::after { transition: opacity 0.2s; }
+.coach-marker.inside::after { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .coach-bar span, .coach-marker::after { transition: none; } }
 .coach-stay { display: none; }
 /* Paused: the coach shrinks to its title so it doesn't cover the pause card... */
 .coach.paused .coach-body, .coach.paused .coach-hint, .coach.paused .coach-bar { display: none; }
@@ -324,4 +342,10 @@ button:disabled { opacity: 0.5; }
 @media (max-width: 900px) {
   .coach { top: auto; bottom: 16px; }
   .coach[data-step=intro] { bottom: auto; }
+}
+/* A step marker on screen would sit under the card, so the card moves aside: bottom right, narrower, and clear
+   of the sensor readout below it and the DANGER CLOSE tag beside the crosshair. */
+.coach.aside { top: auto; bottom: 84px; left: auto; right: 16px; transform: none; width: min(400px, calc(100% - 32px)); }
+@media (max-width: 900px) {
+  .coach.aside { top: 16px; bottom: auto; left: 50%; right: auto; transform: translateX(-50%); width: min(460px, calc(100% - 32px)); }
 }
