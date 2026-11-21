@@ -57,13 +57,13 @@ export const BLAST_PROFILES: Record<'25' | '40' | '105', Profile> = {
     flash: { size: 22, life: 0.1 }, fireballs: 7, fbSize: [4, 18], fbLife: 1.3,
     sparks: 18, sparkSpeed: 34, sparkWidth: 0.9, debris: 9, ring: 40,
     smoke: 5, smokeSize: [9, 32], smokeLife: 9, smokeRise: 5,
-    fires: 2, fireLife: [10, 15], fireSize: [2, 3.2], tracerWidth: 1.0,
+    fires: 2, fireLife: [10, 15], fireSize: [2.5, 4], tracerWidth: 1.0,
   },
   '105': {
     flash: { size: 50, life: 0.14 }, fireballs: 10, fbSize: [10, 42], fbLife: 2.4,
     sparks: 40, sparkSpeed: 60, sparkWidth: 1.4, debris: 20, ring: 110,
     smoke: 10, smokeSize: [24, 80], smokeLife: 14, smokeRise: 10,
-    fires: 6, fireLife: [14, 20], fireSize: [2.8, 4.5], tracerWidth: 1.6,
+    fires: 6, fireLife: [14, 20], fireSize: [3.5, 6], tracerWidth: 1.6,
   },
 };
 const profileOf = (weapon: string): Profile => BLAST_PROFILES[weapon as '25'] ?? BLAST_PROFILES['25'];
@@ -171,14 +171,14 @@ export class Effects {
     // 6. Small fires (40 and 105) that burn on and cool, each trailing a thin smoke column.
     for (let i = 0; i < P.fires; i++) {
       const a = rnd() * Math.PI * 2;
-      const d = R * (0.15 + rnd() * 0.6);
+      const d = R * (0.5 + rnd() * 0.9); // burning debris scattered around the crater, not inside it
       const fx = x + Math.cos(a) * d;
       const fz = z + Math.sin(a) * d;
       const life = P.fireLife[0] + rnd() * (P.fireLife[1] - P.fireLife[0]);
       const size = P.fireSize[0] + rnd() * (P.fireSize[1] - P.fireSize[0]);
       g.spawn(REG_FIRE, {
         x: fx, y: 1.2, z: fz, t0: now + 0.2 + rnd() * 0.4, vx: 0, vy: 0, vz: 0, life,
-        size0: size, size1: size * 0.7, kind: PK.fire, seed: rnd(), r: 0.3, g: 0.3, b: 0.05, p: 1,
+        size0: size, size1: size * 0.7, kind: PK.fire, seed: rnd(), r: 0.3, g: 0.45, b: 0.05, p: 1,
       });
       for (let s = 1.5; s < life - 1; s += 3.5) {
         this.smoke.spawn(0, {

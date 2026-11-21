@@ -376,16 +376,17 @@ const additiveFragment = /* glsl */ `
       float ring = exp(-pow((r - 0.82) / (0.06 + 0.1 * t), 2.0));
       col = vCol.rgb * ring * wob * (1.0 - t) * (1.0 - t);
     } else {
-      // Lingering fire: flickering flame, cooling over its life.
-      vec2 uv = vec2(vUv.x, vUv.y * 0.5 + 0.5); // y 0 at base, 1 at tip
-      float n = tfbm(vec2(uv.x * 2.0 + vSeed * 9.0, uv.y * 1.6 - uTime * 2.2));
-      float width = 0.75 * pow(max(1.0 - uv.y, 0.0), 0.7) * (0.7 + 0.5 * n);
-      float flame = (1.0 - smoothstep(width * 0.3, width, abs(uv.x))) * (1.0 - smoothstep(0.35, 0.95, uv.y + 0.3 * (n - 0.5)));
-      flame = max(flame, 0.6 * exp(-(uv.x * uv.x * 6.0 + uv.y * uv.y * 10.0))); // glowing embers at the base
+      // Lingering fire: a flickering tongue of flame with a hot core, cooling over its life.
+      float n = tfbm(vec2(vUv.x * 1.5 + vSeed * 9.0, vUv.y * 1.2 - uTime * 2.2));
+      // Round at the base, narrowing into a tongue that licks upward with the noise.
+      vec2 q = vec2(vUv.x * (1.0 + 0.9 * max(vUv.y + 0.2, 0.0)), vUv.y + 0.3);
+      float d = length(q) + 0.45 * (n - 0.5);
+      float flame = 1.0 - smoothstep(0.25, 0.85, d);
+      float core = 1.0 - smoothstep(0.0, 0.35, d);
       float flicker = 0.75 + 0.25 * sin(uTime * 13.0 + vSeed * 30.0) * sin(uTime * 7.3 + vSeed * 11.0);
       float fadeIn = smoothstep(0.0, 0.04, t);
       float cool = pow(1.0 - t, 1.4);
-      col = vec3(vCol.r * cool, vCol.g * cool * cool, 0.0) * flame * flicker * fadeIn;
+      col = vec3(vCol.r * cool * (flame + 0.5 * core), vCol.g * cool * (flame + core), 0.0) * flicker * fadeIn;
     }
     if (col.r + col.g + col.b < 0.002) discard;
     gl_FragColor = vec4(col, 1.0);
