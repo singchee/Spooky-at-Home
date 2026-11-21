@@ -5,6 +5,7 @@ import { CATEGORY_INFO, matchMissions, reconMap, type MissionSuggestion } from '
 import { generateMission } from '../sim/missions';
 import { TacticalMap } from './tacticalMap';
 import { el } from './dom';
+import { bestKey, bests, formatBest, missionKind } from './bests';
 
 /**
  * "Recon complete": what's in the area, a tactical map, and three missions that suit it.
@@ -90,6 +91,9 @@ export function showRecon(parent: HTMLElement, map: MapData, start: { seed: numb
       el('span', `mc-type t-${s.base}`, BASE_LABEL[s.base], card);
       el('h4', undefined, s.title, card);
       el('p', undefined, s.why, card);
+      // Personal best on this map, mission and difficulty (stored in this browser only).
+      const best = bests().get(bestKey(map.name, missionKind(s.template, s.base), d));
+      el('p', best ? 'mc-best' : 'mc-best none', best ? formatBest(best) : 'Not flown yet', card);
       const go = el('button', i === 0 ? 'primary' : undefined, 'Brief me', card);
       go.addEventListener('click', () => h.onChoose(s, d, seed));
       if (s.anchor) {
