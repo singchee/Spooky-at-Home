@@ -78,3 +78,142 @@ button:disabled { opacity: 0.5; }
   .menu { align-items: flex-start; }
   .filelabel input { max-width: 100%; }
 }
+
+/* ---------- Recon, tactical map, briefing map, HUD minimap (W2) ---------- */
+:root {
+  --tm-bg: #0d1310;
+  --tm-grid: rgba(184, 255, 138, 0.07);
+  --tm-park: #183522;
+  --tm-wood: #10241a;
+  --tm-wood-dot: #23502f;
+  --tm-water: #0e2633;
+  --tm-bldg: #2f3b35;
+  --tm-road-minor: #222b26;
+  --tm-road: #3a4741;
+  --tm-road-major: #5c6b62;
+  --tm-bus: #e8b84a;
+  --tm-civic: #8fd0ff;
+  --tm-sport: var(--accent);
+  --tm-green: #7fcf8f;
+  --tm-shop: #e8c15a;
+  --tm-transport: #c9a8ff;
+  --tm-friendly: #5aa9ff;
+  --tm-cold: #7fe3ff;
+}
+/* Long screens scroll from the top instead of being clipped. */
+.menu > .card { margin: auto; }
+.tmap { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--tm-bg); font-family: var(--mono); }
+.tm-bg { fill: var(--tm-bg); }
+.tm-outside { fill: #070908; }
+.tm-grid { stroke: var(--tm-grid); fill: none; }
+.tm-gridref { fill: rgba(184, 255, 138, 0.42); font-weight: 700; }
+.tm-park { fill: var(--tm-park); }
+.tm-wood { fill: var(--tm-wood); }
+.tm-wood-dot { fill: var(--tm-wood-dot); }
+.tm-woods { stroke: #2d5c3a; stroke-width: 1; }
+.tm-water { fill: var(--tm-water); stroke: #1d4a5d; stroke-width: 1; }
+.tm-grounds { fill: none; stroke: rgba(231, 239, 233, 0.2); stroke-dasharray: 4 3; }
+.tm-road { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.tm-road-minor { stroke: var(--tm-road-minor); }
+.tm-road-street { stroke: var(--tm-road); }
+.tm-road-major { stroke: var(--tm-road-major); }
+.tm-bldg { fill: var(--tm-bldg); }
+.tm-tree { fill: #2f6a3d; }
+.tm-bus { fill: none; stroke: var(--tm-bus); stroke-linejoin: round; opacity: 0.85; }
+.tm-bus-tag rect { fill: #1b1608; stroke: var(--tm-bus); }
+.tm-bus-tag text { fill: var(--tm-bus); font-weight: 700; }
+.tm-sym rect, .tm-sym path { fill: rgba(11, 13, 12, 0.88); stroke: currentColor; }
+.tm-sym text { fill: currentColor; font-weight: 700; letter-spacing: 0.04em; }
+.tm-sym .tm-sym-rail, .tm-sym .tm-sym-cross { fill: none; }
+.tm-civic { color: var(--tm-civic); }
+.tm-sport { color: var(--tm-sport); }
+.tm-green { color: var(--tm-green); }
+.tm-shop { color: var(--tm-shop); }
+.tm-transport { color: var(--tm-transport); }
+.tm-sym.hl rect, .tm-sym.hl path { fill: currentColor; }
+.tm-sym.hl text { fill: #0b0d0c; }
+.tm-label, .tm-mlabel, .tm-wave-label { fill: var(--ink); stroke: #0b0d0c; paint-order: stroke; stroke-linejoin: round; }
+.tm-label { fill: #cfdad3; }
+.tm-mlabel { font-weight: 700; letter-spacing: 0.06em; }
+.tm-mlabel.safe, .tm-mlabel.home { fill: var(--accent); }
+.tm-mlabel.hostile, .tm-wave-label { fill: #ff8a7f; font-weight: 700; }
+.tm-mlabel.friendly { fill: var(--tm-friendly); }
+.tm-mlabel.orbit { fill: var(--muted); }
+.tm-hl-outline { fill: rgba(255, 255, 255, 0.06); stroke: #fff; filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.6)); }
+.tm-anchor { fill: rgba(184, 255, 138, 0.06); stroke: var(--accent); }
+.tm-safehouse { fill: rgba(184, 255, 138, 0.35); stroke: var(--accent); }
+.tm-home { fill: var(--accent); stroke: #0b0d0c; }
+.tm-route { fill: none; stroke: var(--accent); stroke-linecap: round; stroke-linejoin: round; }
+.tm-route-casing { fill: none; stroke: #0b0d0c; stroke-linecap: round; stroke-linejoin: round; opacity: 0.9; }
+.tm-ambush { fill: none; stroke: rgba(255, 107, 94, 0.09); stroke-linecap: round; stroke-linejoin: round; }
+.tm-horde { fill: rgba(255, 107, 94, 0.2); stroke: var(--danger); }
+.tm-coldring { fill: none; stroke: var(--tm-cold); }
+.tm-hostile { fill: var(--danger); stroke: #0b0d0c; }
+.tm-friendly { fill: var(--tm-friendly); stroke: #0b0d0c; }
+.tm-wavezone { stroke: rgba(255, 107, 94, 0.35); stroke-width: 1; }
+.tm-hatch { stroke: rgba(255, 107, 94, 0.16); }
+.tm-wave { fill: none; stroke: var(--danger); stroke-linecap: round; }
+.tm-wave-head { fill: var(--danger); }
+.tm-orbit { fill: none; stroke: rgba(231, 239, 233, 0.35); }
+.tm-orbitmark { fill: none; stroke: var(--ink); }
+.tm-north { fill: var(--ink); }
+.tm-furn-text { fill: var(--muted); font-weight: 700; }
+.tm-scale { fill: none; stroke: var(--muted); }
+.tm-aim { fill: none; stroke: #fff; }
+.tm-aircraft { fill: var(--accent); stroke: #0b0d0c; stroke-width: 1.5; }
+.tmap.compact { border-radius: 4px; }
+.tmap.compact .tm-ambush { stroke: rgba(255, 107, 94, 0.14); }
+
+.card.wide.recon { max-width: 1120px; }
+.recon h2 { margin-bottom: 4px; }
+.recon-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 20px; align-items: start; margin-top: 8px; }
+.recon-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.recon-list li { display: flex; gap: 10px; align-items: flex-start; }
+.recon-code { flex: 0 0 auto; min-width: 48px; text-align: center; font-size: 14px; font-weight: 700; border: 1px solid currentColor; border-radius: 4px; padding: 1px 4px; }
+.recon-code.fam-civic { color: var(--tm-civic); }
+.recon-code.fam-sport { color: var(--tm-sport); }
+.recon-code.fam-green { color: var(--tm-green); border-radius: 10px; }
+.recon-code.fam-shop { color: var(--tm-shop); }
+.recon-code.fam-transport { color: var(--tm-transport); }
+.recon-text { display: flex; flex-direction: column; min-width: 0; }
+.recon-count { font-weight: 700; }
+.recon-names { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+.recon-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.mission-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255, 255, 255, 0.025); transition: border-color 0.15s; }
+.mission-card:hover, .mission-card:focus-within { border-color: var(--accent); }
+.mission-card h4 { margin: 0; font-size: 16px; line-height: 1.3; overflow-wrap: anywhere; }
+.mission-card p { margin: 0; color: var(--muted); font-size: 14px; flex: 1; }
+.mission-card button { align-self: stretch; }
+.mc-type { font-size: 14px; font-weight: 700; letter-spacing: 0.16em; }
+.mc-type.t-clear { color: #ff8a7f; }
+.mc-type.t-escort { color: var(--accent); }
+.mc-type.t-defend { color: var(--tm-civic); }
+
+.card.briefing { max-width: 1040px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); column-gap: 24px; align-items: start; }
+.card.briefing > * { grid-column: 1; }
+.card.briefing > .briefing-map { grid-column: 2; grid-row: 1 / span 30; }
+.card.briefing > button { justify-self: start; }
+.tmap-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--muted); font-size: 14px; }
+.tl-item { display: inline-flex; align-items: center; gap: 6px; }
+.tl-key { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+.tl-key.safe { background: rgba(184, 255, 138, 0.35); border: 1.5px solid var(--accent); }
+.tl-key.home { width: 9px; height: 9px; background: var(--accent); transform: rotate(45deg); border-radius: 0; }
+.tl-key.route { height: 3px; background: repeating-linear-gradient(90deg, var(--accent) 0 5px, transparent 5px 8px); }
+.tl-key.hostile { width: 12px; height: 12px; border-radius: 50%; background: rgba(255, 107, 94, 0.3); border: 1.5px solid var(--danger); }
+.tl-key.cold { width: 12px; height: 12px; border-radius: 50%; border: 1.5px dashed var(--tm-cold); }
+.tl-key.wave { height: 3px; background: var(--danger); }
+.tl-key.friendly { width: 9px; height: 9px; border-radius: 50%; background: var(--tm-friendly); }
+.tl-key.orbit { width: 12px; height: 12px; border-radius: 50%; border: 1.5px dashed rgba(231, 239, 233, 0.6); }
+.tl-key.bus { height: 3px; background: repeating-linear-gradient(90deg, var(--tm-bus) 0 5px, transparent 5px 8px); }
+
+.hud-minimap { position: absolute; left: 16px; top: 116px; width: 196px; padding: 4px; background: rgba(0, 0, 0, 0.62); border-radius: 4px; }
+.hud-minimap .tmap { opacity: 0.94; border-color: rgba(231, 239, 233, 0.3); }
+
+@media (max-width: 900px) {
+  .recon-grid, .recon-cards { grid-template-columns: minmax(0, 1fr); }
+  .card.briefing { display: block; }
+  .card.briefing > .briefing-map { margin-bottom: 12px; }
+}
+@media (max-width: 640px) {
+  .hud-minimap { width: 120px; top: 108px; }
+}

@@ -1,9 +1,12 @@
 import type { MapData, V2 } from '../map/types';
+import { FEATURE_CATEGORIES } from '../map/types';
 import { makeSampleTown } from '../map/sample';
 import { fetchOverpass, geocode, parseOverpass, type OverpassJson } from '../map/overpass';
 import { centroid } from '../map/geom';
 import type { MissionType } from '../sim/missions';
+import type { TemplateId } from '../map/recon';
 import { el } from './dom';
+import { showRecon } from './recon';
 
 /** The start screen: pick a map (sample town, an address, or a saved file) and a mission. */
 export interface MenuChoice {
@@ -11,6 +14,9 @@ export interface MenuChoice {
   type: MissionType | 'auto';
   difficulty: number;
   seed: number;
+  /** Set when the mission was chosen on the recon screen. */
+  template?: TemplateId;
+  anchor?: string;
 }
 
 const HALF = 600;
@@ -53,10 +59,32 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   const start = el('button', 'primary big', 'Brief me', card);
   el('p', 'attrib', 'Map data © OpenStreetMap contributors (ODbL) when a real place is used.', card);
 
+  const seedValue = () => Math.max(1, Math.floor(Number(seed.value) || 1));
+  // Recon screen: shown after a map loads. "Custom mission" and "Change map" come back here.
+  let closeRecon: (() => void) | null = null;
+  const backToMenu = (focus?: HTMLElement) => {
+    closeRecon?.();
+    closeRecon = null;
+    card.style.display = '';
+    focus?.focus();
+  };
+  const openRecon = (m: MapData) => {
+    closeRecon?.();
+    card.style.display = 'none';
+    closeRecon = showRecon(root, m, { seed: seedValue(), difficulty: Number(diff.value) }, {
+      onChoose: (s, d, sd) => onStart({ map: m, type: s.base, template: s.template, anchor: s.anchor?.id, difficulty: d, seed: sd }),
+      onCustom: () => backToMenu(type),
+      onBack: () => backToMenu(q),
+    });
+    root.scrollTop = 0;
+  };
   const setMap = (m: MapData) => {
     map = m;
     status.textContent = describe(m);
+    openRecon(m);
   };
+  // Back from a recon mission: return to the recon screen for the same map.
+  if (map && last?.template) openRecon(map);
   sampleBtn.addEventListener('click', () => setMap(makeSampleTown()));
   let busy = false;
   const search = async () => {
@@ -96,7 +124,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
   start.addEventListener('click', () => {
-    onStart({ map: map ?? makeSampleTown(), type: type.value as MenuChoice['type'], difficulty: Number(diff.value), seed: Math.max(1, Math.floor(Number(seed.value) || 1)) });
+    onStart({ map: map ?? makeSampleTown(), type: type.value as MenuChoice['type'], difficulty: Number(diff.value), seed: seedValue() });
   });
   return () => root.remove();
 }
@@ -140,9 +168,27 @@ export function loadMapFile(data: unknown, filename: string): MapData {
     const areas = (d.areas ?? []).filter((a) => okPts(a?.pts, 3));
     const pois = (d.pois ?? []).filter((p) => p && Number.isFinite(p.p?.x) && Number.isFinite(p.p?.z));
     if (!roads.length) throw new Error('no usable roads');
+    // Recon data (phase 2) is optional: older files simply don't have it.
+    const okP = (p: unknown) => !!p && Number.isFinite((p as V2).x) && Number.isFinite((p as V2).z);
+    const features = Array.isArray(d.features)
+      ? d.features
+          .filter((f) => f && typeof f.id === 'string' && FEATURE_CATEGORIES.includes(f.category) && okP(f.p))
+          .map((f) => ({ id: f.id, category: f.category, p: f.p, ...(typeof f.name === 'string' ? { name: f.name } : {}), ...(okPts(f.pts, 3) ? { pts: f.pts } : {}) }))
+      : undefined;
+    const busRoutes = Array.isArray(d.busRoutes)
+      ? d.busRoutes
+          .filter((r) => r && typeof r.id === 'string' && Array.isArray(r.lines))
+          .map((r) => ({ id: r.id, ref: typeof r.ref === 'string' ? r.ref : undefined, name: typeof r.name === 'string' ? r.name : undefined, lines: r.lines.filter((l) => okPts(l, 2)) }))
+          .filter((r) => r.lines.length)
+      : undefined;
+    const pointsOf = (a: unknown) => (Array.isArray(a) ? (a.filter(okP) as V2[]) : undefined);
     // The credit is fixed: a file can't remove or change it.
     const sample = d.attribution === 'Procedurally generated sample town';
-    return trim({ name: String(d.name ?? filename).slice(0, 80), half: d.half, buildings, roads, areas, pois, attribution: sample ? d.attribution! : 'Map data © OpenStreetMap contributors (ODbL)' });
+    return trim({
+      name: String(d.name ?? filename).slice(0, 80), half: d.half, buildings, roads, areas, pois, attribution: sample ? d.attribution! : 'Map data © OpenStreetMap contributors (ODbL)',
+      ...(features ? { features } : {}), ...(busRoutes ? { busRoutes } : {}),
+      ...(pointsOf(d.trees) ? { trees: pointsOf(d.trees) } : {}), ...(pointsOf(d.lamps) ? { lamps: pointsOf(d.lamps) } : {}),
+    });
   }
   if (Array.isArray(d.elements)) {
     let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
