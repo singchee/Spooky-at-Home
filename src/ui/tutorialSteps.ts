@@ -27,7 +27,7 @@ export type TutorialInput =
   | { type: 'tick'; dt: number };
 
 /** How far the aim must travel to finish "look around" (metres on the ground). */
-export const AIM_METRES = 120;
+export const AIM_METRES = 90;
 /** 25 mm rounds to fire (one second of trigger at 12 rounds a second). */
 export const ROUNDS_25 = 12;
 /** Seconds the crosshair must rest on the cold one / the friendlies. */
@@ -173,7 +173,7 @@ export const STEP_TEXT: Record<StepId, { title: string; body: string }> = {
   },
   aim: {
     title: 'Look around',
-    body: 'Click the picture to take the controls, then move the mouse to slew the camera. WASD or the arrow keys nudge it too. Find the warm figures near the marker.',
+    body: 'Move the mouse to slew the camera (click the picture if it doesn\'t respond). WASD or the arrow keys nudge it too. Find the warm figures by the marker.',
   },
   fire25: {
     title: 'Fire the 25 mm',
