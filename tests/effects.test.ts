@@ -8,8 +8,13 @@ describe('Effects', () => {
       fx.fire('25', { x: 0, y: 1500, z: 1000 }, { x: i, z: 0 }, 2, i * 0.05);
       fx.impact(i % 3 === 0 ? '105' : '25', i, 0, i * 0.05);
     }
-    fx.update(20, 1 / 60);
-    expect(fx.drawObjects).toBe(3);
+    fx.update(19.9, 1 / 60);
+    const s = fx.stats;
+    expect(s.objects).toBe(3);
+    expect(s.craters).toBe(Effects.LIMITS.craters); // 400 impacts, capped at the limit
+    expect(s.tracers).toBeGreaterThan(0);
+    expect(s.tracers).toBeLessThanOrEqual(Effects.LIMITS.tracers);
+    expect(s.blasts).toBeLessThanOrEqual(Effects.LIMITS.blasts);
     fx.dispose();
   });
 });

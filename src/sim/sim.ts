@@ -322,7 +322,10 @@ export class Sim {
         const n = g.nodes[i];
         if (Math.abs(n.x) > lim || Math.abs(n.z) > lim) continue;
         const d = dist(n, ref);
-        if (d >= w.minDist && d <= w.maxDist && active.every((s) => dist(n, s) >= MIN_SPAWN_GAP)) cands.push(i);
+        if (d < w.minDist || d > w.maxDist || !active.every((s) => dist(n, s) >= MIN_SPAWN_GAP)) continue;
+        // In defend, only spawn where zombies can actually walk to the safehouse (not across a river).
+        if (this.safeField && this.grid.fieldAt(this.safeField, n.x, n.z) <= 0) continue;
+        cands.push(i);
       }
     }
     if (!cands.length) return;

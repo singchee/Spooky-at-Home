@@ -63,10 +63,11 @@ export class Effects {
     if (weapon === '105') this.shake = Math.max(this.shake, 0.25);
   }
 
-  /** Number of objects drawn (for tests): always 3, however many effects are live. */
-  get drawObjects(): number {
-    return this.group.children.length;
+  /** For tests: objects drawn and live instances per kind (capped, so draw calls stay flat). */
+  get stats() {
+    return { objects: this.group.children.length, tracers: this.tracerMesh.count, blasts: this.blastMesh.count, craters: this.craterMesh.count };
   }
+  static readonly LIMITS = { tracers: MAX_TRACERS, blasts: MAX_BLASTS, craters: MAX_CRATERS };
 
   update(now: number, dt: number): void {
     this.tracers = this.tracers.filter((t) => now - t.t0 < t.tof);

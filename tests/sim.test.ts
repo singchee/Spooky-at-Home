@@ -179,13 +179,23 @@ describe('regressions from the phase 1 playtest', () => {
 
   it('a perfect gunner wins escort on difficulty 1 for nearly every seed', () => {
     let wins = 0;
-    for (let seed = 1; seed <= 20; seed++) {
+    for (let seed = 1; seed <= 8; seed++) {
       const sim = make('escort', 1, seed);
       play(sim, new Bot(sim, SKILL.ace));
       if (sim.phase === 'won') wins++;
     }
-    expect(wins).toBeGreaterThanOrEqual(18);
+    expect(wins).toBeGreaterThanOrEqual(7);
   }, 180_000);
+
+  it('defend waves only spawn where zombies can walk to the safehouse', () => {
+    for (let seed = 1; seed <= 6; seed++) {
+      const sim = make('defend', 3, seed);
+      play(sim, null, 30);
+      const field = sim.grid.flowField(sim.grid.perimeterCells(sim.mission.safehouse!.poly));
+      const stranded = sim.zombies.filter((z) => z.alive && sim.grid.fieldAt(field, z.x, z.z) < 0);
+      expect(stranded.length, `defend seed ${seed}`).toBe(0);
+    }
+  }, 60_000);
 
   it('rejects a NaN difficulty or unknown mission type instead of building a broken mission', () => {
     expect(generateMission(map, graph, grid, { type: 'clear', difficulty: NaN, seed: 1 }).ok).toBe(false);

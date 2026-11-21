@@ -268,7 +268,10 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
   // The waves must be able to reach the building, or the mission can't be lost.
   const perimeter = grid.perimeterCells(safehouse.poly);
   const field = grid.flowField(perimeter);
-  const reachableSpawns = roadNodesWithin(g, map, 0.95).filter((i) => grid.fieldAt(field, g.nodes[i].x, g.nodes[i].z) > 0);
+  const reachableSpawns = roadNodesWithin(g, map, 0.95).filter((i) => {
+    const r = dist(g.nodes[i], safehouse.centre);
+    return r >= 180 && r <= 340 && grid.fieldAt(field, g.nodes[i].x, g.nodes[i].z) > 0;
+  });
   if (!perimeter.length || reachableSpawns.length < 5) {
     return { ok: false, reason: `Zombies can't reach ${safehouse.name} on foot, so it can't be defended. Try another mission type or seed.` };
   }
