@@ -212,10 +212,18 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
     // Step marker.
     const mk = MARKS[steps.step];
     const p = mk ? game.screenPos(layout[mk.at] as V2) : null;
-    marker.style.display = p?.visible ? 'block' : 'none';
+    marker.style.display = p ? 'block' : 'none';
     if (mk && p) {
-      marker.textContent = mk.label;
-      marker.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
+      // Off screen: pin the marker to the edge, with an arrow pointing the way.
+      const w = parent.clientWidth || innerWidth;
+      const h = parent.clientHeight || innerHeight;
+      const x = Math.max(70, Math.min(w - 70, p.x));
+      const y = Math.max(70, Math.min(h - 40, p.y));
+      const edge = !p.visible || x !== p.x || y !== p.y;
+      marker.classList.toggle('edge', edge);
+      if (edge) marker.style.setProperty('--a', `${Math.atan2(p.y - h / 2, p.x - w / 2).toFixed(2)}rad`);
+      if (marker.textContent !== mk.label) marker.textContent = mk.label;
+      marker.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
     }
     draw();
   };
