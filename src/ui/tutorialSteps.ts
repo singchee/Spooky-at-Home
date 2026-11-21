@@ -38,8 +38,8 @@ export const DANGER_TIME = 1;
 /** Seconds on thermal with the crosshair on the friendlies, looking at their ID panel. */
 export const PANEL_TIME = 1;
 /**
- * The widest view (degrees) that counts as a "narrow lens". Only the 25 mm zoomed in (2.5 degrees) is
- * this narrow: at the 105's 22 degrees, a zombie or a strobe is a pixel or two across.
+ * The widest view (degrees, at the game's LENS_RANGE) that counts as a "narrow lens": the 25 mm (1.6
+ * degrees) and 40 mm (2.2) lenses, zoomed or not. At the 105's 6 degrees a strobe is only a few pixels across.
  */
 export const NARROW_FOV = 3;
 /**

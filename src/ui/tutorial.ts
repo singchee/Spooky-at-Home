@@ -6,7 +6,7 @@ import { dist } from '../map/geom';
 import { Sim } from '../sim/sim';
 import { weaponById } from '../sim/weapons';
 import { mulberry32 } from '../util/rng';
-import { Game, type GameAction } from '../game/game';
+import { Game, LENS_RANGE, type GameAction } from '../game/game';
 import { STEP_TEXT, TutorialSteps, planLayout, trainingMission, type StepId, type TrainingLayout } from './tutorialSteps';
 import { el } from './dom';
 
@@ -323,8 +323,9 @@ const markerBox = (x: number, y: number): Rect => ({ l: x - 60, t: y - MARKER_AB
 const overlaps = (a: Rect, b: Rect, pad: number): boolean => a.l < b.r + pad && a.r > b.l - pad && a.t < b.b + pad && a.b > b.t - pad;
 
 /**
- * The camera's field of view in degrees, measured from the picture itself: how many pixels a 10 m stretch
- * of ground across the line of sight covers at the aim point. (The game keeps its zoom state private.)
+ * The camera's lens in degrees (at LENS_RANGE, as guns quote it), measured from the picture itself: how many
+ * pixels a 10 m stretch of ground across the line of sight covers at the aim point. (The game keeps its zoom
+ * state private.)
  */
 function lensFov(game: Game, sim: Sim, aim: V2): number {
   const ac = sim.aircraft();
@@ -339,6 +340,7 @@ function lensFov(game: Game, sim: Sim, aim: V2): number {
   const px = Math.hypot(b.x - a.x, b.y - a.y);
   const h = game.renderer.domElement.clientHeight;
   if (!px || !h) return 99;
-  const range = Math.hypot(dx, ac.y, dz);
-  return (2 * Math.atan((10 * h) / (2 * range * px)) * 180) / Math.PI;
+  // Lenses are quoted at LENS_RANGE: the game widens or narrows the angle with range so the view covers
+  // the same ground, so measure the ground covered and convert at that range.
+  return (2 * Math.atan((10 * h) / (2 * LENS_RANGE * px)) * 180) / Math.PI;
 }

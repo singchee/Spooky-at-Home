@@ -2,7 +2,10 @@
 export interface WeaponDef {
   id: '25' | '40' | '105';
   name: string;
-  /** Camera field of view, degrees. */
+  /**
+   * The gun camera's own lens (vertical field of view, degrees, at 1.8 km slant range), before zoom.
+   * Tight enough that a person reads at 25-40 px on a 1080 px screen with the 25 and 40 (docs/STYLE.md).
+   */
   fov: number;
   /** Minimum time between shots. */
   interval: number;
@@ -19,9 +22,9 @@ export interface WeaponDef {
 }
 
 export const WEAPONS: readonly WeaponDef[] = [
-  { id: '25', name: '25 MM', fov: 5, interval: 1 / 12, magazine: 60, reload: 3, speed: 1100, radius: 3, spread: 1.2, washout: 0.012 },
-  { id: '40', name: '40 MM', fov: 10, interval: 0.4, magazine: 8, reload: 3.5, speed: 900, radius: 7, spread: 2, washout: 0.06 },
-  { id: '105', name: '105 MM', fov: 22, interval: 0, magazine: 1, reload: 4.5, speed: 500, radius: 16, spread: 3, washout: 0.35 },
+  { id: '25', name: '25 MM', fov: 1.6, interval: 1 / 12, magazine: 60, reload: 3, speed: 1100, radius: 3, spread: 1.2, washout: 0.012 },
+  { id: '40', name: '40 MM', fov: 2.2, interval: 0.4, magazine: 8, reload: 3.5, speed: 900, radius: 7, spread: 2, washout: 0.06 },
+  { id: '105', name: '105 MM', fov: 6, interval: 0, magazine: 1, reload: 4.5, speed: 500, radius: 16, spread: 3, washout: 0.35 },
 ];
 
 /** A shell kills everything within `radius`, and half the time out to this multiple of it (Sim.updateShells). */
