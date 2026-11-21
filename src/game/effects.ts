@@ -34,7 +34,7 @@ export class Effects {
     mesh.position.set(x, 1, z);
     this.group.add(mesh);
     this.blasts.push({ mesh, t0: now, r: w.radius * 0.8 });
-    const cmat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.95, 0.03, 0) });
+    const cmat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.58, 0.03, 0) });
     const crater = new THREE.Mesh(this.disc, cmat);
     crater.scale.setScalar(Math.max(1.2, w.radius * 0.45));
     crater.position.set(x, 1.4 + (this.craters.length % 10) * 0.02, z);
@@ -72,7 +72,8 @@ export class Effects {
     });
     for (const c of this.craters) {
       const cool = Math.min(1, (now - c.t0) / 25);
-      c.mat.color.setRGB(0.95 - cool * 0.7, 0.03, 0);
+      // Hot but below live-zombie white, then cooling to ground temperature.
+      c.mat.color.setRGB(0.58 - cool * 0.36, 0.03, 0);
     }
     // Ease washout toward its target (≈0.15 s rise), and let the target decay.
     this.washout += (this.washTarget - this.washout) * Math.min(1, dt * 7);

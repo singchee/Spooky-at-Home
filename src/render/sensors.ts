@@ -48,7 +48,7 @@ export const SensorShader = {
         l += n * 0.15;
         outc = vec3(0.3, 1.0, 0.4) * l * vig;
       }
-      outc = mix(outc, vec3(0.35 + n * 0.6), blank);
+      outc = mix(outc, vec3(0.3 + n * 0.25), blank);
       gl_FragColor = vec4(clamp(outc, 0.0, 1.0), 1.0);
     }
   `,

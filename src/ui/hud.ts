@@ -70,7 +70,7 @@ export class Hud {
     if (m.type === 'escort') obj.push(`HOME ${s.survivorsHome}/${s.survivorsTotal} (NEED ${s.needHome})`, `MOVING ${s.survivorsAlive}`);
     if (m.type === 'defend') obj.push(`SAFEHOUSE ${Math.round(s.integrity * 100)}%`);
     if (m.type === 'clear' && s.survivorsTotal) obj.push(`FRIENDLIES ${s.survivorsAlive}`);
-    if (s.coldAlive > 0) obj.push(`COLD-BLOODED ${s.coldAlive} (V: NIGHT VISION)`);
+    if (s.coldAlive > 0) obj.push(`COLD-BLOODED ${s.coldAlive}${sensor === 'night' ? '' : ' (V: NIGHT VISION)'}`);
     obj.push(`FRIENDLY FIRE ${s.friendlyHits}/${m.friendlyFireLimit}`);
     this.objective.replaceChildren(...obj.map((o) => el('div', undefined, o)));
     // Radio

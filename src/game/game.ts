@@ -52,6 +52,7 @@ export class Game {
   private polarity = 0;
   /** Displayed polarity eases toward the chosen one over ~0.25 s, so H never makes a hard full-screen flip. */
   private polarityShown = 0;
+  private lastFlip = -1;
   private zoom = false;
   private switchLeft = 0;
   private firing = false;
@@ -226,7 +227,11 @@ export class Game {
       if (k === '1' || k === '2' || k === '3') this.weapon = WEAPONS[Number(k) - 1].id;
       if (k === 'q') this.weapon = WEAPONS[(WEAPONS.findIndex((w) => w.id === this.weapon) + 1) % WEAPONS.length].id;
       if (k === 'v' && this.switchLeft <= 0) this.setSensor(this.sensor === 'thermal' ? 'night' : 'thermal');
-      if (k === 'h') this.polarity = 1 - this.polarity;
+      // At most one white/black-hot flip per 0.35 s, so rapid tapping stays under 3 flashes a second.
+      if (k === 'h' && this.clock - this.lastFlip >= 0.35) {
+        this.polarity = 1 - this.polarity;
+        this.lastFlip = this.clock;
+      }
       if (k === 'z') this.zoom = !this.zoom;
     });
     this.on(window, 'keyup', (e) => this.keys.delete((e as KeyboardEvent).key.toLowerCase()));
@@ -343,7 +348,8 @@ export class Game {
 
   private radio(text: string, alarm = false): void {
     this.hud.say(text, this.clock, alarm);
-    this.sfx.radio();
+    if (alarm) this.sfx.alarm();
+    else this.sfx.radio();
   }
 
   private render(dt: number): void {
@@ -375,7 +381,8 @@ export class Game {
     this.polarityShown += Math.sign(this.polarity - this.polarityShown) * Math.min(Math.abs(this.polarity - this.polarityShown), dt * 4);
     u.polarity.value = this.polarityShown;
     u.washout.value = this.effects.washout;
-    u.blank.value = this.switchLeft > 0 ? Math.min(1, this.switchLeft / SWITCH_TIME + 0.4) : 0;
+    // Switch static fades out smoothly instead of cutting off.
+    u.blank.value = Math.min(1, (this.switchLeft / SWITCH_TIME) * 1.6);
     this.renderer.info.reset();
     this.composer.render();
 

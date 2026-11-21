@@ -64,7 +64,7 @@ export class AgentsView {
         this.m.compose(this.v.set(z.x, 0.45, z.z), this.q, this.s.set(1, 1, 1));
         const cool = Math.min(1, (sim.t - z.diedAt) / 40);
         // Fresh bodies start noticeably cooler than live zombies, then fade to ground temperature.
-        this.c.setRGB(z.cold ? 0.2 : 0.7 - cool * 0.45, 0.2, 0);
+        this.c.setRGB(z.cold ? 0.2 : 0.5 - cool * 0.27, 0.2, 0);
       }
       this.zMesh.setMatrixAt(k, this.m);
       this.zMesh.setColorAt(k, this.c);
@@ -93,7 +93,7 @@ export class AgentsView {
         this.m.compose(this.v.set(s.x, 0.45, s.z), this.q, this.s.set(1, 1, 1));
         this.sMesh.setMatrixAt(j, this.m);
         const cool = Math.min(1, (sim.t - s.diedAt) / 40);
-        this.sMesh.setColorAt(j, this.c.setRGB(0.85 - cool * 0.55, 0.22, 0));
+        this.sMesh.setColorAt(j, this.c.setRGB(0.5 - cool * 0.27, 0.22, 0));
         this.m.makeScale(0, 0, 0);
         this.panel.setMatrixAt(j, this.m);
         this.strobe.setMatrixAt(j, this.m);

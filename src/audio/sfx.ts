@@ -45,6 +45,23 @@ export class Sfx {
     else this.burst(160, 1.4, 0.35);
   }
 
+  /** Distinct two-tone alarm for friendly fire. */
+  alarm(): void {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime;
+    for (const [i, f] of [[0, 880], [1, 660], [2, 880], [3, 660]]) {
+      const o = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      o.type = 'square';
+      o.frequency.value = f;
+      g.gain.setValueAtTime(0.05, t + i * 0.12);
+      g.gain.setValueAtTime(0, t + i * 0.12 + 0.11);
+      o.connect(g).connect(this.ctx.destination);
+      o.start(t + i * 0.12);
+      o.stop(t + i * 0.12 + 0.12);
+    }
+  }
+
   radio(): void {
     if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
