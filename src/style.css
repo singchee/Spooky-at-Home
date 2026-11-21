@@ -1,0 +1,64 @@
+:root {
+  --bg: #0b0d0c;
+  --panel: rgba(12, 16, 14, 0.92);
+  --ink: #e7efe9;
+  --muted: #9fb0a6;
+  --accent: #b8ff8a;
+  --danger: #ff6b5e;
+  --line: rgba(231, 239, 233, 0.22);
+  --mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--mono); font-size: 15px; overflow: hidden; }
+#app { position: fixed; inset: 0; }
+.game-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+button, select, input { font: inherit; color: var(--ink); background: #18201b; border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; min-height: 40px; }
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #0b0d0c; border-color: var(--accent); font-weight: 700; }
+button.big { width: 100%; margin-top: 16px; font-size: 17px; }
+button:disabled { opacity: 0.5; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.row input:not([type=file]) { flex: 1 1 220px; }
+.field { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
+.field input { width: 90px; }
+.filelabel { color: var(--muted); }
+.filelabel input { display: block; margin-top: 4px; }
+.menu, .overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 10; overflow: auto; }
+.overlay { background: rgba(0, 0, 0, 0.45); display: none; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 24px; max-width: 620px; width: 100%; line-height: 1.5; }
+.card.wide { max-width: 760px; }
+.card h1 { margin: 4px 0 8px; letter-spacing: 0.12em; font-size: clamp(28px, 6vw, 44px); }
+.card h2 { margin: 6px 0 12px; font-size: 20px; }
+.card h3 { margin: 20px 0 6px; color: var(--accent); font-size: 15px; }
+.card p { margin: 8px 0; }
+.card .row button { flex: 0 0 auto; }
+.card-kicker { color: var(--muted); font-size: 13px; letter-spacing: 0.14em; }
+.card.won .card-kicker { color: var(--accent); }
+.card.lost .card-kicker { color: var(--danger); }
+.intel { border-left: 3px solid var(--accent); padding-left: 10px; }
+.small, .status, .attrib { color: var(--muted); font-size: 14px; }
+.toast { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--danger); padding: 10px 14px; border-radius: 6px; z-index: 20; max-width: calc(100% - 32px); }
+.hud { position: absolute; inset: 0; pointer-events: none; z-index: 5; text-shadow: 0 0 3px #000, 0 0 2px #000; font-size: 14px; }
+.hud-weapons { position: absolute; left: 16px; top: 16px; }
+.hud-w { display: flex; gap: 12px; opacity: 0.6; padding: 2px 6px; border: 1px solid transparent; }
+.hud-w.active { opacity: 1; border-color: var(--ink); }
+.hud-wname { width: 64px; }
+.hud-mission { position: absolute; right: 16px; top: 16px; text-align: right; }
+.hud-timer { font-size: 18px; margin-bottom: 4px; }
+.hud-radio { position: absolute; left: 16px; bottom: 44px; max-width: min(560px, calc(100% - 32px)); }
+.hud-radio div { margin-top: 2px; }
+.hud-sensor { position: absolute; right: 16px; bottom: 44px; }
+.hud[data-sensor=night] { color: #c8ffd0; }
+.hud-cross { position: absolute; left: 50%; top: 50%; width: 120px; height: 120px; transform: translate(-50%, -50%); color: var(--ink); }
+.hud-cross svg { width: 100%; height: 100%; filter: drop-shadow(0 0 1px #000); }
+.hud-switching { position: absolute; left: 50%; top: 32%; transform: translateX(-50%); letter-spacing: 0.2em; display: none; }
+.hud-marker { position: absolute; left: 0; top: 0; font-size: 13px; margin: -22px 0 0 -40px; width: 80px; text-align: center; }
+.hud-marker::after { content: ''; display: block; width: 8px; height: 8px; border: 1px solid currentColor; transform: rotate(45deg); margin: 2px auto 0; }
+.hud-attrib { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); font-size: 12px; opacity: 0.75; white-space: nowrap; }
+.hud-keys { position: absolute; left: 16px; bottom: 16px; font-size: 13px; opacity: 0.7; }
+@media (max-width: 640px) {
+  .hud-keys { display: none; }
+  .hud { font-size: 13px; }
+  .hud-attrib { white-space: normal; text-align: center; width: calc(100% - 32px); }
+}

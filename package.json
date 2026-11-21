@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "classify": "node tools/classify-change.ts"
+    "classify": "node tools/classify-change.ts",
+    "playtest": "node scripts/playtest.mjs"
   },
   "dependencies": {
     "three": "^0.187.0"
