@@ -4,16 +4,17 @@ import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometr
 /**
  * Low-poly human figures animated entirely in the vertex shader.
  *
- * The figure is built once in code (torso, head, two arms, two legs, plus an ID panel and IR strobe
- * for survivors) and merged into one geometry. Every vertex knows its body part and that part's
- * joint (pivot). Each instance carries its position, heading, gait phase, animation state, time
+ * The figure is built once in code (torso, head, two arms, two legs, plus a cold ID panel for
+ * survivors) and merged into one geometry. Survivors' IR strobes are separate additive sprites
+ * (StrobeSprites, below) so they have no thermal footprint at all. Every vertex knows its body
+ * part and that part's joint (pivot). Each instance carries its position, heading, gait phase, animation state, time
  * since death, heat and a per-agent random seed. The shader swings the limbs about their joints,
  * leans and sways the torso, and tips the whole body over when it dies, so one instanced draw
  * call animates thousands of zombies with no per-frame skinning on the CPU.
  *
  * Output colours are sensor values (R heat, G visible light, B near-infrared), not display colours.
  */
-export const PART = { torso: 0, head: 1, armL: 2, armR: 3, legL: 4, legR: 5, panel: 6, strobe: 7 } as const;
+export const PART = { torso: 0, head: 1, armL: 2, armR: 3, legL: 4, legR: 5, panel: 6 } as const;
 
 /** Figures are drawn ~20% larger than life (about 2.7 m) so their poses read from the gunship. */
 export const FIGURE_SCALE = 1.2;
@@ -21,6 +22,16 @@ export const FIGURE_SCALE = 1.2;
 const HIP_Y = 1.0;
 const SHOULDER_Y = 1.76;
 const NECK_Y = 1.82;
+/**
+ * Cold ID panel: side length and height of its centre (mid-chest), metres before scaling. It is
+ * narrower than the chest (~0.6 m), so warm shoulders, head, arms and hips frame it.
+ */
+export const PANEL_SIZE = 0.34;
+export const PANEL_Y = 1.48;
+/** The panel is drawn as if this much nearer the camera, so its own body never hides it. */
+const PANEL_PULL = 0.9;
+/** Height of a survivor's IR strobe above the feet (on the head), metres before scaling. */
+export const STROBE_Y = NECK_Y + 0.55;
 
 function tagPart(geo: THREE.BufferGeometry, part: number, pivot: THREE.Vector3, limbLen: number): THREE.BufferGeometry {
   // Indexed and lean: the vertex shader does all the work, so fewer vertices = more zombies.
@@ -73,11 +84,12 @@ export function buildFigureGeometry(withSurvivorKit: boolean): THREE.BufferGeome
   }
 
   if (withSurvivorKit) {
-    // Cold ID panel worn on the head (a dark square on thermal) and an IR strobe above it.
-    const panel = new THREE.BoxGeometry(0.72, 0.08, 0.56).translate(0, NECK_Y + 0.5, 0);
-    parts.push(tagPart(panel, PART.panel, new THREE.Vector3(0, NECK_Y, 0), 0));
-    const strobe = new THREE.OctahedronGeometry(0.5, 0).translate(0, NECK_Y + 1.15, 0);
-    parts.push(tagPart(strobe, PART.strobe, new THREE.Vector3(0, NECK_Y, 0), 0));
+    // Cold ID panel: a dark square on thermal, worn mid-chest. It is a flat square that the shader
+    // turns to face the camera and draws just in front of the body, so from any heading it shows
+    // as a dark square inside the warm outline (head and shoulders above, arms beside, hips below).
+    // Its pivot is its centre.
+    const panel = new THREE.PlaneGeometry(PANEL_SIZE, PANEL_SIZE).translate(0, PANEL_Y, 0);
+    parts.push(tagPart(panel, PART.panel, new THREE.Vector3(0, PANEL_Y, 0), 0));
   }
   const merged = mergeGeometries(parts, false);
   parts.forEach((p) => p.dispose());
@@ -88,7 +100,6 @@ export function buildFigureGeometry(withSurvivorKit: boolean): THREE.BufferGeome
 const vertexShader = /* glsl */ `
   uniform float uTime;
   uniform float uKind;   // 0 zombies, 1 survivors
-  uniform float uBlink;  // survivors' IR strobe: 1 on, 0 off
   uniform float uBase;   // height of the feet above the map's zero (roads sit at 1 m)
   uniform float uScale;  // overall size: a little larger than life so figures read from 1.8 km
   attribute float aPart;
@@ -122,7 +133,8 @@ const vertexShader = /* glsl */ `
     float part = aPart;
     float isArm = eq(part, 2.0) + eq(part, 3.0);
     float isLeg = eq(part, 4.0) + eq(part, 5.0);
-    float isHeadKit = eq(part, 1.0) + step(5.5, part);
+    float isHead = eq(part, 1.0);
+    float isPanel = eq(part, 6.0);
     float side = (eq(part, 2.0) + eq(part, 4.0)) * 2.0 - 1.0; // +1 left (+x), -1 right
 
     // Death: a ~0.6 s fall, accelerating like gravity, forward or backward by seed.
@@ -155,10 +167,12 @@ const vertexShader = /* glsl */ `
     // Head: zombies loll to one side.
     mat3 rHead = rotZ(zombie * (r2 - 0.5) * 0.8) * rotX(mix(-0.1, -0.2 + 0.12 * sin(ph * 2.0), zombie));
 
-    vec3 p = position;
+    // The panel: only its centre follows the body; its corners are added facing the camera below.
+    vec3 corner = (position - aPivot) * isPanel * (1.0 - dead);
+    vec3 p = mix(position, aPivot, isPanel);
     vec3 n = normal;
     if (isArm > 0.5) { p = aPivot + rArm * (p - aPivot); n = rArm * n; }
-    if (isHeadKit > 0.5) { p = aPivot + rHead * (p - aPivot); n = rHead * n; }
+    if (isHead > 0.5) { p = aPivot + rHead * (p - aPivot); n = rHead * n; }
     if (isLeg > 0.5) { p = aPivot + rLeg * (p - aPivot); n = rLeg * n; }
     else { vec3 waist = vec3(0.0, ${HIP_Y.toFixed(2)}, 0.0); p = waist + rTorso * (p - waist); n = rTorso * n; }
     // Bob: a lurching dip on the dragged step for zombies, a light bounce for survivors.
@@ -169,7 +183,7 @@ const vertexShader = /* glsl */ `
     p = rFall * p;
     n = rFall * n;
     p.y += 0.2 * fall;
-    // A dead survivor's panel and strobe are gone: collapse them to a point.
+    // A dead survivor's panel is gone: collapse it to a point.
     if (dead > 0.5 && part > 5.5) p = vec3(0.0);
 
     // Per-agent variety: height, build and a crab-wise heading offset.
@@ -181,7 +195,12 @@ const vertexShader = /* glsl */ `
     n = normalize(rYaw * n);
 
     vec4 world = modelMatrix * vec4(iA.x + p.x, uBase + p.y, iA.y + p.z, 1.0);
-    gl_Position = projectionMatrix * viewMatrix * world;
+    vec4 mv = viewMatrix * world;
+    if (isPanel > 0.5) {
+      mv.xy += corner.xy * uScale;                                  // a square facing the camera
+      mv.xyz += normalize(-mv.xyz) * ${PANEL_PULL.toFixed(2)};       // just in front of its own body
+    }
+    gl_Position = projectionMatrix * mv;
 
     // Sensor values. Heat: core (head, torso) hottest, limbs cooling toward hands and feet.
     float limbW = isArm + isLeg > 0.5 ? 0.72 + 0.28 * aLimbT : 0.6 * eq(part, 0.0);
@@ -190,8 +209,7 @@ const vertexShader = /* glsl */ `
     float shade = 0.6 + 0.4 * clamp(n.y * 0.7 + 0.35, 0.0, 1.0);
     float vis = iC.z * shade;
     float nir = 0.0;
-    if (part > 5.5 && part < 6.5) { heat = 0.0; vis = 0.42 * shade; }          // cold ID panel
-    if (part > 6.5) { heat = 0.22; vis = 0.05 * uBlink; nir = uBlink; }         // IR strobe: night vision only
+    if (isPanel > 0.5) { heat = 0.0; vis = iC.z * 0.9; }                         // cold ID panel: thermal only
     vSig = vec3(heat, vis, nir);
   }
 `;
@@ -206,7 +224,6 @@ export function makeFigureMaterial(kind: 'zombie' | 'survivor'): THREE.ShaderMat
     uniforms: {
       uTime: { value: 0 },
       uKind: { value: kind === 'zombie' ? 0 : 1 },
-      uBlink: { value: 0 },
       uBase: { value: 1.05 },
       uScale: { value: FIGURE_SCALE },
     },
@@ -260,6 +277,80 @@ export class FigureBatch {
   /** Per figure: vertices the shader animates, and triangles drawn. */
   get cost(): { vertices: number; triangles: number } {
     return { vertices: this.geo.attributes.position.count, triangles: (this.geo.index?.count ?? this.geo.attributes.position.count) / 3 };
+  }
+
+  dispose(): void {
+    this.geo.dispose();
+    this.material.dispose();
+  }
+}
+
+/**
+ * Survivors' IR strobes: one additive point sprite each, one draw call. They write near-infrared
+ * only (R = 0 heat, G = 0 visible, B = strobe), and add rather than cover, so the thermal picture
+ * is untouched by them (the panel and warm head show through) while night vision sees the blink.
+ * Each sprite is about STROBE_M metres across, but never smaller than STROBE_MIN_PX pixels.
+ */
+const STROBE_M = 1.1;
+const STROBE_MIN_PX = 4;
+export class StrobeSprites {
+  readonly mesh: THREE.Points;
+  readonly material: THREE.ShaderMaterial;
+  /** x, y, z per strobe. */
+  readonly pos: Float32Array;
+  private geo = new THREE.BufferGeometry();
+  private attr: THREE.BufferAttribute;
+
+  constructor(readonly capacity: number) {
+    this.pos = new Float32Array(capacity * 3);
+    this.attr = new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage);
+    this.geo.setAttribute('position', this.attr);
+    this.geo.setDrawRange(0, 0);
+    this.material = new THREE.ShaderMaterial({
+      uniforms: { uBlink: { value: 0 }, uSize: { value: STROBE_M }, uMinPx: { value: STROBE_MIN_PX }, uViewH: { value: 720 } },
+      vertexShader: /* glsl */ `
+        uniform float uSize, uMinPx, uViewH;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+          // World size to pixels: projection[1][1] is 1 / tan(fov / 2); uViewH is the drawing-buffer height.
+          gl_PointSize = max(uMinPx, uSize * projectionMatrix[1][1] * uViewH * 0.5 / -mv.z);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float uBlink;
+        void main() {
+          vec2 d = gl_PointCoord - 0.5;
+          float r = dot(d, d) * 4.0;          // 0 centre, 1 at the edge
+          float a = clamp(1.0 - r, 0.0, 1.0);
+          gl_FragColor = vec4(0.0, 0.0, uBlink * a * (0.35 + 0.65 * a), 1.0);
+        }
+      `,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+    });
+    this.mesh = new THREE.Points(this.geo, this.material);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 3;
+    // Sprite size is in pixels of whatever it is drawn into (the composer's target, or the canvas).
+    const size = new THREE.Vector2();
+    this.mesh.onBeforeRender = (renderer) => {
+      const rt = renderer.getRenderTarget();
+      this.material.uniforms.uViewH.value = rt ? rt.height : renderer.getDrawingBufferSize(size).y;
+    };
+  }
+
+  get count(): number {
+    return this.geo.drawRange.count;
+  }
+
+  /** Draw the first `count` strobes from `pos`. */
+  commit(count: number): void {
+    this.geo.setDrawRange(0, count);
+    this.attr.clearUpdateRanges();
+    if (count > 0) this.attr.addUpdateRange(0, count * 3);
+    this.attr.needsUpdate = true;
   }
 
   dispose(): void {

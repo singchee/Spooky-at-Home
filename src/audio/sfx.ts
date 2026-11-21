@@ -3,11 +3,15 @@ export class Sfx {
   private ctx: AudioContext | null = null;
   private noise: AudioBuffer | null = null;
   muted = false;
+  /** Audio-clock time until which the friendly-fire alarm is sounding; radio blips wait it out. */
+  private alarmUntil = -1;
+
+  constructor(private makeContext: () => AudioContext = () => new AudioContext()) {}
 
   unlock(): void {
     if (this.ctx) return;
     try {
-      this.ctx = new AudioContext();
+      this.ctx = this.makeContext();
       const len = this.ctx.sampleRate;
       this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
       const d = this.noise.getChannelData(0);
@@ -45,10 +49,14 @@ export class Sfx {
     else this.burst(160, 1.4, 0.35);
   }
 
-  /** Distinct two-tone alarm for friendly fire. */
+  /**
+   * Distinct two-tone alarm for friendly fire (square wave, 880/660 Hz, ~0.5 s), never the radio
+   * blip. Other radio blips in the same moment are dropped so they can't mask it.
+   */
   alarm(): void {
     if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
+    this.alarmUntil = t + 0.5;
     for (const [i, f] of [[0, 880], [1, 660], [2, 880], [3, 660]]) {
       const o = this.ctx.createOscillator();
       const g = this.ctx.createGain();
@@ -62,9 +70,11 @@ export class Sfx {
     }
   }
 
+  /** Short radio blip for ordinary radio lines (a sine at 1400 Hz). Silent while the alarm sounds. */
   radio(): void {
     if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
+    if (t < this.alarmUntil) return;
     const o = this.ctx.createOscillator();
     const g = this.ctx.createGain();
     o.frequency.value = 1400;

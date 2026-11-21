@@ -25,7 +25,24 @@ export interface GameOptions {
   onMenu(): void;
   /** Optional listener for player actions and sim events (used by the tutorial). */
   onAction?(a: GameAction): void;
+  /**
+   * Reduce flicker (photosensitivity): no 105 camera kick, and the camera-switch static becomes a
+   * gentle fade. Defaults to the OS "reduce motion" preference.
+   */
+  reduceFlicker?: boolean;
 }
+
+/** Extra hooks on window.__spooky, installed only under browser automation (see the Game constructor). */
+interface TestHooks {
+  fireAt?: (weapon: string, x?: number, z?: number) => boolean;
+  aimAt?: (x: number, z: number) => void;
+  survivors?: () => V2[];
+  /** Advance exactly `dt` game seconds per rendered frame (null: real time), so a slow test machine sees every frame a 60 fps player would. */
+  fixedStep?: (dt: number | null) => void;
+}
+
+/** The OS asks for reduced motion (live: it can change while the page is open). */
+const reducedMotionQuery: MediaQueryList | null = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 
 /** What the player just did, or what the simulation just reported. */
 export type GameAction =
@@ -39,6 +56,8 @@ type Screen = 'briefing' | 'playing' | 'paused' | 'ended';
 const sharedSfx = new Sfx();
 const STEP = 1 / 60;
 const SWITCH_TIME = 0.7;
+/** Reduce flicker: the switch cover fades in over this long before the picture changes, then fades out. */
+const CALM_RISE = 0.18;
 
 export class Game {
   readonly sim: Sim;
@@ -75,6 +94,14 @@ export class Game {
   private raf = 0;
   private disposed = false;
   private listeners: [EventTarget, string, EventListener][] = [];
+  /** Reduce flicker (see GameOptions.reduceFlicker). */
+  readonly reduceFlicker: boolean;
+  /** The camera the picture shows; with reduce flicker it changes under the fade, not before it. */
+  private shownSensor: SensorId = 'thermal';
+  private camRight = new THREE.Vector3();
+  private camUp = new THREE.Vector3();
+  /** Test hook only (see TestHooks.fixedStep): seconds per frame, or null for real time. */
+  private fixedDt: number | null = null;
 
   constructor(private container: HTMLElement, private map: MapData, sim: Sim, private opts: GameOptions) {
     this.sim = sim;
@@ -104,6 +131,9 @@ export class Game {
     this.overlay = el('div', 'overlay', undefined, container);
     this.bot = opts.bot ? new Bot(sim, SKILL.human) : null;
     if (opts.sensor) this.sensor = opts.sensor;
+    this.shownSensor = this.sensor;
+    this.reduceFlicker = opts.reduceFlicker ?? !!reducedMotionQuery?.matches;
+    this.sensorPass.uniforms.calm.value = this.reduceFlicker ? 1 : 0;
     const m = sim.mission;
     this.aim = m.route ? { ...m.route[0] } : m.safehouse ? { ...m.safehouse.centre } : { ...m.orbitCentre };
 
@@ -113,6 +143,25 @@ export class Game {
     else this.showBriefing();
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.frame);
+    // Test hooks for the automated flash checks and screenshots (scripts/playtest.mjs). Only under
+    // browser automation (navigator.webdriver), so real players never get them.
+    const hooks = window.__spooky as TestHooks | undefined;
+    if (typeof navigator !== 'undefined' && navigator.webdriver && hooks) {
+      hooks.fireAt = (w, x, z) => this.fireAt(w, x === undefined || z === undefined ? this.aim : { x, z });
+      hooks.aimAt = (x, z) => {
+        this.aim = { x, z };
+      };
+      hooks.survivors = () => this.sim.survivors.filter((s) => s.alive && !s.home).map((s) => ({ x: s.x, z: s.z }));
+      hooks.fixedStep = (dt) => {
+        this.fixedDt = dt;
+      };
+    }
+  }
+
+  /** Test hook: fire `weapon` at a ground point now, if it is loaded (see the constructor). */
+  fireAt(weapon: string, p: V2): boolean {
+    if (this.disposed || this.screen !== 'playing') return false;
+    return this.sim.fire(weapon, { ...p });
   }
 
   // ---------- screens ----------
@@ -309,7 +358,7 @@ export class Game {
   private frame = (now: number): void => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.frame);
-    const dt = Math.min(0.1, (now - this.last) / 1000);
+    const dt = this.fixedDt ?? Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
     if (this.screen === 'playing') this.clock += dt;
 
@@ -404,8 +453,8 @@ export class Game {
     }
     this.camera.fov = fov;
     this.camera.position.set(ac.x, ac.y, ac.z);
-    const sh = this.effects.shake;
-    this.camera.lookAt(this.aim.x + Math.sin(this.clock * 90) * sh * 8, 0, this.aim.z + Math.cos(this.clock * 77) * sh * 8);
+    this.camera.lookAt(this.aim.x, 0, this.aim.z);
+    this.applyKick(fov);
     this.camera.updateProjectionMatrix();
 
     this.agents.update(this.sim, this.clock);
@@ -413,12 +462,11 @@ export class Game {
 
     const u = this.sensorPass.uniforms;
     u.time.value = this.clock;
-    u.mode.value = this.sensor === 'night' ? 1 : 0;
+    u.mode.value = this.pictureSensor() === 'night' ? 1 : 0;
     this.polarityShown += Math.sign(this.polarity - this.polarityShown) * Math.min(Math.abs(this.polarity - this.polarityShown), dt * 4);
     u.polarity.value = this.polarityShown;
     u.washout.value = this.effects.washout;
-    // Switch static fades out smoothly instead of cutting off.
-    u.blank.value = Math.min(1, (this.switchLeft / SWITCH_TIME) * 1.6);
+    u.blank.value = this.switchCover();
     this.renderer.info.reset();
     this.composer.render();
 
@@ -429,6 +477,46 @@ export class Game {
       this.hud.updateMinimap(ac, this.aim, this.sim.survivors.filter((s) => s.alive && !s.home));
     }
     this.hud.setMarkers(this.markers());
+  }
+
+  /**
+   * The 105's camera kick: one damped swing of at most SHAKE_MAX_PX screen pixels, converted to
+   * metres at the aim point with the current field of view and range. Off with reduced motion or
+   * reduce flicker.
+   */
+  private applyKick(fovDeg: number): void {
+    if (this.reduceFlicker || reducedMotionQuery?.matches) return;
+    const k = this.effects.shakePx(this.clock);
+    if (!k.x && !k.y) return;
+    const cam = this.camera;
+    const h = this.renderer.domElement.clientHeight || 1;
+    const range = cam.position.distanceTo(new THREE.Vector3(this.aim.x, 0, this.aim.z));
+    const mPerPx = (2 * range * Math.tan(THREE.MathUtils.degToRad(fovDeg / 2))) / h;
+    cam.updateMatrixWorld();
+    this.camRight.setFromMatrixColumn(cam.matrixWorld, 0);
+    this.camUp.setFromMatrixColumn(cam.matrixWorld, 1);
+    const t = new THREE.Vector3(this.aim.x, 0, this.aim.z)
+      .addScaledVector(this.camRight, k.x * mPerPx)
+      .addScaledVector(this.camUp, k.y * mPerPx);
+    cam.lookAt(t);
+  }
+
+  /** Which camera the picture shows this frame (with reduce flicker it changes once the fade has covered it). */
+  private pictureSensor(): SensorId {
+    if (this.switchLeft <= 0 || !this.reduceFlicker || this.switchLeft <= SWITCH_TIME - CALM_RISE) this.shownSensor = this.sensor;
+    return this.shownSensor;
+  }
+
+  /** How much the camera-switch cover hides the picture, 0-1. */
+  private switchCover(): number {
+    const left = this.switchLeft;
+    if (left <= 0) return 0;
+    // Normal: static that cuts in and fades out smoothly.
+    if (!this.reduceFlicker) return Math.min(1, (left / SWITCH_TIME) * 1.6);
+    // Reduce flicker: a flat grey that eases in, swaps the picture underneath, then eases out.
+    const ease = (x: number) => x * x * (3 - 2 * x);
+    const since = SWITCH_TIME - left;
+    return since < CALM_RISE ? ease(since / CALM_RISE) : ease(Math.min(1, left / (SWITCH_TIME - CALM_RISE)));
   }
 
   /** True when the current gun would endanger a friendly at the aim point. */
