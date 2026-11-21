@@ -163,7 +163,9 @@ describe('committed fingerprint (gate G4 across machines and versions)', () => {
   });
 });
 // 3dd039a3 (phase 3.2): waves vary within a mission (WavePlan.kinds) and the intel says how. Stripped of those two, it is still 7de5904e.
-const EXPECTED_FINGERPRINT = '3dd039a3';
+// be9b7fe7 (phase 3.8): escort routes may not pass within 50 m of a school, kindergarten or playground, so homes whose
+// shortest road passed one now have a longer, clear road (or drop out), and the seeded pick lands on a different home.
+const EXPECTED_FINGERPRINT = 'be9b7fe7';
 
 describe('regressions from the phase 1 playtest', () => {
   it('escort ambushes never spawn on top of survivors (was: 3.5% of missions lost by second 5)', () => {

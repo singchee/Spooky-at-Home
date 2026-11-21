@@ -5,8 +5,8 @@ import type { WalkGrid } from '../map/grid';
 import { hashString, mulberry32, type Rng } from '../util/rng';
 import { nearChildPlace } from '../map/recon';
 import { placeLabel } from './missions';
-import { FIRST_WAVE, WAVE_KINDS, type Mission, type WaveKind } from './missions';
-import { WEAPONS, weaponById, type WeaponDef } from './weapons';
+import { CHILD_FIRE_CLEARANCE, FIRST_WAVE, HORDE_SPREAD, HORDE_WANDER, WAVE_KINDS, type Mission, type WaveKind } from './missions';
+import { KILL_REACH, MAX_KILL_REACH, WEAPONS, weaponById, type WeaponDef } from './weapons';
 
 /**
  * The game rules with no graphics. Deterministic: same mission + same inputs at the
@@ -90,8 +90,13 @@ export interface SimState {
 export const ORBIT = { radius: 1000, altitude: 1500, period: 120 };
 /** New zombies never appear closer than this to a survivor (metres). Spawn points sit 12 m wide, so this leaves ~60 m. */
 export const MIN_SPAWN_GAP = 75;
-/** Waves never spawn this close to a school, kindergarten or playground (guardrail, PLAN §9). */
-export const WAVE_CHILD_GAP = 60;
+/** A wave's zombies appear within this many metres of its spawn point. */
+export const WAVE_SPREAD = 12;
+/**
+ * Waves never spawn this close to a school, kindergarten or playground (guardrail, PLAN §9): far enough that
+ * a 105 round on the freshly spawned wave still lands CHILD_FIRE_CLEARANCE clear of the grounds (12 + 24 + 30 = 66 m).
+ */
+export const WAVE_CHILD_GAP = WAVE_SPREAD + MAX_KILL_REACH + CHILD_FIRE_CLEARANCE;
 
 export class Sim {
   readonly mission: Mission;
@@ -141,7 +146,7 @@ export class Sim {
     mission.hordes.forEach((h, k) => {
       for (let i = 0; i < h.count; i++) {
         const a = this.rng() * Math.PI * 2;
-        const r = Math.sqrt(this.rng()) * 22;
+        const r = Math.sqrt(this.rng()) * HORDE_SPREAD;
         this.spawnZombie(grid.nearestFree({ x: h.centre.x + Math.cos(a) * r, z: h.centre.z + Math.sin(a) * r }), i < h.cold, anchors[k]);
       }
     });
@@ -278,7 +283,7 @@ export class Sim {
       for (const z of this.zombies) {
         if (!z.alive) continue;
         const d = Math.hypot(z.x - sh.to.x, z.z - sh.to.z);
-        if (d < r || (d < r * 1.5 && this.rng() < 0.5)) {
+        if (d < r || (d < r * KILL_REACH && this.rng() < 0.5)) {
           z.alive = false;
           z.diedAt = this.t;
           kills++;
@@ -288,7 +293,7 @@ export class Sim {
       for (const s of this.survivors) {
         if (!s.alive || s.home) continue;
         const d = Math.hypot(s.x - sh.to.x, s.z - sh.to.z);
-        if (d < r || (d < r * 1.5 && this.rng() < 0.5)) {
+        if (d < r || (d < r * KILL_REACH && this.rng() < 0.5)) {
           s.alive = false;
           s.diedAt = this.t;
           this.friendlyHits++;
@@ -398,7 +403,7 @@ export class Sim {
     const cold = Math.round(size * (k.cold ?? w.coldShare));
     for (let i = 0; i < size; i++) {
       const a = this.rng() * Math.PI * 2;
-      const r = Math.sqrt(this.rng()) * 12;
+      const r = Math.sqrt(this.rng()) * WAVE_SPREAD;
       this.spawnZombie(this.grid.nearestFree({ x: at.x + Math.cos(a) * r, z: at.z + Math.sin(a) * r }), i < cold, null, k.speed);
     }
     this.waveIndex++;
@@ -456,7 +461,7 @@ export class Sim {
         // Mill around the horde's gathering point.
         if (!z.goal || Math.hypot(z.goal.x - z.x, z.goal.z - z.z) < 2) {
           const a = this.rng() * Math.PI * 2;
-          const r = this.rng() * 26;
+          const r = this.rng() * HORDE_WANDER;
           z.goal = { x: z.home.x + Math.cos(a) * r, z: z.home.z + Math.sin(a) * r };
         }
         const d = Math.hypot(z.goal.x - z.x, z.goal.z - z.z) || 1;

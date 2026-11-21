@@ -24,4 +24,9 @@ export const WEAPONS: readonly WeaponDef[] = [
   { id: '105', name: '105 MM', fov: 22, interval: 0, magazine: 1, reload: 4.5, speed: 500, radius: 16, spread: 3, washout: 0.35 },
 ];
 
+/** A shell kills everything within `radius`, and half the time out to this multiple of it (Sim.updateShells). */
+export const KILL_REACH = 1.5;
+/** The farthest any shell can kill from where it lands (metres): the 105's lethal radius x KILL_REACH. */
+export const MAX_KILL_REACH = Math.max(...WEAPONS.map((w) => w.radius * KILL_REACH));
+
 export const weaponById = (id: string): WeaponDef => WEAPONS.find((w) => w.id === id) ?? WEAPONS[0];
