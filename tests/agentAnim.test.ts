@@ -103,7 +103,7 @@ describe('AgentsView', () => {
     const sim = { zombies, survivors, t: 10 };
     for (let f = 0; f < 5; f++) view.update(sim as never, f / 30);
     const s = view.stats;
-    expect(s.objects).toBe(2);
+    expect(s.objects).toBe(3); // zombies, survivors, and the survivors' IR strobes
     expect(s.zombies).toBe(2500); // capped at the newest 2,500
     expect(s.survivors).toBe(32);
     view.dispose();

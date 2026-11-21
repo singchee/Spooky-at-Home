@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import type { Sim } from '../sim/sim';
-import { FigureBatch } from '../render/figureShader';
+import { FIGURE_SCALE, FigureBatch, STROBE_Y, StrobeSprites } from '../render/figureShader';
 import { ANIM, bodyHeat, gaitAmp, gaitRate, hash01, survivorAnimState, zombieAnimState } from './agentAnim';
 
 /**
- * Draws zombies and survivors as animated low-poly figures: one instanced draw call per kind.
+ * Draws zombies and survivors as animated low-poly figures: one instanced draw call per kind, plus
+ * one for the survivors' IR strobes (near-infrared-only sprites, invisible to thermal).
  * The CPU only writes a few numbers per agent each frame (position, heading, gait phase, state,
  * heat); the vertex shader in src/render/figureShader.ts does the animation.
  * Colours are sensor values (heat, visible, near-IR), not display colours.
@@ -14,6 +15,8 @@ const MAX_S = 32;
 const VIS_WARM = 0.36;
 const VIS_COLD = 0.34;
 const VIS_SURVIVOR = 0.42;
+/** Height of the figures' feet (matches the figure shader's uBase). */
+const STROBE_BASE = 1.05;
 const TAU = Math.PI * 2;
 
 /** Per-agent animation memory that the sim doesn't keep: smoothed velocity, heading and gait phase. */
@@ -50,12 +53,13 @@ export class AgentsView {
   readonly group = new THREE.Group();
   private zombies = new FigureBatch('zombie', MAX_Z);
   private survivors = new FigureBatch('survivor', MAX_S);
+  private strobes = new StrobeSprites(MAX_S);
   private zt = new Track();
   private st = new Track();
   private lastTime = -1;
 
   constructor() {
-    this.group.add(this.zombies.mesh, this.survivors.mesh);
+    this.group.add(this.zombies.mesh, this.survivors.mesh, this.strobes.mesh);
   }
 
   update(sim: Sim, time: number): void {
@@ -114,6 +118,7 @@ export class AgentsView {
     st.ensure(ss.length);
     const sb = this.survivors;
     let j = 0;
+    let n = 0;
     for (let i = 0; i < ss.length; i++) {
       const s = ss[i];
       if (s.home || j >= MAX_S) continue;
@@ -157,20 +162,30 @@ export class AgentsView {
       sb.c[o + 2] = VIS_SURVIVOR;
       sb.c[o + 3] = 0;
       j++;
+      // A live survivor's strobe sits on the head; a dead one's is gone.
+      if (s.alive) {
+        const q = n * 3;
+        this.strobes.pos[q] = s.x;
+        this.strobes.pos[q + 1] = STROBE_BASE + STROBE_Y * FIGURE_SCALE;
+        this.strobes.pos[q + 2] = s.z;
+        n++;
+      }
     }
     sb.commit(j);
-    const u = sb.material.uniforms;
-    u.uTime.value = time;
-    u.uBlink.value = time % 1 < 0.3 ? 1 : 0;
+    this.strobes.commit(n);
+    sb.material.uniforms.uTime.value = time;
+    // One 0.3 s blink a second: slow, and only a small dot, so never a flash hazard.
+    this.strobes.material.uniforms.uBlink.value = time % 1 < 0.3 ? 1 : 0;
   }
 
   /** For tests and budgets: instances drawn per kind, and draw objects (one per kind). */
   get stats() {
-    return { objects: this.group.children.length, zombies: this.zombies.count, survivors: this.survivors.count };
+    return { objects: this.group.children.length, zombies: this.zombies.count, survivors: this.survivors.count, strobes: this.strobes.count };
   }
 
   dispose(): void {
     this.zombies.dispose();
     this.survivors.dispose();
+    this.strobes.dispose();
   }
 }

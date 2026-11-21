@@ -22,6 +22,9 @@ const MAX_CRATERS = 150;
 const REG_TRACER = 0;
 const REG_SHORT = 1;
 const REG_FIRE = 2;
+/** Washout easing rates (per second) while it rises toward, and falls toward, its target. */
+const WASH_RISE = 30;
+const WASH_FALL = 7;
 /** Light drift for smoke, metres per second. */
 const WIND = { x: 1.1, z: 0.5 };
 
@@ -70,6 +73,31 @@ const profileOf = (weapon: string): Profile => BLAST_PROFILES[weapon as '25'] ??
 
 interface Crater { x: number; z: number; t0: number; r: number; y: number }
 
+/** The 105's camera kick never moves the picture more than this many CSS pixels, at any field of view. */
+export const SHAKE_MAX_PX = 5;
+/** How long the kick lasts, seconds: exactly one period, so it is two swings (out, then back) and still. */
+export const SHAKE_TIME = 0.4;
+/** Swings per second of the kick (one full out-and-back over ~0.4 s). */
+const SHAKE_HZ = 2.5;
+/** Decay time constant of the kick, seconds. */
+const SHAKE_TAU = 0.14;
+/** Direction of the kick on screen (mostly vertical, a little sideways), unit length. */
+const SHAKE_DIR = { x: 0.34, y: 0.94 };
+
+/**
+ * The 105's camera kick, in screen pixels, `age` seconds after the blast: one damped swing
+ * (out, then a smaller swing back), gone after SHAKE_TIME. Never more than SHAKE_MAX_PX.
+ * A single slow kick like this can't strobe; the old 14 Hz jitter could (WCAG 2.3.1).
+ */
+export function shakeOffsetPx(age: number): { x: number; y: number } {
+  if (!(age >= 0) || age >= SHAKE_TIME) return { x: 0, y: 0 };
+  // Fade the tail to exactly zero at SHAKE_TIME so the camera settles without a final twitch.
+  const tail = 1 - age / SHAKE_TIME;
+  const a = SHAKE_MAX_PX * Math.sin(2 * Math.PI * SHAKE_HZ * age) * Math.exp(-age / SHAKE_TAU) * tail * 1.9;
+  const v = Math.max(-SHAKE_MAX_PX, Math.min(SHAKE_MAX_PX, a));
+  return { x: v * SHAKE_DIR.x, y: v * SHAKE_DIR.y };
+}
+
 export class Effects {
   readonly group = new THREE.Group();
   private glow = new ParticlePool([CAP_TRACERS, CAP_SHORT, CAP_FIRES], makeAdditiveMaterial());
@@ -84,10 +112,11 @@ export class Effects {
   private nextCraterY = 0;
   private rng: Rng = mulberry32(0x5f3759df);
   private now = 0;
-  /** Night-vision washout, 0-1: eases up after blasts and decays, never a hard full-screen flash. */
+  /** Night-vision washout, 0-1: rises with the blast's flash (~0.1 s), then fades; never a hard cut. */
   washout = 0;
   private washTarget = 0;
-  shake = 0;
+  /** Game-clock time of the latest 105 impact (starts the camera kick). */
+  kickAt = -Infinity;
 
   constructor() {
     this.craterMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -195,7 +224,7 @@ export class Effects {
     this.nextCraterY = (this.nextCraterY + 1) % 10;
     this.craters.push({ x, z, t0: now, r: Math.max(1.2, R * 0.45), y: 1.4 + this.nextCraterY * 0.02 });
     this.washTarget = Math.min(0.9, this.washTarget + w.washout);
-    if (weapon === '105') this.shake = Math.max(this.shake, 0.25);
+    if (weapon === '105') this.kickAt = now;
   }
 
   /** For tests: objects drawn and live instances per kind (capped, so draw calls stay flat). */
@@ -236,10 +265,17 @@ export class Effects {
     this.craterMesh.instanceMatrix.needsUpdate = true;
     if (this.craterMesh.instanceColor) this.craterMesh.instanceColor.needsUpdate = true;
 
-    // Ease washout toward its target (≈0.15 s rise), and let the target decay.
-    this.washout += (this.washTarget - this.washout) * Math.min(1, dt * 7);
+    // Washout rises quickly with the blast (≈0.1 s, peaking with the flash, not after it), then
+    // follows the target as it decays over ~0.6 s. Rising over several frames keeps it from being
+    // a hard full-screen cut.
+    const rising = this.washTarget > this.washout;
+    this.washout += (this.washTarget - this.washout) * Math.min(1, dt * (rising ? WASH_RISE : WASH_FALL));
     this.washTarget = Math.max(0, this.washTarget - dt * 0.6);
-    this.shake = Math.max(0, this.shake - dt);
+  }
+
+  /** The 105 camera kick at `now`, in screen pixels (zero once it has settled). */
+  shakePx(now: number): { x: number; y: number } {
+    return shakeOffsetPx(now - this.kickAt);
   }
 
   dispose(): void {

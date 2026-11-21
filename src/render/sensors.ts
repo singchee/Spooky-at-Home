@@ -15,6 +15,8 @@ export const SensorShader = {
     polarity: { value: 0 },
     washout: { value: 0 },
     blank: { value: 0 },
+    /** 1 = reduce flicker: the camera-switch cover is a flat, gentle fade instead of static noise. */
+    calm: { value: 0 },
     res: { value: new THREE.Vector2(1, 1) },
   },
   vertexShader: /* glsl */ `
@@ -23,7 +25,7 @@ export const SensorShader = {
   `,
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
-    uniform float time, mode, polarity, washout, blank;
+    uniform float time, mode, polarity, washout, blank, calm;
     uniform vec2 res;
     varying vec2 vUv;
     float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -48,7 +50,7 @@ export const SensorShader = {
         l += n * 0.15;
         outc = vec3(0.3, 1.0, 0.4) * l * vig;
       }
-      outc = mix(outc, vec3(0.3 + n * 0.25), blank);
+      outc = mix(outc, vec3(0.3 + n * 0.25 * (1.0 - calm)), blank);
       gl_FragColor = vec4(clamp(outc, 0.0, 1.0), 1.0);
     }
   `,
