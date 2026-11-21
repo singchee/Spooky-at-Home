@@ -1,7 +1,8 @@
-import type { MapData, V2 } from '../map/types';
-import { centroid, dist, pointInPolygon, polygonArea, polylineLength, distToSegment } from '../map/geom';
+import type { Feature, FeatureCategory, MapData, V2 } from '../map/types';
+import { bounds, centroid, dist, pointInPolygon, polygonArea, polylineLength, distToSegment } from '../map/geom';
 import { dijkstra, nearestNode, pathFromPrev, roadNamesAlong, type RoadGraph } from '../map/roadGraph';
 import type { WalkGrid } from '../map/grid';
+import { CATEGORY_INFO, MISSION_TEMPLATES, featureName, findAnchor, type TemplateId } from '../map/recon';
 import { hashString, mulberry32, pick, shuffle, type Rng } from '../util/rng';
 
 /**
@@ -53,12 +54,19 @@ export interface Mission {
   hordes: Horde[];
   waves?: WavePlan;
   friendlyFireLimit: number;
+  /** Set when the mission was built from a recon template around a real place. */
+  template?: TemplateId;
+  anchor?: { id: string; name: string; category: FeatureCategory; p: V2; pts?: V2[] };
 }
 
 export interface MissionOptions {
   type: MissionType | 'auto';
   difficulty: number;
   seed: number;
+  /** A recon template (see src/map/recon.ts). Its base type wins; `type` may be 'auto' or that base. */
+  template?: TemplateId;
+  /** The feature id the template is built around; defaults to the template's best place. */
+  anchor?: string;
 }
 
 export type MissionResult = { ok: true; mission: Mission } | { ok: false; reason: string };
@@ -149,14 +157,10 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
   if (g.mainComp < 0 || roadNodesWithin(g, map, 0.9).length < 10) {
     return { ok: false, reason: 'There are too few connected roads here to build a mission. Try a more built-up spot, or the sample town.' };
   }
+  if (opts.template !== undefined) return generateFromTemplate(map, g, grid, opts, d);
   const type: MissionType = opts.type === 'auto' ? pick(rng, MISSION_TYPES) : opts.type;
-  const base = { type, difficulty: d, seed: opts.seed, mapName: map.name, friendlyFireLimit: 2 };
-  const coldShare = d <= 1 ? 0 : 0.12 + 0.06 * (d - 2);
-  const coldIntel = (where: string) =>
-    coldShare > 0
-      ? `Intel: cold-blooded contacts are mixed in ${where}. They barely show on thermal, and are faint on cool grass and gardens. Night vision picks them up.`
-      : 'Intel: no cold-blooded contacts in this area.';
-  const roe = `Rules of engagement: friendlies carry IR strobes (visible on night vision) and a cold ID panel (a dark square on thermal). ${base.friendlyFireLimit} friendly-fire incidents ends the mission.`;
+  const c = context(map, g, grid, rng, d, type, opts.seed);
+  const { base, coldShare, coldIntel, roe } = c;
 
   if (type === 'clear') {
     const nHordes = Math.min(6, 2 + Math.floor(d * 0.8));
@@ -207,63 +211,111 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
 
   const safehouse = findSafehouse(map, g, rng);
   if (!safehouse) return { ok: false, reason: 'No school, hospital or large building near the middle of this map to use as a safehouse.' };
+  return type === 'escort' ? buildEscort(c, safehouse) : buildDefend(c, safehouse);
+}
+
+/** Everything a mission builder needs: the map, the seeded random stream, and the shared text. */
+interface Ctx {
+  map: MapData;
+  g: RoadGraph;
+  grid: WalkGrid;
+  rng: Rng;
+  d: number;
+  base: { type: MissionType; difficulty: number; seed: number; mapName: string; friendlyFireLimit: number; template?: TemplateId; anchor?: Mission['anchor'] };
+  coldShare: number;
+  coldIntel: (where: string) => string;
+  roe: string;
+}
+
+function context(map: MapData, g: RoadGraph, grid: WalkGrid, rng: Rng, d: number, type: MissionType, seed: number, extra: Partial<Ctx['base']> = {}): Ctx {
+  const base = { type, difficulty: d, seed, mapName: map.name, friendlyFireLimit: 2, ...extra };
+  const coldShare = d <= 1 ? 0 : 0.12 + 0.06 * (d - 2);
+  const coldIntel = (where: string) =>
+    coldShare > 0
+      ? `Intel: cold-blooded contacts are mixed in ${where}. They barely show on thermal, and are faint on cool grass and gardens. Night vision picks them up.`
+      : 'Intel: no cold-blooded contacts in this area.';
+  const roe = `Rules of engagement: friendlies carry IR strobes (visible on night vision) and a cold ID panel (a dark square on thermal). ${base.friendlyFireLimit} friendly-fire incidents ends the mission.`;
+  return { map, g, grid, rng, d, base, coldShare, coldIntel, roe };
+}
+
+type Safehouse = NonNullable<Mission['safehouse']>;
+
+/** Text that changes between the classic escort and the recon templates built on it. */
+interface EscortFlavour {
+  title(homeStreet: string): string;
+  opener(n: number): string;
+}
+const CLASSIC_ESCORT: EscortFlavour = {
+  title: (homeStreet) => `Get them home — ${homeStreet}`,
+  opener: (n) => `Spooky, this is Ground. ${n} survivors are holed up at {safehouse}.`,
+};
+
+function buildEscort(c: Ctx, safehouse: Safehouse, fl: EscortFlavour = CLASSIC_ESCORT): MissionResult {
+  const { map, g, grid, rng, d, base, coldShare, coldIntel, roe } = c;
   const safeNode = nearestNode(g, safehouse.centre, 200);
   if (safeNode < 0) return { ok: false, reason: 'The safehouse is not reachable by road.' };
   const { d: roadDist, prev } = dijkstra(g, safeNode);
-
-  if (type === 'escort') {
-    const minL = 280 + 40 * d;
-    const maxL = 480 + 70 * d;
-    const homes = map.buildings
-      .map((b) => ({ b, c: centroid(b.pts), area: polygonArea(b.pts) }))
-      .filter((h) => h.area > 40 && h.area < 400 && Math.abs(h.c.x) < map.half * 0.9 && Math.abs(h.c.z) < map.half * 0.9);
-    const scored: { c: V2; node: number; L: number }[] = [];
-    for (const h of homes) {
-      const node = nearestNode(g, h.c, 60);
-      if (node < 0 || !Number.isFinite(roadDist[node])) continue;
-      scored.push({ c: h.c, node, L: roadDist[node] });
-      if (scored.length > 4000) break;
-    }
-    let pool = scored.filter((s) => s.L >= minL && s.L <= maxL);
-    if (!pool.length) pool = scored.filter((s) => s.L >= 150).sort((a, b) => b.L - a.L).slice(0, 10);
-    if (!pool.length) return { ok: false, reason: 'No homes are far enough away by road for an escort mission.' };
-    const home = pick(rng, pool);
-    const pathNodes = pathFromPrev(prev, home.node);
-    const route = [grid.nearestFree(g.nodes[pathNodes[0]]), ...pathNodes.slice(1).map((i) => g.nodes[i]), home.c];
-    const streets = roadNamesAlong(g, map, pathNodes);
-    const homeStreet = nearestStreet(map, home.c);
-    const n = 4 + Math.floor(d / 2);
-    const need = Math.ceil(n / 2);
-    const survivors: SurvivorPlan[] = Array.from({ length: n }, (_, k) => ({ start: route[0], route, delay: 6 + k * 1.4 }));
-    const length = Math.round(polylineLength(route) / 10) * 10;
-    const xs = route.map((p) => p.x);
-    const zs = route.map((p) => p.z);
-    return {
-      ok: true,
-      mission: {
-        ...base,
-        title: `Get them home — ${homeStreet}`,
-        briefing: [
-          `Spooky, this is Ground. ${n} survivors are holed up at ${safehouse.name}.`,
-          `They need to get home to a house on ${homeStreet}, about ${length} m away by road${streets.length > 1 ? `, via ${listJoin(streets.slice(0, 3))}` : ''}.`,
-          `Keep the road clear. If fewer than ${need} make it home, the mission fails.`,
-          roe,
-        ],
-        intel: [coldIntel('with the waves')],
-        timeLimit: 420 + 30 * d,
-        orbitCentre: { x: (Math.min(...xs) + Math.max(...xs)) / 2, z: (Math.min(...zs) + Math.max(...zs)) / 2 },
-        safehouse,
-        home: { centre: home.c, street: homeStreet },
-        route,
-        survivors,
-        needHome: need,
-        hordes: [],
-        waves: { every: Math.max(9, 22 - 2.6 * d), size: 3 + 3 * d, coldShare, minDist: 140, maxDist: 300, maxAlive: 60 + 20 * d },
-      },
-    };
+  const minL = 280 + 40 * d;
+  const maxL = 480 + 70 * d;
+  const homes = map.buildings
+    .map((b) => ({ b, c: centroid(b.pts), area: polygonArea(b.pts) }))
+    .filter((h) => h.area > 40 && h.area < 400 && Math.abs(h.c.x) < map.half * 0.9 && Math.abs(h.c.z) < map.half * 0.9);
+  const scored: { c: V2; node: number; L: number }[] = [];
+  for (const h of homes) {
+    const node = nearestNode(g, h.c, 60);
+    if (node < 0 || !Number.isFinite(roadDist[node])) continue;
+    scored.push({ c: h.c, node, L: roadDist[node] });
+    if (scored.length > 4000) break;
   }
+  let pool = scored.filter((s) => s.L >= minL && s.L <= maxL);
+  if (!pool.length) pool = scored.filter((s) => s.L >= 150).sort((a, b) => b.L - a.L).slice(0, 10);
+  if (!pool.length) return { ok: false, reason: 'No homes are far enough away by road for an escort mission.' };
+  const home = pick(rng, pool);
+  const pathNodes = pathFromPrev(prev, home.node);
+  const route = [grid.nearestFree(g.nodes[pathNodes[0]]), ...pathNodes.slice(1).map((i) => g.nodes[i]), home.c];
+  const streets = roadNamesAlong(g, map, pathNodes);
+  const homeStreet = nearestStreet(map, home.c);
+  const n = 4 + Math.floor(d / 2);
+  const need = Math.ceil(n / 2);
+  const survivors: SurvivorPlan[] = Array.from({ length: n }, (_, k) => ({ start: route[0], route, delay: 6 + k * 1.4 }));
+  const length = Math.round(polylineLength(route) / 10) * 10;
+  const xs = route.map((p) => p.x);
+  const zs = route.map((p) => p.z);
+  return {
+    ok: true,
+    mission: {
+      ...base,
+      title: fl.title(homeStreet),
+      briefing: [
+        fl.opener(n).replace('{safehouse}', () => safehouse.name),
+        `They need to get home to a house on ${homeStreet}, about ${length} m away by road${streets.length > 1 ? `, via ${listJoin(streets.slice(0, 3))}` : ''}.`,
+        `Keep the road clear. If fewer than ${need} make it home, the mission fails.`,
+        roe,
+      ],
+      intel: [coldIntel('with the waves')],
+      timeLimit: 420 + 30 * d,
+      orbitCentre: { x: (Math.min(...xs) + Math.max(...xs)) / 2, z: (Math.min(...zs) + Math.max(...zs)) / 2 },
+      safehouse,
+      home: { centre: home.c, street: homeStreet },
+      route,
+      survivors,
+      needHome: need,
+      hordes: [],
+      waves: { every: Math.max(9, 22 - 2.6 * d), size: 3 + 3 * d, coldShare, minDist: 140, maxDist: 300, maxAlive: 60 + 20 * d },
+    },
+  };
+}
 
-  // defend
+interface DefendFlavour {
+  title: string;
+  opener: string;
+}
+
+function buildDefend(c: Ctx, safehouse: Safehouse, fl?: DefendFlavour): MissionResult {
+  const { map, g, grid, rng, d, base, coldShare, coldIntel, roe } = c;
+  const safeNode = nearestNode(g, safehouse.centre, 200);
+  if (safeNode < 0) return { ok: false, reason: 'The safehouse is not reachable by road.' };
+  const { d: roadDist, prev } = dijkstra(g, safeNode);
   const hold = 150 + 15 * d;
   // The waves must be able to reach the building, or the mission can't be lost.
   const perimeter = grid.perimeterCells(safehouse.poly);
@@ -288,9 +340,9 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
     ok: true,
     mission: {
       ...base,
-      title: `Hold the safehouse — ${safehouse.name}`,
+      title: fl?.title ?? `Hold the safehouse — ${safehouse.name}`,
       briefing: [
-        `Spooky, this is Ground. ${capitalise(safehouse.name)} is the neighbourhood's safehouse, and the dead know it.`,
+        fl?.opener ?? `Spooky, this is Ground. ${capitalise(safehouse.name)} is the neighbourhood's safehouse, and the dead know it.`,
         `Hold it for ${fmtTime(hold)}. If they break in, it's over.`,
         survivors.length ? `Two stragglers are on their way in along ${from}. Don't hit them.` : 'Everyone is already inside.',
         roe,
@@ -305,6 +357,221 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
       waves: { every: Math.max(7, 20 - 2.6 * d), size: 6 + 4 * d, coldShare, minDist: 180, maxDist: 340, maxAlive: 80 + 25 * d },
     },
   };
+}
+
+// ---------------------------------------------------------------------------------------
+// Recon templates: the same three mechanics, built around a real place (src/map/recon.ts)
+// ---------------------------------------------------------------------------------------
+
+/** The building that stands for a place: the one it's in, one with its name, or the biggest on its grounds. */
+function safehouseFromFeature(map: MapData, f: Feature, name: string): Safehouse {
+  const solid = (b: { pts: V2[] }) => polygonArea(b.pts) >= 60;
+  let b = map.buildings.find((x) => solid(x) && pointInPolygon(f.p, x.pts));
+  if (!b && f.name) b = map.buildings.find((x) => solid(x) && x.name === f.name && dist(centroid(x.pts), f.p) < 300);
+  if (!b && f.pts && f.pts.length >= 3) {
+    const pts = f.pts;
+    b = map.buildings.filter((x) => solid(x) && pointInPolygon(centroid(x.pts), pts)).sort((a, c) => polygonArea(c.pts) - polygonArea(a.pts))[0];
+  }
+  if (!b) b = map.buildings.filter((x) => solid(x) && dist(centroid(x.pts), f.p) < 50).sort((a, c) => dist(centroid(a.pts), f.p) - dist(centroid(c.pts), f.p))[0];
+  const poly = b ? b.pts : circle(f.p, 14);
+  return { centre: centroid(poly), poly, name };
+}
+
+/** Evenly spread points inside a polygon (spacing in metres), in a seeded order. */
+function pointsInside(pts: V2[], spacing: number, rng: Rng): V2[] {
+  const bb = bounds(pts);
+  const out: V2[] = [];
+  for (let z = bb.minZ + spacing / 2; z < bb.maxZ; z += spacing) {
+    for (let x = bb.minX + spacing / 2; x < bb.maxX; x += spacing) if (pointInPolygon({ x, z }, pts)) out.push({ x, z });
+  }
+  return shuffle(rng, out);
+}
+
+function generateFromTemplate(map: MapData, g: RoadGraph, grid: WalkGrid, opts: MissionOptions, d: number): MissionResult {
+  const t = MISSION_TEMPLATES[opts.template!];
+  if (!t) return { ok: false, reason: `Unknown mission template "${String(opts.template)}".` };
+  if (opts.type !== 'auto' && opts.type !== t.base) return { ok: false, reason: `"${t.name}" is a ${t.base} mission, not ${opts.type}.` };
+  // Classic templates are exactly the missions the custom menu builds.
+  if (!t.anchors.length) return generateMission(map, g, grid, { type: t.base, difficulty: d, seed: opts.seed });
+  const f = findAnchor(map, t.id, opts.seed, opts.anchor);
+  if (!f) {
+    const what = t.anchors.map((a) => CATEGORY_INFO[a].one).join(' or ');
+    return { ok: false, reason: `Recon found no ${what} here for "${t.name}". Pick another mission.` };
+  }
+  const name = featureName(map, f);
+  const rng = mulberry32(hashString(`${map.name}|${opts.seed}|${t.id}|${f.id}|${d}`));
+  const anchor: Mission['anchor'] = { id: f.id, name, category: f.category, p: f.p, ...(f.pts ? { pts: f.pts } : {}) };
+  const c = context(map, g, grid, rng, d, t.base, opts.seed, { template: t.id, anchor });
+  const Name = capitalise(name);
+  switch (t.id) {
+    case 'clear-tennis':
+    case 'clear-park':
+    case 'forest-sweep':
+      return templateClear(c, f, name, t.id);
+    case 'hold-sports':
+      return buildDefend(c, safehouseFromFeature(map, f, name), {
+        title: `Hold the sports centre — ${name}`,
+        opener: `Spooky, this is Ground. Half the street ran to ${name}, and the dead followed them there.`,
+      });
+    case 'hold-landmark':
+      return buildDefend(c, safehouseFromFeature(map, f, name), {
+        title: `Hold ${name}`,
+        opener: `Spooky, this is Ground. ${Name} is the most solid building for blocks. The neighbours are inside, and the dead know it.`,
+      });
+    case 'escort-shops':
+      return buildEscort(c, safehouseFromFeature(map, f, name), {
+        title: () => `Get them home from ${name}`,
+        opener: (n) => `Spooky, this is Ground. ${n} late-night shoppers are barricaded inside {safehouse}.`,
+      });
+    case 'escort-school':
+      // Guardrail (PLAN §9): adults only. The school is just a solid building they sheltered in.
+      return buildEscort(c, safehouseFromFeature(map, f, name), {
+        title: () => `Get them home from ${name}`,
+        opener: (n) => `Spooky, this is Ground. ${n} adults, staff and neighbours, have been sheltering at {safehouse}. The building is empty otherwise.`,
+      });
+    case 'escort-station': {
+      const what = f.category === 'bus_station' ? 'bus' : 'train';
+      return buildEscort(c, safehouseFromFeature(map, f, name), {
+        title: () => `Last ${what} home — ${name}`,
+        opener: (n) => `Spooky, this is Ground. ${n} passengers off the last ${what} are stuck at {safehouse}.`,
+      });
+    }
+    default:
+      return { ok: false, reason: `Unknown mission template "${t.id}".` };
+  }
+}
+
+/** Clear missions around a place: hordes on the tennis courts, in the park, or among the trees. */
+function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'clear-park' | 'forest-sweep'): MissionResult {
+  const { map, g, grid, rng, d, base, coldShare, coldIntel, roe } = c;
+  const nHordes = Math.min(6, 2 + Math.floor(d * 0.8));
+  const forest = id === 'forest-sweep';
+  // Forests hide more cold-blooded zombies: they match the cool ground under the trees.
+  const coldHere = forest ? Math.min(0.6, coldShare + 0.25) : coldShare;
+  const isHere = (p: V2) => (f.pts && f.pts.length >= 3 ? pointInPolygon(p, f.pts) || dist(p, f.p) < 30 : dist(p, f.p) < 60);
+  const area = f.pts && f.pts.length >= 3 ? polygonArea(f.pts) : 0;
+  const maxHere = Math.max(1, Math.min(nHordes - (forest ? 0 : 1), Math.floor(area / (forest ? 2200 : 1800))));
+  const gapHere = id === 'clear-tennis' ? 32 : 45;
+  const centres: V2[] = [];
+  const add = (p: V2, gap: number) => {
+    const free = grid.nearestFree(p, 40);
+    if (grid.isBlocked(free.x, free.z)) return false; // never put a horde inside a building
+    if (!centres.every((o) => dist(o, free) > gap)) return false;
+    centres.push(free);
+    return true;
+  };
+  // First the place itself...
+  const inside = f.pts && f.pts.length >= 3 ? pointsInside(f.pts, 12, rng) : [];
+  add(f.p, 0);
+  for (const p of inside) {
+    if (centres.length >= maxHere) break;
+    if (isHere(p)) add(p, gapHere);
+  }
+  // ...then the streets and open ground around it, nearest first.
+  const around: V2[] = [];
+  for (const a of map.areas) if (a.kind !== 'water' && a.pts.length >= 3) around.push(centroid(a.pts));
+  for (const i of roadNodesWithin(g, map, 0.85)) around.push(g.nodes[i]);
+  around.sort((a, b) => dist(a, f.p) - dist(b, f.p) || a.x - b.x || a.z - b.z);
+  for (const p of around) {
+    if (centres.length >= nHordes) break;
+    if (dist(p, f.p) > 420) break;
+    if (dist(p, f.p) < 70) continue;
+    add(p, 110);
+  }
+  if (centres.length < 2) return { ok: false, reason: `Could not find room for the hordes around ${name}.` };
+  const per = 6 + 3 * d;
+  const hordes: Horde[] = centres.map((p) => {
+    const here = isHere(p);
+    return { centre: p, count: per, cold: Math.round(per * (here ? coldHere : coldShare)), label: here ? name : placeLabel(map, p) };
+  });
+  const shelterAt = hordes[Math.floor(rng() * hordes.length)];
+  const ang = rng() * Math.PI * 2;
+  const shelterSpot = grid.nearestFree({ x: shelterAt.centre.x + Math.cos(ang) * 45, z: shelterAt.centre.z + Math.sin(ang) * 45 });
+  const survivors: SurvivorPlan[] = [0, 1].map((k) => ({ start: { x: shelterSpot.x + k * 2, z: shelterSpot.z }, route: null, delay: 0 }));
+  const timeLimit = 240 + 30 * d + (forest ? 30 : 0);
+  const hereCount = hordes.filter((h) => h.label === name).length;
+  const elsewhere = unique(hordes.filter((h) => h.label !== name).map((h) => h.label));
+  let opener: string;
+  let title: string;
+  if (forest) {
+    title = `Forest sweep — ${name}`;
+    opener = `Spooky, this is Ground. ${hereCount === 1 ? 'A horde is' : `${hereCount} hordes are`} moving among the trees in ${name}${elsewhere.length ? `, with more around ${listJoin(elsewhere.slice(0, 3))}` : ''}.`;
+  } else if (id === 'clear-tennis') {
+    title = `Clear the tennis club — ${name}`;
+    opener = `Spooky, this is Ground. The dead have taken over ${name}: ${hereCount === 1 ? 'a horde is' : `${hereCount} hordes are`} on the courts${elsewhere.length ? `, and more are around ${listJoin(elsewhere.slice(0, 3))}` : ''}.`;
+  } else {
+    title = `Clear the park — ${name}`;
+    opener = `Spooky, this is Ground. ${hereCount === 1 ? 'A horde has' : `${hereCount} hordes have`} gathered in ${name}${elsewhere.length ? `, and more are around ${listJoin(elsewhere.slice(0, 3))}` : ''}.`;
+  }
+  // Intel is always true (PLAN §5a): say exactly where the cold-blooded ones are.
+  const coldTotal = hordes.reduce((s, h) => s + h.cold, 0);
+  let intel: string;
+  if (!coldTotal) intel = coldIntel('');
+  else if (forest) {
+    const inF = hordes.filter((h) => h.label === name);
+    const fc = inF.reduce((s, h) => s + h.cold, 0);
+    const ft = inF.reduce((s, h) => s + h.count, 0);
+    const out = unique(hordes.filter((h) => h.label !== name && h.cold > 0).map((h) => h.label));
+    intel =
+      `Intel: ${fc} of the ${ft} contacts in ${name} are cold-blooded, far more than usual. Under the trees they match the ground on thermal. ` +
+      `Night vision picks them up, though it's murky in there.${out.length ? ` A few more are mixed in with the hordes at ${listJoin(out)}.` : ''}`;
+  } else {
+    intel = coldIntel(`with the hordes at ${listJoin(unique(hordes.filter((h) => h.cold > 0).map((h) => h.label)))}`);
+  }
+  return {
+    ok: true,
+    mission: {
+      ...base,
+      title,
+      briefing: [opener, `Clear every one of them within ${fmtTime(timeLimit)}.`, `Two friendlies are sheltering near ${shelterAt.label}. Mind your aim.`, roe],
+      intel: [intel],
+      timeLimit,
+      orbitCentre: centroid(centres),
+      survivors,
+      needHome: 0,
+      hordes,
+    },
+  };
+}
+
+/** Where waves are most likely to come from, for the tactical map (defend missions only). */
+export interface WaveDirection {
+  from: V2;
+  to: V2;
+  compass: string;
+  /** Share of possible spawn points in this direction (0..1). */
+  share: number;
+}
+
+export function likelyWaveDirections(m: Mission, map: MapData, g: RoadGraph): WaveDirection[] {
+  if (!m.waves || m.type !== 'defend' || !m.safehouse) return [];
+  const ref = m.safehouse.centre;
+  const lim = map.half * 0.95;
+  const sums = Array.from({ length: 8 }, () => ({ n: 0, x: 0, z: 0 }));
+  let total = 0;
+  for (let i = 0; i < g.nodes.length; i++) {
+    if (g.comp[i] !== g.mainComp) continue;
+    const p = g.nodes[i];
+    if (Math.abs(p.x) > lim || Math.abs(p.z) > lim) continue;
+    const r = dist(p, ref);
+    if (r < m.waves.minDist || r > m.waves.maxDist) continue;
+    const a = (Math.atan2(p.x - ref.x, -(p.z - ref.z)) * 180) / Math.PI;
+    const s = sums[Math.round(((a + 360) % 360) / 45) % 8];
+    s.n++;
+    s.x += p.x;
+    s.z += p.z;
+    total++;
+  }
+  if (!total) return [];
+  return sums
+    .map((s, k) => ({ s, k }))
+    .filter(({ s }) => s.n / total >= 0.12)
+    .sort((a, b) => b.s.n - a.s.n || a.k - b.k)
+    .slice(0, 3)
+    .map(({ s }) => {
+      const from = { x: s.x / s.n, z: s.z / s.n };
+      return { from, to: ref, compass: compass(ref, from), share: s.n / total };
+    });
 }
 
 const unique = <T>(a: T[]) => [...new Set(a)];

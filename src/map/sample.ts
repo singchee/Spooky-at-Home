@@ -170,7 +170,7 @@ export function makeSampleTown(seed = 7): MapData {
     { id: 'f-woods', category: 'forest', name: 'Grevillea Woods', p: centroid(woods), pts: woods },
     { id: 'f-hospital', category: 'hospital', name: 'St Kestrel Hospital', p: centroid(named('St Kestrel Hospital')), pts: named('St Kestrel Hospital') },
     { id: 'f-police', category: 'police', name: 'Sampleton Police Station', p: { x: -60, z: -170 }, pts: named('Sampleton Police Station') },
-    { id: 'f-interchange', category: 'bus_station', name: 'Sampleton Interchange', p: { x: 14, z: -500 } },
+    { id: 'f-interchange', category: 'bus_station', name: 'Sampleton Interchange', p: { x: 14, z: -335 } },
   );
   for (const a of areas) {
     if (a.kind === 'park' && a.name?.endsWith('Reserve')) features.push({ id: `f-${a.id}`, category: 'park', name: a.name, p: centroid(a.pts), pts: a.pts });
