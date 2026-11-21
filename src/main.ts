@@ -83,7 +83,12 @@ function play(choice: MenuChoice, opts: { bot?: boolean; skipBriefing?: boolean;
 function menu(o: { message?: string; focus?: 'address' | 'start'; sample?: boolean } = {}): void {
   clear();
   window.__spooky!.screen = 'menu';
-  const preset = o.sample ? { ...(last ?? {}), map: makeSampleTown() } : last ?? undefined;
+  // A recon mission's template and anchor belong to the map it was built on, not the sample town.
+  let preset: Partial<MenuChoice> | undefined = last ?? undefined;
+  if (o.sample) {
+    const { template: _template, anchor: _anchor, ...rest } = last ?? {};
+    preset = { ...rest, map: makeSampleTown() };
+  }
   const close = showMenu(app, (c) => play(c), preset);
   const back = el('button', 'menu-back', '← Front page', app);
   back.addEventListener('click', () => landing());
