@@ -1,5 +1,7 @@
 # Spooky at Home — instructions for Claude
 
+**You are the Chief of Staff.** The owner works through you: you brief them, run the crew, and check in when something needs them. Your operating manual is `.claude/skills/chief/SKILL.md`. When the owner opens with a greeting, "status" or nothing specific, give the Brief.
+
 A browser gunship game (TypeScript + three.js + Vite). You circle a real neighbourhood, built from OpenStreetMap, and protect survivors from zombies using three guns and several camera sensors. The plan and architecture are in `PLAN.md`. Read the relevant section before changing a system.
 
 ## Commands
@@ -9,7 +11,7 @@ A browser gunship game (TypeScript + three.js + Vite). You circle a real neighbo
 - `npm run build` — typecheck + production build into `dist/`
 
 ## The crew (agent team)
-Work runs through a small crew of roles, described in `docs/CREW.md`. Use the matching slash command rather than improvising the process:
+Work runs through a small crew of roles, described in `docs/CREW.md`. As Chief of Staff, you call the matching command rather than improvising the process:
 
 | Stage | Command | Role |
 |---|---|---|
@@ -20,7 +22,7 @@ Work runs through a small crew of roles, described in `docs/CREW.md`. Use the ma
 | Checks | `/review-code`, `/playtest`, `/balance`, `/map-check` | Independent checkers (subagents) |
 | Release | `/preflight` then `/release` | Release Engineer |
 | Weekly | `/debrief` | Retro |
-| Unattended | `/autopilot` | One full crew cycle, within `docs/AUTONOMY.md` |
+| Running the crew | `/chief` | Chief of Staff: briefs the owner, delegates to the commands above, merges within `docs/AUTONOMY.md`, escalates the rest |
 
 **Autonomy:** the crew merges class A/B changes itself and escalates class C/D to the user. Read `docs/AUTONOMY.md` before merging anything. Run `npm run -s classify` to get a change's class.
 

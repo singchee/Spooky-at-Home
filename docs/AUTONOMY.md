@@ -6,6 +6,9 @@
 
 ## 1. The principle
 
+You work through one agent, the **Chief of Staff** (`/chief`). It runs the crew within this policy and checks in with you.
+
+
 The crew works, checks and merges on its own **when the change is small, proven by tests, and inside decisions you've already made**. Anything about taste, scope, spending, safety or its own rules comes to you.
 
 Deciding what is "minor" is itself a risk: a system grading its own work tends to call things minor. So:
@@ -54,7 +57,7 @@ Then the crew squash-merges, so each change is one commit that can be undone wit
 
 | Net | How |
 |---|---|
-| **Pause switch** | Open any issue with the label `autopilot-paused` (works from the phone app). Every run checks for it first and stops. Close the issue to resume. |
+| **Pause switch** | Open any issue with the label `crew-paused` (works from the phone app). The Chief of Staff checks for it at the start of every run and stops. Close the issue to resume. |
 | **Work cap per run** | At most 1 backlog item **or** 3 bug fixes, and at most 2 fix rounds per finding. |
 | **Run cap** | 2 scheduled runs a day. Change it in the scheduled task, not in code. |
 | **Undo** | Squash merges; `main` CI is checked after every merge and auto-reverted if red. |
