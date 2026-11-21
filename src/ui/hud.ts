@@ -107,6 +107,7 @@ export class Hud {
     const box = el('div', 'hud-minimap', undefined, this.root);
     this.minimap = new TacticalMap(map, { mission, compact: true, size: 180, label: 'Minimap' });
     box.appendChild(this.minimap.svg);
+    if (this.minimap.live) box.appendChild(this.minimap.live);
   }
 
   updateMinimap(aircraft: V2, aim: V2, survivors: V2[]): void {

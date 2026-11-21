@@ -62,6 +62,9 @@ interface Box {
 
 export class TacticalMap {
   readonly svg: SVGSVGElement;
+  /** Compact (minimap) mode only: a separate transparent SVG for the live layer, stacked on top,
+   *  so moving the aircraft never repaints the whole static map. */
+  readonly live: SVGSVGElement | null = null;
   private dyn: SVGGElement;
   private u: number;
   private half: number;
@@ -111,7 +114,10 @@ export class TacticalMap {
     if (opts.mission) this.drawMission(g, opts.mission, id);
     if (opts.mission && !opts.compact) this.drawMissionLabels(g, opts.mission);
     if (!opts.compact) this.drawFeatures(g);
-    this.dyn = svg('g', { class: 'tm-dyn' }, root);
+    if (opts.compact) {
+      this.live = svg('svg', { viewBox: root.getAttribute('viewBox')!, class: 'tmap-live', 'aria-hidden': 'true', preserveAspectRatio: 'xMidYMid meet' });
+      this.dyn = svg('g', { class: 'tm-dyn' }, this.live);
+    } else this.dyn = svg('g', { class: 'tm-dyn' }, root);
     if (!opts.compact) this.drawFurniture(root);
     if (opts.highlight) this.setHighlight(opts.highlight);
   }
