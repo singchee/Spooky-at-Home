@@ -1,7 +1,7 @@
 import { bboxAround, toLocal, type LatLon } from './project';
 import type { Area, AreaKind, Building, BusRoute, Feature, FeatureCategory, MapData, Poi, Road, V2 } from './types';
 import { FEATURE_CATEGORIES } from './types';
-import { centroid, dist, pointInPolygon, polygonArea } from './geom';
+import { convexHull, centroid, dist, pointInPolygon, polygonArea } from './geom';
 import { hashString, mulberry32 } from '../util/rng';
 
 /**
@@ -16,6 +16,8 @@ const ROAD_WIDTHS: Record<string, number> = {
   living_street: 5, service: 4, pedestrian: 4, footway: 2, path: 1.5, cycleway: 2, steps: 2, track: 3,
 };
 
+/** Amenities whose grounds are protected; fetched as relations with full geometry. */
+const CHILD_RELATION = /^(school|kindergarten|childcare)$/;
 const POI_AMENITIES = ['hospital', 'school', 'police', 'fire_station', 'community_centre', 'place_of_worship', 'library', 'clinic'];
 
 /** Caps that keep a dense city centre from flooding the game with recon detail. */
@@ -32,7 +34,7 @@ export function buildQuery(origin: LatLon, half: number): string {
   const b = bboxAround(origin, half);
   const bb = `${b.south.toFixed(6)},${b.west.toFixed(6)},${b.north.toFixed(6)},${b.east.toFixed(6)}`;
   const hw = Object.keys(ROAD_WIDTHS).join('|');
-  const am = [...POI_AMENITIES, 'kindergarten', 'parking', 'bus_station'].join('|');
+  const am = [...POI_AMENITIES, 'kindergarten', 'childcare', 'parking', 'bus_station'].join('|');
   return `[out:json][timeout:60];
 (
   way["building"](${bb});
@@ -40,7 +42,7 @@ export function buildQuery(origin: LatLon, half: number): string {
   way["leisure"~"^(park|pitch|playground|garden|recreation_ground|sports_centre|stadium|swimming_pool|track)$"](${bb});
   way["landuse"~"^(grass|recreation_ground|meadow|village_green|forest)$"](${bb});
   way["natural"~"^(water|wood)$"](${bb});
-  way["amenity"~"^(school|kindergarten|hospital|parking|bus_station)$"](${bb});
+  way["amenity"~"^(school|kindergarten|childcare|hospital|parking|bus_station)$"](${bb});
   way["shop"~"^(supermarket|mall)$"](${bb});
   way["club"="tennis"](${bb});
   node["amenity"~"^(${am})$"](${bb});
@@ -53,11 +55,13 @@ export function buildQuery(origin: LatLon, half: number): string {
   node["natural"="tree"](${bb});
 );
 out geom;
+relation["amenity"~"^(school|kindergarten|childcare)$"](${bb});
+out geom;
 (
   relation["landuse"="forest"](${bb});
   relation["natural"="wood"](${bb});
   relation["leisure"~"^(park|sports_centre|stadium)$"](${bb});
-  relation["amenity"~"^(school|hospital)$"](${bb});
+  relation["amenity"="hospital"](${bb});
   relation["shop"="mall"](${bb});
 );
 out center tags;
@@ -154,6 +158,7 @@ export function featureCategory(tags: Record<string, string>): FeatureCategory |
   switch (tags.amenity) {
     case 'school': return 'school';
     case 'kindergarten': return 'kindergarten';
+    case 'childcare': return 'kindergarten'; // day care (common tagging in Australia and the UK)
     case 'hospital': return 'hospital';
     case 'police': return 'police';
     case 'fire_station': return 'fire_station';
@@ -278,7 +283,18 @@ export function parseOverpass(json: OverpassJson, origin: LatLon, half: number, 
     }
     if (el.type === 'relation') {
       if (tags.route === 'bus') addBusRoute(routes, el, origin, inside);
-      else if (el.center && Number.isFinite(el.center.lat) && Number.isFinite(el.center.lon)) {
+      else if (CHILD_RELATION.test(tags.amenity ?? '') && el.members?.length) {
+        // Campus mapped as a multipolygon: protect the whole grounds (convex hull of the outer rings),
+        // not just a circle around the middle (guardrail, PLAN §9).
+        const outer: V2[] = [];
+        for (const m of el.members) {
+          if (m.type !== 'way' || (m.role && m.role !== 'outer')) continue;
+          for (const g of m.geometry ?? []) if (g && Number.isFinite(g.lat) && Number.isFinite(g.lon)) outer.push(toLocal(origin, g.lat, g.lon));
+        }
+        const hull = convexHull(outer);
+        if (hull.length >= 3) addFeature(`r${el.id}`, tags, centroid(hull), hull);
+        else if (el.center) addFeature(`r${el.id}`, tags, toLocal(origin, el.center.lat, el.center.lon));
+      } else if (el.center && Number.isFinite(el.center.lat) && Number.isFinite(el.center.lon)) {
         addFeature(`r${el.id}`, tags, toLocal(origin, el.center.lat, el.center.lon));
       }
       continue;

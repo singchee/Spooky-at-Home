@@ -278,7 +278,9 @@ function buildEscort(c: Ctx, safehouse: Safehouse, fl: EscortFlavour = CLASSIC_E
   const maxL = 480 + 70 * d;
   const homes = map.buildings
     .map((b) => ({ b, c: centroid(b.pts), area: polygonArea(b.pts) }))
-    .filter((h) => h.area > 40 && h.area < 400 && Math.abs(h.c.x) < map.half * 0.9 && Math.abs(h.c.z) < map.half * 0.9);
+    .filter((h) => h.area > 40 && h.area < 400 && Math.abs(h.c.x) < map.half * 0.9 && Math.abs(h.c.z) < map.half * 0.9)
+    // Guardrail (PLAN §9): never a shed or portable classroom in school grounds, nor next to one.
+    .filter((h) => safeBuilding(map, h.b));
   const scored: { c: V2; node: number; L: number }[] = [];
   for (const h of homes) {
     const node = nearestNode(g, h.c, 60);

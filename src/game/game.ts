@@ -603,6 +603,9 @@ export class Game {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    // Test hooks must not outlive this game (they'd point at a dead one).
+    const hooks = window.__spooky as TestHooks | undefined;
+    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
     for (const [t, type, fn] of this.listeners) t.removeEventListener(type, fn);
     if (document.pointerLockElement) document.exitPointerLock?.();

@@ -69,7 +69,7 @@ export function mapFeatures(map: MapData): Feature[] {
 /** Recon categories no mission may be anchored at, built around or sheltered in. */
 export const CHILD_CATEGORIES: readonly FeatureCategory[] = ['school', 'kindergarten', 'playground'];
 /** Landmark (poi) and building kinds that are never a safehouse. */
-export const CHILD_KINDS: readonly string[] = ['school', 'kindergarten', 'college'];
+export const CHILD_KINDS: readonly string[] = ['school', 'kindergarten', 'childcare', 'college'];
 /** Metres to keep between a mission's places and a school, kindergarten or playground. */
 export const CHILD_BUFFER = 50;
 

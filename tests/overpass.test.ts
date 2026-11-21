@@ -160,7 +160,11 @@ describe('parseOverpass: recon categories (phase 2)', () => {
     expect(q).toContain('"highway"="street_lamp"');
     expect(q).toContain('"natural"="tree"');
     expect(q).toContain('"club"="tennis"');
-    expect(q.match(/^out /gm)).toHaveLength(3);
+    // 4 output blocks: ways and nodes; protected campuses (school, kindergarten, childcare) with full
+    // geometry so their whole grounds are protected; other relations as centres; clipped bus routes.
+    expect(q.match(/^out /gm)).toHaveLength(4);
+    expect(q).toContain('relation["amenity"~"^(school|kindergarten|childcare)$"]');
+    expect(q).toMatch(/childcare/);
   });
 });
 
