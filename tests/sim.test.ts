@@ -162,6 +162,35 @@ describe('committed fingerprint (gate G4 across machines and versions)', () => {
     expect((h >>> 0).toString(16)).toBe(EXPECTED_FINGERPRINT);
   });
 });
+
+describe('committed fingerprint: single-mission defend (locked before spec 001 touches missions.ts or sim.ts)', () => {
+  const fnv = (s: string) => {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+    return (h >>> 0).toString(16);
+  };
+  it('committed fingerprint: sample-town defend d3 seed 42 has not changed', () => {
+    const r = generateMission(map, graph, grid, { type: 'defend', difficulty: 3, seed: 42 });
+    // If this fails, single-mission Hold changed for everyone: the campaign finale must never do that (spec 001 §4).
+    expect(fnv(JSON.stringify(r))).toBe(EXPECTED_DEFEND_FINGERPRINT);
+  });
+  it('a single-mission defend plays identically (trace hash)', () => {
+    const sim = make('defend', 3, 42);
+    for (let i = 0; i < 1800; i++) sim.step(1 / 60);
+    const q = (v: number) => Math.round(v * 1000);
+    const trace = {
+      state: sim.state(),
+      zombies: sim.zombies.map((z) => [z.id, q(z.x), q(z.z), z.alive ? 1 : 0, z.cold ? 1 : 0]),
+      survivors: sim.survivors.map((s) => [s.id, q(s.x), q(s.z), s.alive ? 1 : 0, s.home ? 1 : 0]),
+    };
+    expect(trace.zombies.length).toBeGreaterThan(0);
+    expect(fnv(JSON.stringify(trace))).toBe(EXPECTED_DEFEND_TRACE);
+  });
+});
+// Spec 001 step 1: locks today's single-mission Hold (mission and 30 s of play with no input) before the finale work.
+const EXPECTED_DEFEND_FINGERPRINT = 'bdca4d43';
+const EXPECTED_DEFEND_TRACE = '9028d334';
+
 // 3dd039a3 (phase 3.2): waves vary within a mission (WavePlan.kinds) and the intel says how. Stripped of those two, it is still 7de5904e.
 // be9b7fe7 (phase 3.8): escort routes may not pass within 50 m of a school, kindergarten or playground, so homes whose
 // shortest road passed one now have a longer, clear road (or drop out), and the seeded pick lands on a different home.
