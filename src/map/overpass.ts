@@ -96,33 +96,111 @@ export interface OverpassJson {
   remark?: string;
 }
 
+// ---------- Why a map didn't load (for plain-English messages) ----------
+
+/**
+ * offline: the browser couldn't connect at all (no network, a blocked host, a firewall).
+ * busy: the server answered but was overloaded or ran out of time; worth trying again in a minute.
+ * not-found: the place search found nothing. bad-coords: a "lat, lon" that isn't on the globe.
+ * too-little: the download worked but hardly anything is mapped there. aborted: the player cancelled.
+ */
+export type MapErrorKind = 'offline' | 'busy' | 'not-found' | 'bad-coords' | 'too-little' | 'aborted' | 'other';
+
+export class MapLoadError extends Error {
+  constructor(readonly kind: MapErrorKind, message: string, readonly counts?: { buildings: number; roads: number }) {
+    super(message);
+    this.name = 'MapLoadError';
+  }
+}
+
+/** HTTP answers that mean "busy, try later": rate limited, or the gateway gave up waiting. */
+const BUSY_STATUS = new Set([429, 502, 503, 504]);
+/** What browsers say when fetch() can't connect (Chrome, Firefox, Safari, Node). */
+const OFFLINE_TEXT = /failed to fetch|networkerror|load failed|network request failed|fetch failed/i;
+
+const isAbort = (e: unknown) => !!e && typeof e === 'object' && (e as { name?: string }).name === 'AbortError';
+
+export function classifyMapError(e: unknown): MapErrorKind {
+  if (e instanceof MapLoadError) return e.kind;
+  if (isAbort(e)) return 'aborted';
+  const msg = String((e as Error)?.message ?? e);
+  if (OFFLINE_TEXT.test(msg)) return 'offline';
+  if (/timed out|timeout|runtime error|too many requests/i.test(msg)) return 'busy';
+  return 'other';
+}
+
+/** A sentence or two for the player. Never the browser's own error text. */
+export function mapErrorMessage(e: unknown): string {
+  switch (classifyMapError(e)) {
+    case 'offline':
+      return "Couldn't reach OpenStreetMap. Check your connection, or try the sample town.";
+    case 'busy':
+      return "OpenStreetMap's map server is busy right now. Try again in a minute, or try the sample town.";
+    case 'not-found':
+      return 'Couldn\'t find that place. Try adding the suburb, town or country, or type coordinates as "lat, lon".';
+    case 'bad-coords':
+      return "That isn't a real latitude/longitude. Latitude runs from -90 to 90 and longitude from -180 to 180.";
+    case 'too-little': {
+      const c = e instanceof MapLoadError ? e.counts : undefined;
+      const found = c ? ` (${c.buildings} building${c.buildings === 1 ? '' : 's'} and ${c.roads} road${c.roads === 1 ? '' : 's'})` : '';
+      return `There's too little on the map there to fly a mission${found}. Try a busier spot nearby, or the sample town.`;
+    }
+    case 'aborted':
+      return 'Scouting cancelled.';
+    default:
+      return 'Something went wrong building that place. Try again, or try the sample town.';
+  }
+}
+
+/** Below this there's nothing to fly over: no streets to walk, or hardly a house. */
+export function checkEnoughMap(m: MapData): MapData {
+  if (m.roads.length < 2 || m.buildings.length < 5) {
+    throw new MapLoadError('too-little', `Only ${m.buildings.length} buildings and ${m.roads.length} roads are mapped here`, { buildings: m.buildings.length, roads: m.roads.length });
+  }
+  return m;
+}
+
+/** fetch() that labels a failure to connect as 'offline' (an abort stays an abort). */
+async function fetchOrOffline(url: string, init: RequestInit, what: string): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (e) {
+    if (isAbort(e) || init.signal?.aborted) throw e;
+    throw new MapLoadError('offline', `Couldn't reach ${what} (${String(e)})`);
+  }
+}
+
 /** A 200 answer can still be a failed query: Overpass says so in `remark`. Throws for those. */
 export function checkOverpassAnswer(json: OverpassJson, url: string): OverpassJson {
-  if (!json || !Array.isArray(json.elements)) throw new Error(`${url} sent an answer with no map data`);
-  if (typeof json.remark === 'string' && /runtime error|timed out/i.test(json.remark)) throw new Error(`${url} could not finish the query (${json.remark.slice(0, 120)})`);
+  if (!json || !Array.isArray(json.elements)) throw new MapLoadError('other', `${url} sent an answer with no map data`);
+  if (typeof json.remark === 'string' && /runtime error|timed out/i.test(json.remark)) throw new MapLoadError('busy', `${url} could not finish the query (${json.remark.slice(0, 120)})`);
   return json;
 }
 
 export async function fetchOverpass(origin: LatLon, half: number, signal?: AbortSignal): Promise<OverpassJson> {
   const body = 'data=' + encodeURIComponent(buildQuery(origin, half));
   let lastErr: unknown;
+  const kinds: MapErrorKind[] = [];
   for (const url of OVERPASS_ENDPOINTS) {
     try {
-      const res = await fetch(url, {
+      const res = await fetchOrOffline(url, {
         method: 'POST',
         body,
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         signal,
-      });
-      if (!res.ok) throw new Error(`${url} answered ${res.status}`);
+      }, 'the map server');
+      if (!res.ok) throw new MapLoadError(BUSY_STATUS.has(res.status) ? 'busy' : 'other', `${url} answered ${res.status}`);
       // A timed-out or failed query still answers 200; try the next server instead.
       return checkOverpassAnswer((await res.json()) as OverpassJson, url);
     } catch (e) {
-      if (signal?.aborted) throw e;
+      if (signal?.aborted || isAbort(e)) throw e;
       lastErr = e;
+      kinds.push(classifyMapError(e));
     }
   }
-  throw new Error(`Could not download map data (${String(lastErr)})`);
+  // Busy anywhere: worth another go soon. Unreachable everywhere: a connection problem.
+  const kind: MapErrorKind = kinds.includes('busy') ? 'busy' : kinds.every((k) => k === 'offline') ? 'offline' : 'other';
+  throw new MapLoadError(kind, `Could not download map data (${String(lastErr)})`);
 }
 
 function buildingHeight(tags: Record<string, string>, id: number): number {
@@ -375,19 +453,29 @@ export async function geocode(query: string, signal?: AbortSignal): Promise<LatL
   if (m) {
     const lat = parseFloat(m[1]);
     const lon = parseFloat(m[2]);
-    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) throw new Error('Coordinates out of range: latitude must be -90 to 90 and longitude -180 to 180');
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) throw new MapLoadError('bad-coords', 'Coordinates out of range: latitude must be -90 to 90 and longitude -180 to 180');
     return { lat, lon, label: `${lat.toFixed(4)}, ${lon.toFixed(4)}` };
   }
   // Nominatim's usage policy: at most one request per second from this client.
   const wait = lastGeocode + 1100 - Date.now();
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  signal?.throwIfAborted(); // cancelled while waiting: don't send the request at all
   lastGeocode = Date.now();
   const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`;
-  const res = await fetch(url, { signal, headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`Place search failed (${res.status})`);
-  const arr = (await res.json()) as { lat: string; lon: string; display_name: string }[];
-  if (arr.length === 0) throw new Error(`No place found for "${query}"`);
-  return { lat: parseFloat(arr[0].lat), lon: parseFloat(arr[0].lon), label: arr[0].display_name.split(',').slice(0, 2).join(',') };
+  const res = await fetchOrOffline(url, { signal, headers: { Accept: 'application/json' } }, 'the place search');
+  if (!res.ok) throw new MapLoadError(BUSY_STATUS.has(res.status) ? 'busy' : 'other', `Place search failed (${res.status})`);
+  let arr: { lat: string; lon: string; display_name?: string }[];
+  try {
+    arr = (await res.json()) as typeof arr;
+  } catch (e) {
+    if (isAbort(e)) throw e;
+    throw new MapLoadError('other', "The place search sent an answer this game can't read");
+  }
+  const lat = Array.isArray(arr) ? parseFloat(arr[0]?.lat) : NaN;
+  const lon = Array.isArray(arr) ? parseFloat(arr[0]?.lon) : NaN;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new MapLoadError('not-found', `No place found for "${query}"`);
+  const label = String(arr[0].display_name ?? '').split(',').slice(0, 2).join(',').trim();
+  return { lat, lon, label: label || `${lat.toFixed(4)}, ${lon.toFixed(4)}` };
 }
 
 /** Stable seed for a real location so revisiting it gives the same missions. */

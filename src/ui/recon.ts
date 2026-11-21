@@ -1,7 +1,8 @@
 import type { MapData } from '../map/types';
 import { buildRoadGraph } from '../map/roadGraph';
 import { WalkGrid } from '../map/grid';
-import { CATEGORY_INFO, matchMissions, reconMap, type MissionSuggestion } from '../map/recon';
+import { CATEGORY_INFO, reconMap, type MissionSuggestion } from '../map/recon';
+import { rankedSuggestions, setCount, suggestionSet } from './suggestions';
 import { generateMission } from '../sim/missions';
 import { TacticalMap } from './tacticalMap';
 import { el } from './dom';
@@ -64,23 +65,36 @@ export function showRecon(parent: HTMLElement, map: MapData, start: { seed: numb
     o.value = v;
   }
   diff.value = String(start.difficulty);
-  const more = el('button', undefined, 'Other suggestions', ctrl);
+  const more = el('button', 'recon-more', 'Other suggestions', ctrl);
+  const setLabel = el('span', 'small recon-set', undefined, ctrl);
+  setLabel.setAttribute('aria-live', 'polite');
   const cards = el('div', 'recon-cards', undefined, root);
 
   const graph = buildRoadGraph(map);
   const walk = new WalkGrid(map);
-  let seed = start.seed;
+  const seed = start.seed;
+  // Every mission this map allows, best first; "Other suggestions" steps through them a few at a time.
+  let ranked: MissionSuggestion[] = [];
+  let rankedFor = NaN;
+  let page = 0;
   const render = () => {
     const d = Number(diff.value);
-    // Only offer missions the generator can actually build here, at this difficulty.
-    const accept = (s: MissionSuggestion) => {
-      try {
-        return generateMission(map, graph, walk, { type: s.base, difficulty: d, seed, template: s.template, anchor: s.anchor?.id }).ok;
-      } catch {
-        return false;
-      }
-    };
-    const picks = matchMissions(map, seed, { accept });
+    if (rankedFor !== d) {
+      // Only offer missions the generator can actually build here, at this difficulty.
+      const accept = (s: MissionSuggestion) => {
+        try {
+          return generateMission(map, graph, walk, { type: s.base, difficulty: d, seed, template: s.template, anchor: s.anchor?.id }).ok;
+        } catch {
+          return false;
+        }
+      };
+      ranked = rankedSuggestions(map, seed, accept);
+      rankedFor = d;
+    }
+    const sets = setCount(ranked.length);
+    const picks = suggestionSet(ranked, page);
+    more.disabled = sets < 2;
+    setLabel.textContent = sets > 1 ? `Set ${(page % sets) + 1} of ${sets}` : '';
     cards.replaceChildren();
     if (!picks.length) {
       el('p', 'status', "Recon couldn't fit a mission here: there aren't enough connected roads. Try a more built-up spot, or the sample town.", cards);
@@ -102,15 +116,18 @@ export function showRecon(parent: HTMLElement, map: MapData, start: { seed: numb
     });
   };
   render();
-  diff.addEventListener('change', render);
+  diff.addEventListener('change', () => {
+    page = 0;
+    render();
+  });
   more.addEventListener('click', () => {
-    seed += 1;
+    page += 1;
     render();
   });
 
   const foot = el('div', 'row', undefined, root);
-  el('button', undefined, 'Custom mission', foot).addEventListener('click', () => h.onCustom());
-  el('button', undefined, 'Change map', foot).addEventListener('click', () => h.onBack());
+  el('button', 'recon-custom', 'Custom mission', foot).addEventListener('click', () => h.onCustom());
+  el('button', 'recon-change', 'Scout another place', foot).addEventListener('click', () => h.onBack());
   el('p', 'attrib', map.attribution, root);
   return () => root.remove();
 }
