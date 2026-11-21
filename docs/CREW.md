@@ -30,12 +30,17 @@ So this crew is built the same way:
 | `/chief` | **Chief of Staff**: your single point of contact | What's next, who does it, and what needs you? | Builds and coordinates; never signs off its own work | main session |
 | `/player-test` | **Experience Playtester** (the player's chair) | Is it fun, clear and complete? What would a player miss (music, settings, progression)? | No (writes reports) | `player-tester` |
 | `/critic` | **Critic** (the magazine reviewer) | How would a reviewer score it against the genre, and what would raise the score? | No (writes reviews) | `critic` |
+| `/sound` | **Audio Director** (creative builder) | How should it sound? Music, ambience, effects, radio voice; generates within the owner's ElevenLabs budget | Yes (audio) | `audio-director` |
+| `/visuals` | **Art Director** (creative builder) | How should it look in every sensor? Figures, effects, world detail, HUD; keeps docs/STYLE.md | Yes (visuals) | `art-director` |
+| `/story` | **Story Writer** (creative builder) | What do the briefings and radio say? Characters, campaign arcs; always truthful, never cruel | Yes (text) | `story-writer` |
 | `/scout` | **Scout** (looks ahead) | What are others doing, and what would bring players back? Ethics guardrail: no manipulative hooks | No (writes idea reports) | `scout` |
 | `/debrief` | **Debrief** (whole crew) | What went wrong this week, and which crew roles earned their keep? | Docs only | — |
 
 **Later, when the phase arrives:**
 - `/voice`: Audio Producer, phase 3. Writes crew radio lines and generates them with ElevenLabs only after you approve the list and the credit cost.
 - `/assets`: 3D Artist, phase 4. Uses a Blender MCP connection on your own computer.
+
+**Creative builders vs checkers.** The audio director, art director and story writer *make* things in their domain, so their work is still checked by the independent checkers (two-key rule). They don't sign off their own work.
 
 ## How work flows
 

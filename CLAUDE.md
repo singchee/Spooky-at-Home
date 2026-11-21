@@ -22,6 +22,7 @@ Work runs through a small crew of roles, described in `docs/CREW.md`. As Chief o
 | Checks | `/review-code`, `/playtest`, `/balance`, `/map-check` | Independent checkers (subagents) |
 | Release | `/preflight` then `/release` | Release Engineer |
 | Weekly | `/debrief` | Retro |
+| Sound, look, words | `/sound`, `/visuals`, `/story` | Audio Director, Art Director, Story Writer (creative builders) |
 | Running the crew | `/chief` | Chief of Staff: briefs the owner, delegates to the commands above, merges within `docs/AUTONOMY.md`, escalates the rest |
 
 **Autonomy:** the crew merges class A/B changes itself and escalates class C/D to the user. Read `docs/AUTONOMY.md` before merging anything. Run `npm run -s classify` to get a change's class.

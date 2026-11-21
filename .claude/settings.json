@@ -1,12 +1,18 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(gh api -X PUT repos/singchee/Spooky-at-Home/pulls/:*)",
+      "Bash(gh api -X PATCH repos/singchee/Spooky-at-Home/pulls/:*)",
+      "mcp__claude-code-remote__create_trigger"
+    ],
     "deny": [
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
       "Bash(git reset --hard origin:*)",
       "Bash(rm -rf /:*)",
       "Bash(rm -rf ~:*)",
-      "Bash(npx playwright install:*)"
+      "Bash(npx playwright install:*)",
+      "Bash(gh api -X DELETE:*)"
     ]
   }
 }
