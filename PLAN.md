@@ -103,7 +103,7 @@ World builder  Road network        Walk grid               Mission generator
 
 | Gun | Field of view | Rate of fire | Magazine / reload | Shell flight time* | Blast radius | Role |
 |---|---|---|---|---|---|---|
-| 25 mm | narrow, 5° | 12/s | 60 / 3 s | ~2 s | 3.5 m | Precise; close to friendlies |
+| 25 mm | narrow, 5° | 12/s | unlimited (belt-fed, no reload; owner, 3.11) | ~2 s | 3.5 m | Precise; close to friendlies |
 | 40 mm | medium, 10° | 2.5/s | 8 / 3.5 s | ~2.5 s | 7 m | General use |
 | 105 mm | wide, 22° | 1 per 4 s | 1 / 4.5 s | ~4.5 s | 18 m | Hordes; dangerous near friendlies |
 

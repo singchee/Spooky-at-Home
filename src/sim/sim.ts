@@ -6,7 +6,7 @@ import { hashString, mulberry32, type Rng } from '../util/rng';
 import { nearChildPlace } from '../map/recon';
 import { placeLabel } from './missions';
 import { CHILD_FIRE_CLEARANCE, FIRST_WAVE, HORDE_SPREAD, HORDE_WANDER, WAVE_KINDS, type Mission, type WaveKind } from './missions';
-import { KILL_REACH, MAX_KILL_REACH, WEAPONS, weaponById, type WeaponDef } from './weapons';
+import { KILL_REACH, MAX_KILL_REACH, WEAPONS, isUnlimited, weaponById, type WeaponDef } from './weapons';
 
 /**
  * The game rules with no graphics. Deterministic: same mission + same inputs at the
@@ -62,6 +62,7 @@ export type SimEvent =
 
 export interface WeaponState {
   id: string;
+  /** Rounds left; Infinity for an unlimited gun (the 25 mm). */
   ammo: number;
   cooldown: number;
   reloading: number;
@@ -240,9 +241,11 @@ export class Sim {
     if (!this.weaponReady(id)) return false;
     const w = weaponById(id);
     const s = this.weapons.find((x) => x.id === id)!;
-    s.ammo--;
     s.cooldown += w.interval;
-    if (s.ammo <= 0) s.reloading = w.reload;
+    if (!isUnlimited(w)) {
+      s.ammo--;
+      if (s.ammo <= 0) s.reloading = w.reload;
+    }
     const from = this.aircraft();
     const g = gaussian(this.rng);
     const a = this.rng() * Math.PI * 2;

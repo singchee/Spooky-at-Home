@@ -1,6 +1,7 @@
 import type { SimState } from '../sim/sim';
 import type { Mission } from '../sim/missions';
-import { WEAPONS } from '../sim/weapons';
+import { WEAPONS, isUnlimited, type WeaponDef } from '../sim/weapons';
+import type { WeaponState } from '../sim/sim';
 import { fmtTime } from '../sim/missions';
 import type { MapData, V2 } from '../map/types';
 import { el } from './dom';
@@ -19,6 +20,12 @@ const CROSSHAIRS: Record<string, string> = Object.fromEntries(
     `<svg viewBox="-50 -50 100 100" fill="none"><g stroke="#000" stroke-width="5" opacity="0.75">${p}</g><g stroke="currentColor" stroke-width="1.8">${p}</g></svg>`,
   ]),
 );
+
+/** The ammo column: "∞" for the belt-fed 25 mm, "RELOAD 2.1" while reloading, else "5/8". */
+export function ammoText(w: WeaponDef, st: Pick<WeaponState, 'ammo' | 'reloading'>): string {
+  if (isUnlimited(w)) return '∞';
+  return st.reloading > 0 ? `RELOAD ${st.reloading.toFixed(1)}` : `${st.ammo}/${w.magazine}`;
+}
 
 export interface HudMarker { label: string; x: number; y: number; visible: boolean }
 
@@ -69,7 +76,8 @@ export class Hud {
       const st = s.weapons.find((x) => x.id === w.id)!;
       const row = el('div', `hud-w${w.id === weapon ? ' active' : ''}`, undefined, this.weapons);
       el('span', 'hud-wname', w.name, row);
-      el('span', 'hud-wammo', st.reloading > 0 ? `RELOAD ${st.reloading.toFixed(1)}` : `${st.ammo}/${w.magazine}`, row);
+      const ammo = el('span', 'hud-wammo', ammoText(w, st), row);
+      if (isUnlimited(w)) ammo.setAttribute('aria-label', 'unlimited');
     }
     // Mission
     const training = (m as TrainingMission).training;
