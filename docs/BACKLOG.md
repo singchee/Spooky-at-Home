@@ -25,6 +25,14 @@ Status: `todo` · `in-progress` · `waiting-on-you` · `done`
 | 1.12 | Phone-width HUD: the sensor label overlaps the radio log at 390 px and 320 px. Hit the 2-round fix limit, so it's parked (the game is mouse-and-keyboard for now) | waiting-on-you |
 | 1.11 | "Build this place" (address → real map) can't be tested in the cloud container: OpenStreetMap hosts are blocked. Test on your machine, or allow the hosts | waiting-on-you |
 
+### Decision (owner, 22 Nov): building detail
+- **In game:** richer OpenStreetMap buildings and street detail (option 1: free, works anywhere, private). **No Google Photorealistic 3D Tiles**: cost, terms (logo and credits on screen, no caching, unclear whether a thermal filter may alter the imagery) and the realism/tone risk.
+- **Briefings:** a clean "blocky" 3D model of the mission area, slowly orbiting, beside the tactical map (backlog 3.5).
+
+| # | Item | Needs checks | Status |
+|---|---|---|---|
+| 3.5 | Briefing diorama: blocky 3D model of the mission area with landmark labels and mission markers | review, playtest, feel | in-progress |
+
 ## Phase 2 — your neighbourhood, for real (approved by owner in chat, 22 Nov)
 
 | # | Item | Needs checks | Status |
