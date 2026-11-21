@@ -1,8 +1,11 @@
 import type { Feature, FeatureCategory, MapData, V2 } from '../map/types';
 import { bounds, centroid, dist, pointInPolygon, polygonArea, polylineLength, distToSegment } from '../map/geom';
-import { dijkstra, nearestNode, pathFromPrev, roadNamesAlong, type RoadGraph } from '../map/roadGraph';
+import { avoidingEdges, dijkstra, nearestNode, pathFromPrev, roadNamesAlong, type EdgeCost, type RoadGraph } from '../map/roadGraph';
 import type { WalkGrid } from '../map/grid';
-import { CATEGORY_INFO, CHILD_KINDS, MISSION_TEMPLATES, featureName, findAnchor, nearChildPlace, type TemplateId } from '../map/recon';
+import {
+  CATEGORY_INFO, CHILD_KINDS, MISSION_TEMPLATES, featureName, findAnchor, nearChildPlace, routeNearChildPlace, segmentNearChildPlace, type TemplateId,
+} from '../map/recon';
+import { MAX_KILL_REACH } from './weapons';
 import { hashString, mulberry32, pick, shuffle, type Rng } from '../util/rng';
 
 /**
@@ -108,8 +111,28 @@ const KIND_LABEL: Record<string, string> = {
   fire_station: 'the fire station', library: 'the library', place_of_worship: 'the church', clinic: 'the clinic',
 };
 
-/** Guardrail (PLAN §9): no horde is placed within this many metres of a school, kindergarten or playground. */
-const HORDE_CHILD_GAP = 60;
+/** A horde's zombies start within this many metres of its gathering point (see Sim). */
+export const HORDE_SPREAD = 22;
+/** ...and mill around it, each heading for a spot up to this many metres away (see Sim.updateZombies). */
+export const HORDE_WANDER = 26;
+/** Metres of clear ground kept between the farthest a shell can kill and a school, kindergarten or playground. */
+export const CHILD_FIRE_CLEARANCE = 30;
+/**
+ * Guardrail (PLAN §9): no horde gathers within this many metres of a school, kindergarten or playground.
+ * A zombie at the edge of its wander, hit by a 105 round, still leaves CHILD_FIRE_CLEARANCE of clear
+ * ground before the grounds: 26 + 24 + 30 = 80 m.
+ */
+export const HORDE_CHILD_GAP = Math.max(HORDE_SPREAD, HORDE_WANDER) + MAX_KILL_REACH + CHILD_FIRE_CLEARANCE;
+
+/** Road edges a survivor's route may not use: any that passes within CHILD_BUFFER of a child place (PLAN §9). */
+const routeCostCache = new WeakMap<RoadGraph, { map: MapData; cost: EdgeCost }>();
+function childSafeCost(map: MapData, g: RoadGraph): EdgeCost {
+  const hit = routeCostCache.get(g);
+  if (hit && hit.map === map) return hit.cost;
+  const cost = avoidingEdges(g, (a, b) => segmentNearChildPlace(map, a, b));
+  routeCostCache.set(g, { map, cost });
+  return cost;
+}
 
 const fmtTime = (secs: number) => {
   const s = Math.max(0, Math.ceil(secs));
@@ -231,6 +254,7 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
     const hordes: Horde[] = centres.map((c) => ({ centre: c, count: per, cold: Math.round(per * coldShare), label: placeLabel(map, c) }));
     const shelterAt = hordes[Math.floor(rng() * hordes.length)];
     const shelterSpot = shelterSpotFor(grid, map, hordes, shelterAt, rng);
+    if (!shelterSpot) return { ok: false, reason: noShelterReason };
     const survivors: SurvivorPlan[] = [0, 1].map((k) => ({ start: { x: shelterSpot.x + k * 2, z: shelterSpot.z }, route: null, delay: 0 }));
     const orbit = centroid(centres);
     const coldPlaces = hordes.filter((h) => h.cold > 0).map((h) => h.label);
@@ -303,7 +327,9 @@ function buildEscort(c: Ctx, safehouse: Safehouse, fl: EscortFlavour = CLASSIC_E
   const { map, g, grid, rng, d, base, coldShare, coldIntel, roe } = c;
   const safeNode = nearestNode(g, safehouse.centre, 200);
   if (safeNode < 0) return { ok: false, reason: 'The safehouse is not reachable by road.' };
-  const { d: roadDist, prev } = dijkstra(g, safeNode);
+  // Guardrail (PLAN §9): the walk home never passes within CHILD_BUFFER of a school, kindergarten or
+  // playground. Roads that do are closed to the route finder; a home only reachable past one isn't offered.
+  const { d: roadDist, prev } = dijkstra(g, safeNode, childSafeCost(map, g));
   const minL = 280 + 40 * d;
   const maxL = 480 + 70 * d;
   const homes = map.buildings
@@ -318,12 +344,27 @@ function buildEscort(c: Ctx, safehouse: Safehouse, fl: EscortFlavour = CLASSIC_E
     scored.push({ c: h.c, node, L: roadDist[node] });
     if (scored.length > 4000) break;
   }
-  let pool = scored.filter((s) => s.L >= minL && s.L <= maxL);
-  if (!pool.length) pool = scored.filter((s) => s.L >= 150).sort((a, b) => b.L - a.L).slice(0, 10);
-  if (!pool.length) return { ok: false, reason: 'No homes are far enough away by road for an escort mission.' };
+  const routeTo = (s: { c: V2; node: number }) => {
+    const pathNodes = pathFromPrev(prev, s.node);
+    return { pathNodes, route: [grid.nearestFree(g.nodes[pathNodes[0]]), ...pathNodes.slice(1).map((i) => g.nodes[i]), s.c] };
+  };
+  // The roads are clear; also the first step off the safehouse's corner and the last one up to the door.
+  const clearWalk = (s: { c: V2; node: number }) => !routeNearChildPlace(map, routeTo(s).route);
+  let pool = scored.filter((s) => s.L >= minL && s.L <= maxL).filter(clearWalk);
+  if (!pool.length) pool = scored.filter((s) => s.L >= 150).sort((a, b) => b.L - a.L).filter(clearWalk).slice(0, 10);
+  if (!pool.length) {
+    // Say why: is it the distance, or is every way home past a school?
+    const { d: anyDist } = dijkstra(g, safeNode);
+    const farEnough = homes.some((h) => {
+      const node = nearestNode(g, h.c, 60);
+      return node >= 0 && anyDist[node] >= 150 && Number.isFinite(anyDist[node]);
+    });
+    return farEnough
+      ? { ok: false, reason: `Every way home from ${safehouse.name} passes a school, kindergarten or playground, so there's no escort mission from here. Try another mission.` }
+      : { ok: false, reason: 'No homes are far enough away by road for an escort mission.' };
+  }
   const home = pick(rng, pool);
-  const pathNodes = pathFromPrev(prev, home.node);
-  const route = [grid.nearestFree(g.nodes[pathNodes[0]]), ...pathNodes.slice(1).map((i) => g.nodes[i]), home.c];
+  const { pathNodes, route } = routeTo(home);
   const streets = roadNamesAlong(g, map, pathNodes);
   const homeStreet = nearestStreet(map, home.c);
   const n = 4 + Math.floor(d / 2);
@@ -432,7 +473,9 @@ function buildDefend(c: Ctx, safehouse: Safehouse, fl?: DefendFlavour): MissionR
   const { map, g, grid, rng, d, base, coldShare, coldIntel, roe } = c;
   const safeNode = nearestNode(g, safehouse.centre, 200);
   if (safeNode < 0) return { ok: false, reason: 'The safehouse is not reachable by road.' };
-  const { d: roadDist, prev } = dijkstra(g, safeNode);
+  // Guardrail (PLAN §9): stragglers start, and walk in, clear of schools, kindergartens and playgrounds
+  // (the same rule as escort routes): roads past one are closed to them.
+  const { d: roadDist, prev } = dijkstra(g, safeNode, childSafeCost(map, g));
   const hold = 150 + 15 * d;
   // The waves must be able to reach the building, or the mission can't be lost.
   const perimeter = grid.perimeterCells(safehouse.poly);
@@ -444,12 +487,11 @@ function buildDefend(c: Ctx, safehouse: Safehouse, fl?: DefendFlavour): MissionR
   if (!perimeter.length || reachableSpawns.length < 5) {
     return { ok: false, reason: `Zombies can't reach ${safehouse.name} on foot, so it can't be defended. Try another mission type or seed.` };
   }
-  const stragglerStarts = roadNodesWithin(g, map, 0.9).filter((i) => roadDist[i] > 110 && roadDist[i] < 220);
+  const stragglerRoute = (s: number) => [...pathFromPrev(prev, s).reverse().map((i) => g.nodes[i]), safehouse.centre];
+  const stragglerStarts = roadNodesWithin(g, map, 0.9).filter((i) => roadDist[i] > 110 && roadDist[i] < 220 && !routeNearChildPlace(map, stragglerRoute(i)));
   const survivors: SurvivorPlan[] = [];
   if (stragglerStarts.length) {
-    const s = pick(rng, stragglerStarts);
-    const path = pathFromPrev(prev, s).reverse();
-    const route = [...path.map((i) => g.nodes[i]), safehouse.centre];
+    const route = stragglerRoute(pick(rng, stragglerStarts));
     survivors.push({ start: route[0], route, delay: 4 }, { start: route[0], route, delay: 5.5 });
   }
   const from = survivors.length ? nearestStreet(map, survivors[0].start) : '';
@@ -601,6 +643,7 @@ function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'c
   });
   const shelterAt = hordes[Math.floor(rng() * hordes.length)];
   const shelterSpot = shelterSpotFor(grid, map, hordes, shelterAt, rng);
+  if (!shelterSpot) return { ok: false, reason: noShelterReason };
   const survivors: SurvivorPlan[] = [0, 1].map((k) => ({ start: { x: shelterSpot.x + k * 2, z: shelterSpot.z }, route: null, delay: 0 }));
   const timeLimit = 240 + 30 * d + (forest ? 30 : 0);
   const hereCount = hordes.filter((h) => h.label === name).length;
@@ -691,25 +734,49 @@ export function likelyWaveDirections(m: Mission, map: MapData, g: RoadGraph): Wa
 /** Sheltering friendlies sit at least this far from every horde's gathering point (hordes mill within ~30 m). */
 export const SHELTER_GAP = 70;
 
+/** The two sheltering friendlies stand up to this far from their spot (Sim spreads them out a little). */
+const SHELTER_SPREAD = 4;
+
 /**
  * Where the two sheltering friendlies wait in a Clear mission: near their named horde (that's the story),
  * but at least SHELTER_GAP from every horde, so a player who hasn't found them yet can't lose in seconds.
+ * Guardrail (PLAN §9): the nearest horde drifts toward them (Sim), so their spot, and the drifting horde's
+ * whole way there, keep the same HORDE_CHILD_GAP from schools, kindergartens and playgrounds as a horde does.
+ * Null when there is no such spot.
  */
-function shelterSpotFor(grid: WalkGrid, map: MapData, hordes: Horde[], near: Horde, rng: Rng): V2 {
+function shelterSpotFor(grid: WalkGrid, map: MapData, hordes: Horde[], near: Horde, rng: Rng): V2 | null {
   const a0 = rng() * Math.PI * 2;
-  const ok = (p: V2) =>
-    !grid.isBlocked(p.x, p.z) && hordes.every((h) => dist(h.centre, p) >= SHELTER_GAP) && !nearChildPlace(map, p) && Math.abs(p.x) < map.half * 0.9 && Math.abs(p.z) < map.half * 0.9;
+  const childSafe = (p: V2) => {
+    if (grid.isBlocked(p.x, p.z) || Math.abs(p.x) >= map.half * 0.9 || Math.abs(p.z) >= map.half * 0.9) return false;
+    if (nearChildPlace(map, p, HORDE_CHILD_GAP + SHELTER_SPREAD)) return false;
+    // The horde that will drift here: the nearest one (first on a tie), as Sim picks it.
+    const drifter = hordes.reduce((a, h) => (dist(h.centre, p) < dist(a.centre, p) ? h : a), hordes[0]);
+    return !segmentNearChildPlace(map, drifter.centre, p, HORDE_CHILD_GAP);
+  };
+  const ok = (p: V2) => hordes.every((h) => dist(h.centre, p) >= SHELTER_GAP) && childSafe(p);
+  const ring = (r: number, k: number) => {
+    const a = a0 + (k / 16) * Math.PI * 2;
+    return grid.nearestFree({ x: near.centre.x + Math.cos(a) * r, z: near.centre.z + Math.sin(a) * r }, 9);
+  };
   for (let r = SHELTER_GAP + 5; r <= 200; r += 15) {
     for (let k = 0; k < 16; k++) {
-      const a = a0 + (k / 16) * Math.PI * 2;
-      const p = grid.nearestFree({ x: near.centre.x + Math.cos(a) * r, z: near.centre.z + Math.sin(a) * r }, 9);
+      const p = ring(r, k);
       if (ok(p)) return p;
     }
   }
-  // Fallback: the farthest free spot from all hordes along the search ring.
-  return grid.nearestFree({ x: near.centre.x + Math.cos(a0) * 120, z: near.centre.z + Math.sin(a0) * 120 });
+  // Fallback: a spot 120 m out, or failing that any child-safe spot on the search rings.
+  const far = grid.nearestFree({ x: near.centre.x + Math.cos(a0) * 120, z: near.centre.z + Math.sin(a0) * 120 });
+  if (childSafe(far)) return far;
+  for (let r = SHELTER_GAP + 5; r <= 200; r += 15) {
+    for (let k = 0; k < 16; k++) {
+      const p = ring(r, k);
+      if (childSafe(p)) return p;
+    }
+  }
+  return null;
 }
 
+const noShelterReason = 'Could not find a safe spot for the sheltering friendlies on this map. Try another mission.';
 const unique = <T>(a: T[]) => [...new Set(a)];
 const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 function listJoin(a: string[]): string {
