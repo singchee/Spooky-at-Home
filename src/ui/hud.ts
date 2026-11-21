@@ -6,6 +6,7 @@ import { fmtTime } from '../sim/missions';
 import type { MapData, V2 } from '../map/types';
 import { el } from './dom';
 import { TacticalMap } from './tacticalMap';
+import { HotkeyStrip } from './hotkeys';
 
 /** Static crosshair artwork per gun (constants we wrote, not map data). */
 const SHAPES: Record<string, string> = {
@@ -48,6 +49,7 @@ export class Hud {
   private markers: HTMLDivElement;
   private lines: { text: string; t: number; alarm: boolean }[] = [];
   private lastWeapon = '';
+  private keys: HotkeyStrip;
 
   constructor(parent: HTMLElement, attribution: string) {
     this.root = el('div', 'hud', undefined, parent);
@@ -61,7 +63,7 @@ export class Hud {
     this.switching = el('div', 'hud-switching', 'SENSOR SWITCH', this.root);
     this.markers = el('div', 'hud-markers', undefined, this.root);
     el('div', 'hud-attrib', attribution, this.root);
-    el('div', 'hud-keys', 'Mouse aim · hold click fire · Q/1-3 gun · V camera · H white/black hot · Z zoom · M mute · Esc pause', this.root);
+    this.keys = new HotkeyStrip(this.root);
   }
 
   say(text: string, now: number, alarm = false): void {
@@ -140,6 +142,7 @@ export class Hud {
   }
 
   dispose(): void {
+    this.keys.dispose();
     this.root.remove();
   }
 }

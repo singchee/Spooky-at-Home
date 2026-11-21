@@ -107,7 +107,7 @@ World builder  Road network        Walk grid               Mission generator
 | 40 mm | medium, 10° | 2.5/s | 8 / 3.5 s | ~2.5 s | 7 m | General use |
 | 105 mm | wide, 22° | 1 per 4 s | 1 / 4.5 s | ~4.5 s | 18 m | Hordes; dangerous near friendlies |
 
-*From a slant range of about 2.2 km. The delay is deliberate: you have to lead moving targets. **Controls:** mouse aims (click to capture the pointer), hold the mouse button to fire, `Q` or `1/2/3` to switch guns, `Z` to zoom, `V` to switch cameras, `H` to switch white-hot/black-hot (thermal only), `R` to restart.
+*From a slant range of about 2.2 km. The delay is deliberate: you have to lead moving targets. **Controls** (3.11; the key map is `src/game/controls.ts`): mouse aims (click to capture the pointer), hold the mouse button to fire, `R` or `1/2/3` to switch guns, `Q` to cycle the view (white-hot → black-hot → night vision), `V` thermal/night vision, `H` white-hot/black-hot (thermal only), `Z` to zoom, `WASD` to nudge the aim, `M` mute, `Esc` the pause menu (Resume, Briefing, Restart mission, Settings, Quit to menu; Esc again resumes). After a mission: `R` retry, `N` next (after a 1 s grace). A key-hints strip sits along the bottom of the HUD (Settings can hide it). **Touch screens** get on-screen controls instead: a thumb stick to move the aim, FIRE (hold), GUN, VIEW, ZOOM (or pinch) and a pause button; tapping the picture aims there.
 
 ## 5a. Cameras (sensors) and cold-blooded zombies
 

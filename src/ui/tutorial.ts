@@ -7,7 +7,7 @@ import { Sim } from '../sim/sim';
 import { weaponById } from '../sim/weapons';
 import { mulberry32 } from '../util/rng';
 import { Game, type GameAction } from '../game/game';
-import { STEP_TEXT, TutorialSteps, planLayout, trainingMission, type StepId, type TrainingLayout } from './tutorialSteps';
+import { STEP_TEXT, TOUCH_GLOSSARY, TutorialSteps, planLayout, trainingMission, type StepId, type TrainingLayout } from './tutorialSteps';
 import { el } from './dom';
 
 /**
@@ -129,6 +129,8 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
   const hint = el('p', 'coach-hint', undefined, coach);
   const bar = el('div', 'coach-bar', undefined, coach);
   const fill = el('span', undefined, undefined, bar);
+  // Touch screens: which button stands for the keys the steps name.
+  const glossary = el('p', 'coach-small coach-touch', TOUCH_GLOSSARY, coach);
   const row = el('div', 'coach-row', undefined, coach);
   const marker = el('div', 'coach-marker', undefined, parent);
   marker.setAttribute('aria-hidden', 'true');
@@ -170,6 +172,7 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
     hint.textContent = h ?? '';
     hint.classList.toggle('alarm', !!h && h.startsWith('CHECK FIRE'));
     bar.style.display = steps.step === 'intro' || steps.step === 'done' ? 'none' : '';
+    glossary.hidden = !game.info().touch || steps.step === 'done';
     fill.style.width = `${Math.round(steps.progress * 100)}%`;
   };
   const skip = () => {

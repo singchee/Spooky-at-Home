@@ -64,8 +64,8 @@ export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) =>
   const training = el('button', 'la-training', undefined, actions);
   el('span', 'la-label', 'Training night', training);
   el('span', 'la-sub', opts.trained ? '✓ done · fly it again' : 'first time? 3 minutes', training);
-  // Shown only on touch screens (CSS: pointer: coarse). The gunship needs a mouse to aim and a keyboard to switch.
-  el('p', 'landing-touch', 'Best with a mouse and keyboard.', main);
+  // Shown only on touch screens (CSS: pointer: coarse): missions bring up on-screen controls there (3.11).
+  el('p', 'landing-touch', 'On a touch screen, missions show a thumb stick and FIRE, GUN and VIEW buttons.', main);
 
   el('p', 'landing-privacy', 'Your search goes straight from your browser to OpenStreetMap. Nothing is stored.', main);
   el('p', 'landing-credit', 'Map data © OpenStreetMap contributors (ODbL)', main);

@@ -303,7 +303,7 @@ button:disabled { opacity: 0.5; }
 .la-sub { font-size: 14px; color: var(--muted); }
 .landing-actions button:focus-visible, .coach button:focus-visible, .menu-back:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .landing-privacy, .landing-credit { color: var(--muted); font-size: 14px; margin: 4px 0; line-height: 1.45; max-width: 560px; }
-/* Only on touch screens: the gunship wants a mouse and keyboard. */
+/* Only on touch screens: says the missions have touch controls. */
 .landing-touch { display: none; color: var(--ink); font-size: 14px; margin: 0 0 12px; }
 @media (pointer: coarse) { .landing-touch { display: block; } }
 @media (min-width: 900px) {
@@ -475,3 +475,54 @@ button:disabled { opacity: 0.5; }
   .settings-row:not(.settings-toggle) { grid-template-columns: minmax(0, 1fr) 4.5em; }
   .settings-row > label:first-child { grid-column: 1 / -1; }
 }
+
+/* ---------- Controls (3.11): key-hints strip, touch controls, touch-sized menus ---------- */
+.hud-keys kbd { font: inherit; font-weight: 700; color: #fff; }
+.hud-keys .hk-sep { color: var(--muted); }
+.hud-keys[hidden] { display: none !important; }
+/* Touch controls replace the keys strip and the sensor label (the VIEW and ZOOM buttons show both). */
+.touch-mode .hud-keys, .touch-mode .hud-sensor { display: none; }
+.touch-controls { position: absolute; inset: 0; z-index: 7; pointer-events: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  --tc-edge: 16px; --tc-bottom: 48px; --tc-stick: 136px; --tc-fire: 104px; --tc-btn: 64px; --tc-gap: 10px; }
+.touch-controls[hidden] { display: none; }
+.touch-mode .game-canvas, .touch-controls, .touch-controls * { touch-action: none; }
+.tc-stick, .tc-btn { pointer-events: auto; }
+.tc-stick { position: absolute; left: calc(var(--tc-edge) + env(safe-area-inset-left, 0px)); bottom: calc(var(--tc-bottom) + env(safe-area-inset-bottom, 0px));
+  width: var(--tc-stick); height: var(--tc-stick); border-radius: 50%; border: 2px solid rgba(231, 239, 233, 0.55); background: rgba(0, 0, 0, 0.45); }
+.tc-knob { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%; background: rgba(231, 239, 233, 0.8); border: 2px solid #000; }
+.tc-stick.down { border-color: var(--accent); }
+.tc-pad { position: absolute; right: calc(var(--tc-edge) + env(safe-area-inset-right, 0px)); bottom: calc(var(--tc-bottom) + env(safe-area-inset-bottom, 0px));
+  display: grid; grid-template-columns: var(--tc-btn) var(--tc-fire); grid-template-rows: var(--tc-btn) var(--tc-fire); gap: var(--tc-gap); align-items: end; justify-items: end; }
+.tc-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; padding: 0; min-height: 0; width: var(--tc-btn); height: var(--tc-btn);
+  border-radius: 12px; border: 2px solid rgba(231, 239, 233, 0.6); background: rgba(0, 0, 0, 0.6); color: var(--ink); font-size: 14px; font-weight: 700; line-height: 1.15; }
+/* Pressed: a steady highlight while held (never a flash: reduce flicker). */
+.tc-btn.down, .tc-btn:active { background: rgba(184, 255, 138, 0.3); border-color: var(--accent); }
+.tc-sub { font-weight: 400; font-size: 14px; color: var(--accent); }
+.tc-fire { grid-column: 2; grid-row: 2; width: var(--tc-fire); height: var(--tc-fire); border-radius: 50%; font-size: 18px; border-color: #ff8a7f; background: rgba(120, 20, 14, 0.62); }
+.tc-fire.down { background: rgba(255, 107, 94, 0.55); border-color: #fff; }
+.tc-gun { grid-column: 1; grid-row: 2; }
+.tc-view { grid-column: 2; grid-row: 1; justify-self: center; }
+.tc-zoom { grid-column: 1; grid-row: 1; }
+.tc-pause { position: absolute; left: calc(var(--tc-edge) + env(safe-area-inset-left, 0px)); top: calc(var(--tc-edge) + env(safe-area-inset-top, 0px)); width: 48px; height: 48px; font-size: 16px; letter-spacing: 0.05em; }
+/* HUD rearranged around the touch controls. */
+.touch-mode .hud-weapons { left: calc(72px + env(safe-area-inset-left, 0px)); }
+.touch-mode .hud-attrib { left: 50%; right: auto; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); max-width: calc(100% - 32px); text-align: center; }
+/* Radio captions sit between the stick and the buttons... */
+.touch-mode .hud-radio { left: calc(var(--tc-edge, 16px) + 152px + env(safe-area-inset-left, 0px)); right: calc(226px + env(safe-area-inset-right, 0px)); bottom: calc(48px + env(safe-area-inset-bottom, 0px)); max-width: none; }
+@media (max-width: 640px) {
+  /* ...or above them on a narrow (portrait) phone. */
+  .touch-mode .hud-radio { left: 16px; right: 16px; bottom: calc(244px + env(safe-area-inset-bottom, 0px)); }
+}
+@media (max-height: 560px) {
+  /* Short landscape phones: smaller controls, and the minimap moves up beside the guns, clear of the stick. */
+  .touch-controls { --tc-stick: 120px; --tc-fire: 88px; --tc-btn: 56px; --tc-gap: 8px; }
+  .touch-mode .hud-minimap { left: calc(264px + env(safe-area-inset-left, 0px)); top: 16px; width: 112px; }
+  .touch-mode .hud-radio { left: calc(152px + env(safe-area-inset-left, 0px)); right: calc(186px + env(safe-area-inset-right, 0px)); }
+}
+/* Menus, landing, recon and briefing on touch screens: 48 px tap targets. */
+@media (pointer: coarse) {
+  button, .bv-tab, select, input:not([type=range]):not([type=checkbox]):not([type=radio]) { min-height: 48px; }
+  .settings-row { min-height: 48px; }
+  .settings-toggle input { width: 28px; height: 28px; }
+}
+.coach.paused .coach-touch { display: none; }

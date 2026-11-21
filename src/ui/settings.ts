@@ -15,6 +15,8 @@ export interface Settings {
   invertY: boolean;
   /** Calmer camera and switch effects; defaults to the OS reduced-motion preference. */
   reduceFlicker: boolean;
+  /** The key-hints strip along the bottom of the mission HUD (keyboard and mouse only). */
+  showHotkeys: boolean;
 }
 
 const KEY = 'spooky.settings';
@@ -26,7 +28,7 @@ export function defaultSettings(): Settings {
   } catch {
     /* no matchMedia (tests) */
   }
-  return { masterVolume: 0.8, musicVolume: 0.6, sfxVolume: 0.9, radioVolume: 0.8, muted: false, mouseSensitivity: 1, invertY: false, reduceFlicker: reduce };
+  return { masterVolume: 0.8, musicVolume: 0.6, sfxVolume: 0.9, radioVolume: 0.8, muted: false, mouseSensitivity: 1, invertY: false, reduceFlicker: reduce, showHotkeys: true };
 }
 
 const clamp = (v: unknown, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d);
@@ -44,6 +46,7 @@ export function sanitize(raw: unknown): Settings {
     mouseSensitivity: clamp(r.mouseSensitivity, 0.25, 3, d.mouseSensitivity),
     invertY: typeof r.invertY === 'boolean' ? r.invertY : d.invertY,
     reduceFlicker: typeof r.reduceFlicker === 'boolean' ? r.reduceFlicker : d.reduceFlicker,
+    showHotkeys: typeof r.showHotkeys === 'boolean' ? r.showHotkeys : d.showHotkeys,
   };
 }
 

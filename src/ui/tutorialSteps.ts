@@ -48,6 +48,8 @@ export const NARROW_FOV = 3;
  */
 export const SENSOR_SETTLE = 0.8;
 export const LENS_HINT = 'Press 1 and Z: small things need a narrow lens.';
+/** On touch screens, the coach adds which button does what the keys in its text do (3.11). */
+export const TOUCH_GLOSSARY = 'Touch: stick or tap = aim · hold FIRE = fire · GUN = R / 1-3 · VIEW = Q, V, H · ZOOM = Z.';
 
 export class TutorialSteps {
   step: StepId = 'intro';
@@ -127,7 +129,7 @@ export class TutorialSteps {
         if (this.weapon === '105') return this.advance();
         break;
       case 'fire105':
-        if (i.type === 'weapon' && i.weapon !== '105') this.note = 'Back to the 105: press 3 (or Q).';
+        if (i.type === 'weapon' && i.weapon !== '105') this.note = 'Back to the 105: press 3 (or R).';
         if (i.type === 'impact' && i.weapon === '105') {
           if (i.kills > 0) {
             this.note = null;
@@ -218,7 +220,7 @@ export class TutorialSteps {
     if (this.note) return this.note;
     if (this.step === 'fire25' && this.weapon !== '25') return 'Press 1 to pick the 25 mm.';
     if (this.step === 'fire25' && this.rounds >= ROUNDS_25 && this.hits25 === 0) return 'Hits count, not rounds. Put the crosshair right on a zombie by the marker.';
-    if (this.step === 'fire105' && this.weapon !== '105') return 'Press 3 (or Q) for the 105 mm.';
+    if (this.step === 'fire105' && this.weapon !== '105') return 'Press 3 (or R) for the 105 mm.';
     if (this.step === 'polarity' && this.sensor !== 'thermal') return 'Press V to go back to thermal first.';
     if (this.step === 'night') {
       if (!this.narrow) return LENS_HINT;
@@ -258,7 +260,7 @@ export const STEP_TEXT: Record<StepId, { title: string; body: string }> = {
   },
   switch: {
     title: 'Switch guns',
-    body: 'Q cycles the guns; 1, 2 and 3 pick one directly. The 40 mm (2) is the all-rounder. Pick the 105 mm (3): the big one.',
+    body: 'R cycles the guns; 1, 2 and 3 pick one directly. The 40 mm (2) is the all-rounder. Pick the 105 mm (3): the big one.',
   },
   fire105: {
     title: 'Fire the 105 at the crowd',
@@ -266,7 +268,7 @@ export const STEP_TEXT: Record<StepId, { title: string; body: string }> = {
   },
   polarity: {
     title: 'White-hot or black-hot',
-    body: 'Press H to flip the thermal picture. Some gunners see better in black-hot. Nobody judges. Flip back any time.',
+    body: 'Press H to flip the thermal picture (Q steps through white-hot, black-hot and night vision). Some gunners see better in black-hot. Nobody judges. Flip back any time.',
   },
   night: {
     title: 'The cold-blooded',

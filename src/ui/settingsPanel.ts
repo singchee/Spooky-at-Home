@@ -51,6 +51,7 @@ export const SLIDERS: readonly SliderDef[] = [
 export const TOGGLES: readonly ToggleDef[] = [
   { key: 'muted', label: 'Mute all sound', group: 'sound', hint: 'M in a mission' },
   { key: 'invertY', label: 'Invert vertical aim', group: 'controls', hint: 'Mouse up moves the aim down' },
+  { key: 'showHotkeys', label: 'Show key hints', group: 'controls', hint: 'The strip of keys along the bottom of a mission (not shown with touch controls)' },
   { key: 'reduceFlicker', label: 'Reduce flicker', group: 'comfort', hint: 'No camera kick from the 105, and camera switches fade instead of flashing static' },
 ];
 

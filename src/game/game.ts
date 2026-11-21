@@ -22,6 +22,8 @@ import { openSettingsPanel } from '../ui/settingsPanel';
 import { bestKey, bests, formatBest, formatTime, missionKind } from '../ui/bests';
 import { gradeMission, scoreInput } from '../sim/score';
 import { effectiveReduceFlicker, mouseAimDelta } from './input';
+import { KEYS_SENTENCE, TOUCH_SENTENCE, keyAction, nextView, viewLabel, type ControlAction } from './controls';
+import { TouchControls } from './touchControls';
 
 /** The browser game: renders the simulation, handles input, camera, sound and screens. */
 export interface GameOptions {
@@ -138,6 +140,12 @@ export class Game {
   private fixedDt: number | null = null;
   /** The briefing's map and 3D diorama (disposed when the briefing closes). */
   private briefingView: { dispose(): void } | null = null;
+  /** On-screen controls for touch screens (3.11). */
+  private touch!: TouchControls;
+  /** When the current screen (pause card, result card) appeared, performance.now() ms: some keys wait a moment. */
+  private screenAt = 0;
+  /** Paused and reading the briefing again (Esc or Back returns to the pause card). */
+  private reviewing = false;
 
   constructor(private container: HTMLElement, private map: MapData, sim: Sim, private opts: GameOptions) {
     this.sim = sim;
@@ -215,8 +223,10 @@ export class Game {
   }
 
   // ---------- screens ----------
-  private showBriefing(): void {
+  /** The mission briefing: before the mission, or again from the pause menu (`review`: read-only, Back returns). */
+  private showBriefing(review = false): void {
     const m = this.sim.mission;
+    this.briefingView?.dispose();
     this.overlay.replaceChildren();
     const card = el('div', 'card briefing', undefined, this.overlay);
     const visuals = briefingVisuals(this.map, m, this.sim.graph);
@@ -226,7 +236,14 @@ export class Game {
     el('h2', undefined, m.title, card);
     for (const line of m.briefing) el('p', undefined, line, card);
     for (const line of m.intel) el('p', 'intel', line, card);
-    el('p', 'small', 'Controls: mouse to aim (click to capture the pointer) · hold left click to fire · Q or 1/2/3 switch gun · V switch camera · H white-hot/black-hot · Z zoom · WASD nudge aim · M mute · Esc pause.', card);
+    el('p', 'small', this.touch?.active ? TOUCH_SENTENCE : KEYS_SENTENCE, card);
+    if (review) {
+      const back = el('button', 'primary briefing-back', 'Back', card);
+      back.addEventListener('click', () => this.showPause());
+      this.overlay.style.display = 'flex';
+      back.focus({ preventScroll: true });
+      return;
+    }
     const go = el('button', 'primary', 'Start mission', card);
     go.addEventListener('click', () => {
       this.sfx.unlock();
@@ -249,22 +266,43 @@ export class Game {
     this.screen = 'paused';
     this.firing = false;
     if (document.pointerLockElement) document.exitPointerLock?.();
+    this.showPause();
+  }
+
+  /** The pause menu (Esc): Resume, Briefing, Restart, Settings, Quit to menu. */
+  private showPause(): void {
+    this.reviewing = false;
+    this.screenAt = performance.now();
+    this.briefingView?.dispose();
+    this.briefingView = null;
     this.overlay.replaceChildren();
-    const card = el('div', 'card', undefined, this.overlay);
+    const card = el('div', 'card pause', undefined, this.overlay);
     el('h2', undefined, 'Paused', card);
-    el('p', 'small', 'R restarts the mission.', card);
     const resume = el('button', 'primary', 'Resume', card);
-    resume.addEventListener('click', () => {
-      this.screen = 'playing';
-      this.overlay.style.display = 'none';
-      this.lockPointer();
-    });
-    const settings = el('button', undefined, 'Settings', card);
-    settings.addEventListener('click', () => this.openSettings());
-    const menu = el('button', undefined, 'Quit to menu', card);
-    menu.addEventListener('click', () => this.opts.onMenu());
+    resume.addEventListener('click', () => this.resume());
+    // Training night has no briefing to re-read.
+    if (this.sim.mission.briefing.length) {
+      el('button', 'pause-briefing', 'Briefing', card).addEventListener('click', () => {
+        this.reviewing = true;
+        this.showBriefing(true);
+      });
+    }
+    el('button', 'pause-restart', 'Restart mission', card).addEventListener('click', () => this.opts.onRetry());
+    el('button', undefined, 'Settings', card).addEventListener('click', () => this.openSettings());
+    el('button', undefined, 'Quit to menu', card).addEventListener('click', () => this.opts.onMenu());
+    el('p', 'small', this.touch?.active ? 'Resume to play on.' : 'Esc resumes.', card);
     this.overlay.style.display = 'flex';
     resume.focus();
+  }
+
+  private resume(): void {
+    if (this.screen !== 'paused') return;
+    this.briefingView?.dispose();
+    this.briefingView = null;
+    this.reviewing = false;
+    this.screen = 'playing';
+    this.overlay.style.display = 'none';
+    if (!this.touch.active) this.lockPointer();
   }
 
   /** The settings panel, over the pause screen. Game keys are ignored while it's open. */
@@ -275,6 +313,10 @@ export class Game {
 
   private showResult(won: boolean, reason: string): void {
     this.screen = 'ended';
+    this.screenAt = performance.now();
+    this.reviewing = false;
+    this.briefingView?.dispose();
+    this.briefingView = null;
     this.firing = false;
     this.closeSettings?.();
     document.exitPointerLock?.();
@@ -376,33 +418,92 @@ export class Game {
       this.sfx.unlock();
       // Toggles fire once per press: holding a key must never strobe the screen (photosensitivity).
       if (ke.repeat) return;
-      if (this.screen === 'ended') {
-        if (k === 'r') this.opts.onRetry();
-        if (k === 'n') this.opts.onNext();
-        return;
-      }
-      if (k === 'escape' && this.screen === 'playing') this.pause();
-      if (k === 'm') updateSettings({ muted: !getSettings().muted });
-      if (this.screen === 'paused' && k === 'r') this.opts.onRetry();
-      if (this.screen !== 'playing') return;
-      const gun = this.weapon;
-      if (k === '1' || k === '2' || k === '3') this.weapon = WEAPONS[Number(k) - 1].id;
-      if (k === 'q') this.weapon = WEAPONS[(WEAPONS.findIndex((w) => w.id === this.weapon) + 1) % WEAPONS.length].id;
-      if (this.weapon !== gun) this.opts.onAction?.({ type: 'weapon', weapon: this.weapon });
-      if (k === 'v' && this.switchLeft <= 0) this.setSensor(this.sensor === 'thermal' ? 'night' : 'thermal');
-      // At most one white/black-hot flip per 0.35 s, so rapid tapping stays under 3 flashes a second.
-      if (k === 'h' && this.sensor === 'thermal' && this.clock - this.lastFlip >= 0.35) {
-        this.polarity = 1 - this.polarity;
-        this.lastFlip = this.clock;
-        this.opts.onAction?.({ type: 'polarity', polarity: this.polarity });
-      }
-      if (k === 'z') this.zoom = !this.zoom;
+      // The key map lives in controls.ts (R gun, Q view, Esc pause menu, ...).
+      const a = keyAction(k, this.screen, (performance.now() - this.screenAt) / 1000);
+      if (a) this.perform(a);
+    });
+    this.touch = new TouchControls(this.container, canvas, {
+      playing: () => this.screen === 'playing' && !this.disposed,
+      nudge: (dx, dy) => this.nudgeAim(dx, dy),
+      aimAt: (x, y) => this.aimAtScreen(x, y),
+      setFiring: (on) => {
+        this.sfx.unlock();
+        this.firing = on && this.screen === 'playing';
+      },
+      cycleWeapon: () => this.perform('weapon-next'),
+      cycleView: () => this.perform('view-next'),
+      zoom: (dir) => this.zoomBy(dir),
+      pause: () => this.perform('pause'),
+      labels: () => ({ weapon: this.weapon, view: viewLabel({ sensor: this.sensor, polarity: this.polarity }), zoom: this.zoom ? '×2' : '×1' }),
     });
     this.on(window, 'keyup', (e) => this.keys.delete((e as KeyboardEvent).key.toLowerCase()));
     this.on(window, 'blur', () => {
       this.keys.clear();
       this.firing = false;
     });
+  }
+
+  /** One player action, from a key or a touch button. */
+  private perform(a: ControlAction): void {
+    this.sfx.unlock();
+    switch (a) {
+      case 'mute':
+        updateSettings({ muted: !getSettings().muted });
+        return;
+      case 'retry':
+        return this.opts.onRetry();
+      case 'next':
+        return this.opts.onNext();
+      case 'pause':
+        return this.pause();
+      case 'back':
+        if (this.reviewing) this.showPause();
+        else this.resume();
+        return;
+    }
+    if (this.screen !== 'playing') return;
+    const gun = this.weapon;
+    if (a === 'weapon-1' || a === 'weapon-2' || a === 'weapon-3') this.weapon = WEAPONS[Number(a.slice(-1)) - 1].id;
+    if (a === 'weapon-next') this.weapon = WEAPONS[(WEAPONS.findIndex((w) => w.id === this.weapon) + 1) % WEAPONS.length].id;
+    if (this.weapon !== gun) this.opts.onAction?.({ type: 'weapon', weapon: this.weapon });
+    if (a === 'camera' && this.switchLeft <= 0) this.setSensor(this.sensor === 'thermal' ? 'night' : 'thermal');
+    if (a === 'polarity' && this.sensor === 'thermal') this.flipPolarity();
+    if (a === 'view-next' && this.switchLeft <= 0) {
+      // White-hot → black-hot → night vision → white-hot (controls.ts nextView).
+      const v = nextView({ sensor: this.sensor, polarity: this.polarity });
+      if (v.sensor !== this.sensor) {
+        this.setSensor(v.sensor);
+        // Back to white-hot under the switch cover, so it never shows as a flash of its own.
+        if (v.polarity !== this.polarity) this.polarity = this.polarityShown = v.polarity;
+      } else if (v.polarity !== this.polarity) this.flipPolarity();
+    }
+    if (a === 'zoom') this.zoomBy(0);
+  }
+
+  /** At most one white/black-hot flip per 0.35 s, so rapid tapping stays under 3 flashes a second. */
+  private flipPolarity(): void {
+    if (this.clock - this.lastFlip < 0.35) return;
+    this.polarity = 1 - this.polarity;
+    this.lastFlip = this.clock;
+    this.opts.onAction?.({ type: 'polarity', polarity: this.polarity });
+  }
+
+  /** The one zoom hook for keys and touch: 0 toggles (Z, the ZOOM button), 1 zooms in, -1 out (pinch). */
+  private zoomBy(dir: -1 | 0 | 1): void {
+    if (this.screen !== 'playing') return;
+    this.zoom = dir === 0 ? !this.zoom : dir > 0;
+  }
+
+  /** Aim at a point on screen (client px): where the line of sight through it meets the ground. Touch: tap to aim. */
+  private aimAtScreen(clientX: number, clientY: number): void {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hit = this.raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
+    if (!hit) return;
+    const lim = this.map.half;
+    this.aim = { x: Math.max(-lim, Math.min(lim, hit.x)), z: Math.max(-lim, Math.min(lim, hit.z)) };
   }
 
   private manualSensor = false;
@@ -475,6 +576,7 @@ export class Game {
       this.handleEvents(this.sim.drainEvents());
       this.switchLeft = Math.max(0, this.switchLeft - dt);
     }
+    this.touch.update(dt);
     this.render(dt);
     // The score follows the threat, about four times a second.
     this.audioTimer -= dt;
@@ -678,7 +780,19 @@ export class Game {
   }
 
   info() {
-    return { drawCalls: this.renderer.info.render.calls, triangles: this.renderer.info.render.triangles, screen: this.screen, sensor: this.sensor };
+    return {
+      drawCalls: this.renderer.info.render.calls,
+      triangles: this.renderer.info.render.triangles,
+      screen: this.screen,
+      sensor: this.sensor,
+      // 3.11: read by the controls checks in scripts/playtest.mjs.
+      weapon: this.weapon,
+      polarity: this.polarity,
+      zoom: this.zoom,
+      aim: { ...this.aim },
+      touch: this.touch.active,
+      reviewing: this.reviewing,
+    };
   }
 
   dispose(): void {
@@ -692,6 +806,7 @@ export class Game {
     this.offSettings();
     this.closeSettings?.();
     this.briefingView?.dispose();
+    this.touch.dispose();
     for (const [t, type, fn] of this.listeners) t.removeEventListener(type, fn);
     if (document.pointerLockElement) document.exitPointerLock?.();
     this.world.dispose();
