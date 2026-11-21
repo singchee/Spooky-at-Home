@@ -9,6 +9,7 @@ import { showMenu, type MenuChoice } from './ui/menu';
 import { showLanding, type LandingChoice } from './ui/landing';
 import { startTutorial, trainingDone, type TutorialHandle } from './ui/tutorial';
 import { el } from './ui/dom';
+import { openSettingsPanel } from './ui/settingsPanel';
 import type { SensorId } from './render/sensors';
 
 // Colours in this game are sensor values, not display colours: switch off colour conversion.
@@ -96,6 +97,7 @@ function menu(o: { message?: string; focus?: 'address' | 'start'; sample?: boole
   const close = showMenu(app, (c) => play(c), preset);
   const back = el('button', 'menu-back', '← Front page', app);
   back.addEventListener('click', () => landing());
+  const settings = settingsButton('on-menu');
   let toast: HTMLDivElement | null = null;
   if (o.message) {
     toast = el('div', 'toast', o.message, app);
@@ -106,6 +108,7 @@ function menu(o: { message?: string; focus?: 'address' | 'start'; sample?: boole
   closeScreen = () => {
     close();
     back.remove();
+    settings();
     toast?.remove();
   };
 }
@@ -113,11 +116,30 @@ function menu(o: { message?: string; focus?: 'address' | 'start'; sample?: boole
 function landing(notice?: string): void {
   clear();
   window.__spooky!.screen = 'landing';
-  closeScreen = showLanding(app, (c: LandingChoice) => {
+  const close = showLanding(app, (c: LandingChoice) => {
     if (c === 'scout') menu({ focus: 'address' });
     else if (c === 'sample') menu({ focus: 'start', sample: true });
     else training();
   }, { notice, trained: trainingDone() });
+  const settings = settingsButton('on-landing');
+  closeScreen = () => {
+    settings();
+    close();
+  };
+}
+
+/** A Settings button for the front page and the menu (the panel also opens from the pause screen). Returns its remover. */
+function settingsButton(where: string): () => void {
+  const b = el('button', `screen-settings ${where}`, 'Settings', app);
+  b.setAttribute('aria-haspopup', 'dialog');
+  let close: (() => void) | null = null;
+  b.addEventListener('click', () => {
+    close ??= openSettingsPanel(app, { onClose: () => (close = null) });
+  });
+  return () => {
+    close?.();
+    b.remove();
+  };
 }
 
 function training(): void {

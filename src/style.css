@@ -349,3 +349,52 @@ button:disabled { opacity: 0.5; }
 @media (max-width: 900px) {
   .coach.aside { top: 16px; bottom: auto; left: 50%; right: auto; transform: translateX(-50%); width: min(460px, calc(100% - 32px)); }
 }
+
+/* ---------- Stakes: grades, personal bests, settings panel (3.2) ---------- */
+.card.result { max-width: 640px; }
+.result-head { display: flex; gap: 20px; align-items: center; margin: 10px 0 12px; }
+.grade { flex: 0 0 auto; width: 96px; height: 96px; display: grid; place-items: center; font-size: 64px; font-weight: 800; line-height: 1; border: 3px solid currentColor; border-radius: 12px; }
+.grade-S { color: #ffe27a; text-shadow: 0 0 18px rgba(255, 226, 122, 0.45); }
+.grade-A { color: var(--accent); }
+.grade-B { color: #8fd0ff; }
+.grade-C { color: #e8c15a; }
+.grade-D { color: var(--danger); }
+.result-words { min-width: 0; }
+.card .result-words h2 { margin: 0 0 6px; }
+.card .grade-reason { font-size: 16px; color: var(--ink); margin: 0 0 6px; }
+.card .best { color: var(--muted); font-size: 14px; letter-spacing: 0.08em; margin: 0; }
+.card .best.new-best { color: #ffe27a; font-weight: 700; }
+.result-stats { list-style: none; padding: 0; margin: 8px 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 16px; color: var(--muted); font-size: 14px; }
+.card.result .row button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@media (max-width: 480px) {
+  .result-head { gap: 14px; }
+  .grade { width: 72px; height: 72px; font-size: 46px; }
+  .result-stats { grid-template-columns: minmax(0, 1fr); }
+}
+.mission-card .mc-best { flex: 0 0 auto; color: #ffe27a; letter-spacing: 0.06em; }
+.mission-card .mc-best.none { color: var(--muted); }
+
+.screen-settings { position: absolute; z-index: 11; background: rgba(12, 16, 14, 0.92); }
+.screen-settings.on-menu { right: 16px; top: 16px; }
+/* Front page: inside the camera frame, above the map credit on wide screens; top left on phones (the content starts lower). */
+.screen-settings.on-landing { right: 36px; bottom: 64px; z-index: 3; }
+@media (max-width: 899px) { .screen-settings.on-landing { right: auto; bottom: auto; left: 26px; top: 26px; } }
+.screen-settings:focus-visible, .settings-panel button:focus-visible, .settings-panel input:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.settings-backdrop { position: absolute; inset: 0; z-index: 30; display: flex; padding: 16px; background: rgba(0, 0, 0, 0.55); overflow: auto; }
+.settings-panel { max-width: 540px; margin: auto; padding: 18px 24px; }
+.card.settings-panel h2 { margin: 0 0 10px; }
+.settings-panel:focus { outline: none; }
+.settings-group { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 10px; padding: 4px 14px 8px; min-width: 0; }
+.settings-group legend { color: var(--accent); padding: 0 6px; font-size: 15px; letter-spacing: 0.08em; }
+.settings-row { display: grid; grid-template-columns: minmax(0, 11em) minmax(0, 1fr) 4.5em; gap: 4px 12px; align-items: center; min-height: 36px; }
+.settings-row input[type=range] { width: 100%; padding: 0; min-height: 32px; margin: 0; accent-color: var(--accent); background: transparent; border: 0; }
+.settings-value { text-align: right; font-variant-numeric: tabular-nums; }
+.settings-toggle { grid-template-columns: auto minmax(0, 1fr); padding: 4px 0; }
+.settings-toggle input { width: 22px; height: 22px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); }
+.settings-toggle label { cursor: pointer; }
+.settings-hint { grid-column: 2; color: var(--muted); font-size: 14px; line-height: 1.35; }
+.settings-actions { justify-content: flex-end; }
+@media (max-width: 480px) {
+  .settings-row:not(.settings-toggle) { grid-template-columns: minmax(0, 1fr) 4.5em; }
+  .settings-row > label:first-child { grid-column: 1 / -1; }
+}

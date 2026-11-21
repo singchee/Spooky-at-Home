@@ -26,6 +26,34 @@ export interface SurvivorPlan {
   delay: number;
 }
 
+/**
+ * Waves vary within a mission. Each kind scales the plan's base wave:
+ * - standard: the plan as it is;
+ * - rush: fewer zombies, all warm, lunging fast, and sooner after the last wave;
+ * - cold: mostly cold-blooded (hard to see on thermal), only offered when the area has cold-blooded contacts;
+ * - big: a larger wave after a longer lull, never in the opening waves.
+ * Averaged over a mission the kinds bring roughly as many zombies per minute as standard waves alone.
+ */
+export type WaveKind = 'standard' | 'rush' | 'cold' | 'big';
+export interface WaveKindDef {
+  /** Multiplies the plan's wave size. */
+  size: number;
+  /** Multiplies the zombies' walking speed. */
+  speed: number;
+  /** Multiplies the plan's `every`: the lull before this wave arrives. */
+  gap: number;
+  /** Share of cold-blooded zombies; null = the plan's coldShare. */
+  cold: number | null;
+}
+export const WAVE_KINDS: Record<WaveKind, WaveKindDef> = {
+  standard: { size: 1, speed: 1, gap: 1, cold: null },
+  rush: { size: 0.6, speed: 1.4, gap: 0.8, cold: 0 },
+  cold: { size: 1, speed: 1, gap: 1, cold: 0.75 },
+  big: { size: 1.7, speed: 1, gap: 1.5, cold: null },
+};
+/** Seconds before the first wave (it arrives quickly). */
+export const FIRST_WAVE = 3;
+
 export interface WavePlan {
   every: number;
   size: number;
@@ -33,6 +61,8 @@ export interface WavePlan {
   minDist: number;
   maxDist: number;
   maxAlive: number;
+  /** The kind of each wave in order (seeded). Missing = every wave is standard. */
+  kinds?: WaveKind[];
 }
 
 export interface Mission {
@@ -300,6 +330,9 @@ function buildEscort(c: Ctx, safehouse: Safehouse, fl: EscortFlavour = CLASSIC_E
   const need = Math.ceil(n / 2);
   const survivors: SurvivorPlan[] = Array.from({ length: n }, (_, k) => ({ start: route[0], route, delay: 6 + k * 1.4 }));
   const length = Math.round(polylineLength(route) / 10) * 10;
+  const timeLimit = 420 + 30 * d;
+  const every = Math.max(9, 22 - 2.6 * d);
+  const waves: WavePlan = { every, size: 3 + 3 * d, coldShare, minDist: 140, maxDist: 300, maxAlive: 60 + 20 * d, kinds: waveSequence(c, every, Math.min(timeLimit, escortMinTime(route, survivors))) };
   const xs = route.map((p) => p.x);
   const zs = route.map((p) => p.z);
   return {
@@ -313,8 +346,8 @@ function buildEscort(c: Ctx, safehouse: Safehouse, fl: EscortFlavour = CLASSIC_E
         `Keep the road clear. If fewer than ${need} make it home, the mission fails.`,
         roe,
       ],
-      intel: [coldIntel('with the waves')],
-      timeLimit: 420 + 30 * d,
+      intel: [coldIntel('with the waves'), ...waveIntel(waves)],
+      timeLimit,
       orbitCentre: { x: (Math.min(...xs) + Math.max(...xs)) / 2, z: (Math.min(...zs) + Math.max(...zs)) / 2 },
       safehouse,
       home: { centre: home.c, street: homeStreet },
@@ -322,9 +355,72 @@ function buildEscort(c: Ctx, safehouse: Safehouse, fl: EscortFlavour = CLASSIC_E
       survivors,
       needHome: need,
       hordes: [],
-      waves: { every: Math.max(9, 22 - 2.6 * d), size: 3 + 3 * d, coldShare, minDist: 140, maxDist: 300, maxAlive: 60 + 20 * d },
+      waves,
     },
   };
+}
+
+/**
+ * The soonest an escort can possibly end: everyone walking at their top speed, never stopping.
+ * Wave kinds are only planned inside this window, so every kind the intel promises really arrives.
+ */
+function escortMinTime(route: V2[], survivors: SurvivorPlan[]): number {
+  return polylineLength(route) / SURVIVOR_TOP_SPEED + Math.max(0, ...survivors.map((s) => s.delay));
+}
+/** Survivors' fastest walking pace (m/s), when zombies are close (see Sim.updateSurvivors). */
+export const SURVIVOR_TOP_SPEED = 3.2;
+
+/** The seeded order of wave kinds for one mission. Its own random stream, so the rest of the mission is unchanged. */
+function waveSequence(c: Ctx, every: number, horizon: number): WaveKind[] {
+  const b = c.base;
+  const rng = mulberry32(hashString(`waves|${b.mapName}|${b.seed}|${b.template ?? b.type}|${b.anchor?.id ?? ''}|${c.d}`));
+  return planWaveKinds(rng, every, horizon, c.coldShare > 0);
+}
+
+/**
+ * Wave kinds in order, for every wave that arrives within `horizon` seconds (the first at FIRST_WAVE,
+ * each later one after `every` x its kind's gap). The opener is standard, a big wave never comes in the
+ * first two, the same special kind never comes twice running, and cold waves only where cold-blooded
+ * zombies live. A mission with four or more waves always has at least one special.
+ */
+export function planWaveKinds(rng: Rng, every: number, horizon: number, coldAllowed: boolean): WaveKind[] {
+  const kinds: WaveKind[] = ['standard'];
+  let t = FIRST_WAVE;
+  for (;;) {
+    const prev = kinds[kinds.length - 1];
+    const options: [WaveKind, number][] = [
+      ['standard', 45],
+      ['rush', 20],
+      ['cold', coldAllowed ? 20 : 0],
+      ['big', kinds.length >= 2 ? 15 : 0],
+    ];
+    const allowed = options.filter(([k, w]) => w > 0 && (k === 'standard' || k !== prev));
+    let r = rng() * allowed.reduce((a, [, w]) => a + w, 0);
+    let k: WaveKind = 'standard';
+    for (const [kind, w] of allowed) {
+      r -= w;
+      if (r < 0) {
+        k = kind;
+        break;
+      }
+    }
+    t += every * WAVE_KINDS[k].gap;
+    if (t > horizon) break;
+    kinds.push(k);
+  }
+  if (kinds.length >= 4 && !kinds.some((k) => k !== 'standard')) kinds[2] = 'rush';
+  return kinds;
+}
+
+/** One line of intel about how the waves vary, built from the real plan (intel is always true, PLAN §5a). */
+export function waveIntel(w: WavePlan): string[] {
+  const n = (k: WaveKind) => (w.kinds ?? []).filter((x) => x === k).length;
+  const parts: string[] = [];
+  if (n('rush')) parts.push(n('rush') === 1 ? 'a small rush of fast lungers' : 'small rushes of fast lungers');
+  if (n('cold')) parts.push(n('cold') === 1 ? 'a mostly cold-blooded wave' : 'mostly cold-blooded waves');
+  if (n('big')) parts.push(n('big') === 1 ? 'one big wave after a lull' : 'big waves after a lull');
+  if (!parts.length) return [];
+  return [`Intel: the waves won't all look alike. Expect a mix: ${listJoin(parts)}.`];
 }
 
 interface DefendFlavour {
@@ -357,6 +453,8 @@ function buildDefend(c: Ctx, safehouse: Safehouse, fl?: DefendFlavour): MissionR
     survivors.push({ start: route[0], route, delay: 4 }, { start: route[0], route, delay: 5.5 });
   }
   const from = survivors.length ? nearestStreet(map, survivors[0].start) : '';
+  const every = Math.max(7, 20 - 2.6 * d);
+  const waves: WavePlan = { every, size: 6 + 4 * d, coldShare, minDist: 180, maxDist: 340, maxAlive: 80 + 25 * d, kinds: waveSequence(c, every, hold) };
   return {
     ok: true,
     mission: {
@@ -368,14 +466,14 @@ function buildDefend(c: Ctx, safehouse: Safehouse, fl?: DefendFlavour): MissionR
         survivors.length ? `Two stragglers are on their way in along ${from}. Don't hit them.` : 'Everyone is already inside.',
         roe,
       ],
-      intel: [coldIntel('with the waves')],
+      intel: [coldIntel('with the waves'), ...waveIntel(waves)],
       timeLimit: hold,
       orbitCentre: safehouse.centre,
       safehouse,
       survivors,
       needHome: 0,
       hordes: [],
-      waves: { every: Math.max(7, 20 - 2.6 * d), size: 6 + 4 * d, coldShare, minDist: 180, maxDist: 340, maxAlive: 80 + 25 * d },
+      waves,
     },
   };
 }

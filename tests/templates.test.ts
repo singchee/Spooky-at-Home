@@ -4,7 +4,7 @@ import { buildRoadGraph } from '../src/map/roadGraph';
 import { WalkGrid } from '../src/map/grid';
 import { distToSegment, pointInPolygon } from '../src/map/geom';
 import { MISSION_TEMPLATES, TEMPLATE_IDS, type TemplateId } from '../src/map/recon';
-import { generateMission, likelyWaveDirections, type Mission } from '../src/sim/missions';
+import { generateMission, likelyWaveDirections, waveIntel, type Mission } from '../src/sim/missions';
 import { createSim } from '../src/sim/setup';
 import { Bot, SKILL } from '../src/sim/bot';
 import type { Sim } from '../src/sim/sim';
@@ -38,7 +38,8 @@ describe('mission templates on the sample town (G5 for templates)', () => {
           const t = MISSION_TEMPLATES[id];
           expect(m.type, id).toBe(t.base);
           expect(m.briefing.length).toBeGreaterThan(2);
-          expect(m.intel).toHaveLength(1);
+          // One line about cold-blooded contacts, plus one about how the waves vary whenever they do.
+          expect(m.intel).toEqual([m.intel[0], ...(m.waves ? waveIntel(m.waves) : [])]);
           if (t.base === 'escort') expect(m.route!.length).toBeGreaterThan(2);
           if (t.base === 'clear') expect(m.hordes.length).toBeGreaterThanOrEqual(2);
           if (t.base !== 'clear') expect(m.safehouse).toBeDefined();

@@ -16,7 +16,12 @@ import { el } from '../ui/dom';
 import { Sfx } from '../audio/sfx';
 import { audio } from '../audio/engine';
 import { measureThreat, threatIntensity } from '../audio/intensity';
-import { getSettings, updateSettings } from '../ui/settings';
+import { waveCall } from './waveCall';
+import { getSettings, onSettingsChange, updateSettings } from '../ui/settings';
+import { openSettingsPanel } from '../ui/settingsPanel';
+import { bestKey, bests, formatBest, formatTime, missionKind } from '../ui/bests';
+import { gradeMission, scoreInput } from '../sim/score';
+import { effectiveReduceFlicker, mouseAimDelta } from './input';
 
 /** The browser game: renders the simulation, handles input, camera, sound and screens. */
 export interface GameOptions {
@@ -30,9 +35,12 @@ export interface GameOptions {
   onAction?(a: GameAction): void;
   /**
    * Reduce flicker (photosensitivity): no 105 camera kick, and the camera-switch static becomes a
-   * gentle fade. Defaults to the OS "reduce motion" preference.
+   * gentle fade. When not given, it follows the player's setting live (which defaults to the OS
+   * "reduce motion" preference).
    */
   reduceFlicker?: boolean;
+  /** A practice run (Training night): no grade or personal best. Defaults to true for a mission with no briefing. */
+  practice?: boolean;
 }
 
 /** Extra hooks on window.__spooky, installed only under browser automation (see the Game constructor). */
@@ -114,8 +122,14 @@ export class Game {
   private raf = 0;
   private disposed = false;
   private listeners: [EventTarget, string, EventListener][] = [];
-  /** Reduce flicker (see GameOptions.reduceFlicker). */
-  readonly reduceFlicker: boolean;
+  /** Reduce flicker (see GameOptions.reduceFlicker); follows the setting live. */
+  private calm = false;
+  get reduceFlicker(): boolean {
+    return this.calm;
+  }
+  /** Closes the settings panel when it's open over the pause screen. */
+  private closeSettings: (() => void) | null = null;
+  private offSettings: () => void;
   /** The camera the picture shows; with reduce flicker it changes under the fade, not before it. */
   private shownSensor: SensorId = 'thermal';
   private camRight = new THREE.Vector3();
@@ -152,8 +166,12 @@ export class Game {
     this.bot = opts.bot ? new Bot(sim, SKILL.human) : null;
     if (opts.sensor) this.sensor = opts.sensor;
     this.shownSensor = this.sensor;
-    this.reduceFlicker = opts.reduceFlicker ?? !!reducedMotionQuery?.matches;
-    this.sensorPass.uniforms.calm.value = this.reduceFlicker ? 1 : 0;
+    const applySettings = () => {
+      this.calm = effectiveReduceFlicker(opts.reduceFlicker, getSettings());
+      this.sensorPass.uniforms.calm.value = this.calm ? 1 : 0;
+    };
+    applySettings();
+    this.offSettings = onSettingsChange(applySettings);
     const m = sim.mission;
     this.aim = m.route ? { ...m.route[0] } : m.safehouse ? { ...m.safehouse.centre } : { ...m.orbitCentre };
 
@@ -235,33 +253,74 @@ export class Game {
       this.overlay.style.display = 'none';
       this.lockPointer();
     });
+    const settings = el('button', undefined, 'Settings', card);
+    settings.addEventListener('click', () => this.openSettings());
     const menu = el('button', undefined, 'Quit to menu', card);
     menu.addEventListener('click', () => this.opts.onMenu());
     this.overlay.style.display = 'flex';
+    resume.focus();
+  }
+
+  /** The settings panel, over the pause screen. Game keys are ignored while it's open. */
+  openSettings(): void {
+    if (this.closeSettings || this.disposed) return;
+    this.closeSettings = openSettingsPanel(this.container, { onClose: () => (this.closeSettings = null) });
   }
 
   private showResult(won: boolean, reason: string): void {
     this.screen = 'ended';
     this.firing = false;
+    this.closeSettings?.();
     document.exitPointerLock?.();
     const s = this.sim.state();
+    const m = this.sim.mission;
     this.overlay.replaceChildren();
-    const card = el('div', `card ${won ? 'won' : 'lost'}`, undefined, this.overlay);
+    const card = el('div', `card result ${won ? 'won' : 'lost'}`, undefined, this.overlay);
     el('div', 'card-kicker', won ? 'MISSION COMPLETE' : 'MISSION FAILED', card);
-    el('h2', undefined, reason, card);
+    const practice = this.opts.practice ?? m.briefing.length === 0;
+    if (!practice) {
+      const score = gradeMission(scoreInput(m, s));
+      const head = el('div', 'result-head', undefined, card);
+      const big = el('div', `grade grade-${score.grade}`, score.grade, head);
+      big.setAttribute('aria-label', `Grade ${score.grade}`);
+      const words = el('div', 'result-words', undefined, head);
+      el('h2', undefined, reason, words);
+      el('p', 'grade-reason', score.reason, words);
+      // Personal best: wins only, stored in this browser.
+      const key = bestKey(m.mapName, missionKind(m.template, m.type), m.difficulty);
+      if (won) {
+        const r = bests().record(key, { grade: score.grade, time: s.t });
+        if (r.isNew) el('p', 'best new-best', r.previous ? `NEW BEST · was ${r.previous.grade} ${formatTime(r.previous.time)}` : 'NEW BEST', words);
+        else el('p', 'best', formatBest(r.best), words);
+      } else {
+        const b = bests().get(key);
+        el('p', 'best', b ? formatBest(b) : 'No best yet on this mission', words);
+      }
+    } else {
+      el('h2', undefined, reason, card);
+    }
     const stats = [
       `Time ${Math.floor(s.t / 60)}:${String(Math.floor(s.t % 60)).padStart(2, '0')}`,
-      `Kills ${s.kills} from ${s.shots} rounds${s.shots ? ` (${(s.kills / s.shots).toFixed(1)} per round)` : ''}`,
+      `Kills ${s.kills} from ${s.shots} rounds${s.kills ? ` (${(s.shots / s.kills).toFixed(1)} rounds per kill)` : ''}`,
       `Friendly-fire incidents ${s.friendlyHits}`,
     ];
-    if (s.survivorsTotal && this.sim.mission.type === 'clear') stats.push(`Friendlies alive ${s.survivorsAlive}/${s.survivorsTotal}`);
+    if (s.survivorsTotal && m.type === 'clear') stats.push(`Friendlies alive ${s.survivorsAlive}/${s.survivorsTotal}`);
     else if (s.survivorsTotal) stats.push(`Survivors home ${s.survivorsHome}/${s.survivorsTotal}`);
-    for (const t of stats) el('p', 'small', t, card);
+    if (m.type === 'defend') stats.push(`Safehouse ${Math.round(s.integrity * 100)}% intact`);
+    const list = el('ul', 'result-stats', undefined, card);
+    for (const t of stats) el('li', undefined, t, list);
+    // After a win the way on is the next mission; after a loss, another go.
     const row = el('div', 'row', undefined, card);
-    el('button', 'primary', 'Retry', row).addEventListener('click', () => this.opts.onRetry());
-    el('button', undefined, 'Next mission', row).addEventListener('click', () => this.opts.onNext());
+    const next = el('button', won ? 'primary' : undefined, 'Next mission', row);
+    const retry = el('button', won ? undefined : 'primary', 'Retry', row);
+    if (won) row.appendChild(retry);
+    else row.insertBefore(retry, next);
+    next.addEventListener('click', () => this.opts.onNext());
+    retry.addEventListener('click', () => this.opts.onRetry());
     el('button', undefined, 'Menu', row).addEventListener('click', () => this.opts.onMenu());
+    el('p', 'small', `Keys: ${won ? 'N next mission · R retry' : 'R retry · N next mission'}`, card);
     this.overlay.style.display = 'flex';
+    (won ? next : retry).focus();
   }
 
   // ---------- input ----------
@@ -300,10 +359,12 @@ export class Game {
       const me = e as MouseEvent;
       // Some browsers send a bogus huge jump under pointer lock (e.g. on click); ignore it.
       if (Math.abs(me.movementX) > 300 || Math.abs(me.movementY) > 300) return;
-      this.nudgeAim(me.movementX, me.movementY);
+      const [dx, dy] = mouseAimDelta(me.movementX, me.movementY, getSettings());
+      this.nudgeAim(dx, dy);
     });
     this.on(window, 'keydown', (e) => {
       const ke = e as KeyboardEvent;
+      if (this.closeSettings) return; // the settings panel has the keyboard
       const k = ke.key.toLowerCase();
       this.keys.add(k);
       this.sfx.unlock();
@@ -466,17 +527,9 @@ export class Game {
         case 'survivor-home':
           this.radio("One survivor home. Kettle's on.");
           break;
-        case 'wave': {
-          const cold = e.cold ? `, ${e.cold} of them cold-blooded` : '';
-          const lines = [
-            `New contacts: ${e.count} coming in from ${e.place}${cold}.`,
-            `${e.count} more heading your way from ${e.place}${cold}.`,
-            `Movement near ${e.place}: ${e.count} contacts${cold}.`,
-            `Here they come: ${e.count} from the ${e.from}, near ${e.place}${cold}.`,
-          ];
-          this.radio(lines[this.waveCall++ % lines.length]);
+        case 'wave':
+          this.radio(waveCall(e, this.waveCall++));
           break;
-        }
         case 'radio':
           this.radio(e.text);
           break;
@@ -630,6 +683,8 @@ export class Game {
     if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
     audio.release('mission');
+    this.offSettings();
+    this.closeSettings?.();
     for (const [t, type, fn] of this.listeners) t.removeEventListener(type, fn);
     if (document.pointerLockElement) document.exitPointerLock?.();
     this.world.dispose();

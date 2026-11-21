@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { makeSampleTown } from '../src/map/sample';
 import { buildRoadGraph, dijkstra, nearestNode, pathFromPrev } from '../src/map/roadGraph';
 import { WalkGrid } from '../src/map/grid';
-import { generateMission, MISSION_TYPES, type MissionType } from '../src/sim/missions';
+import { generateMission, MISSION_TYPES, waveIntel, type MissionType } from '../src/sim/missions';
 import { createSim } from '../src/sim/setup';
 import { Bot, SKILL } from '../src/sim/bot';
 import type { Sim } from '../src/sim/sim';
@@ -55,7 +55,8 @@ describe('mission generator (gate G4/G5 on the sample town)', () => {
           if (!r.ok) continue;
           const m = r.mission;
           expect(m.briefing.length).toBeGreaterThan(2);
-          expect(m.intel.length).toBe(1);
+          // One line about cold-blooded contacts, plus one about how the waves vary whenever they do.
+          expect(m.intel).toEqual([m.intel[0], ...(m.waves ? waveIntel(m.waves) : [])]);
           if (type === 'escort') expect(m.route!.length).toBeGreaterThan(2);
           if (type === 'clear') expect(m.hordes.length).toBeGreaterThanOrEqual(2);
           if (type !== 'clear') expect(m.safehouse).toBeDefined();
@@ -161,7 +162,8 @@ describe('committed fingerprint (gate G4 across machines and versions)', () => {
     expect((h >>> 0).toString(16)).toBe(EXPECTED_FINGERPRINT);
   });
 });
-const EXPECTED_FINGERPRINT = '7de5904e';
+// 3dd039a3 (phase 3.2): waves vary within a mission (WavePlan.kinds) and the intel says how. Stripped of those two, it is still 7de5904e.
+const EXPECTED_FINGERPRINT = '3dd039a3';
 
 describe('regressions from the phase 1 playtest', () => {
   it('escort ambushes never spawn on top of survivors (was: 3.5% of missions lost by second 5)', () => {
