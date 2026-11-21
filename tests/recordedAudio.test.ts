@@ -77,9 +77,20 @@ describe('asset loader', () => {
   it('every file the game asks for exists in public/audio (and no file goes unused)', () => {
     const want = [...Object.values(MUSIC), ...Object.values(SFX), ...VOICE_LINES.map(voiceAsset)].map((id) => `${id}.mp3`).sort();
     const have = ['music', 'sfx', 'voice'].flatMap((d) => readdirSync(`public/audio/${d}`).map((f) => `${d}/${f}`)).sort();
-    expect(have).toEqual(want);
+    // Recorded for the Three Nights campaign (docs/specs/001); spec 001's build wires them and must empty this list.
+    const awaitingCampaign = AWAITING_CAMPAIGN.map((id) => `voice/${id}.mp3`);
+    for (const f of awaitingCampaign) expect(have).toContain(f);
+    expect(have.filter((f) => !awaitingCampaign.includes(f))).toEqual(want);
   });
 });
+
+/** Campaign radio lines recorded ahead of the campaign build (docs/story/radio-script.md, wiring table). */
+const AWAITING_CAMPAIGN = [
+  'n1-open', 'n2-open', 'n3-open', 'previously', 'welcome-back', 'first-cold', 'n1-close', 'n2-close', 'n3-close',
+  'campaign-thanks', 'night-lost', 'night-won-losses', 'night-won-clean', 'tennis-open', 'park-open', 'forest-open',
+  'shops-open', 'station-open', 'sports-open', 'landmark-open', 'ff-one-left', 'need-met', 'few-left', 'cold-leftovers',
+  'one-minute', 'doors-failing', 'idle',
+];
 
 describe('crossfaded loops', () => {
   it('mission layers (70 BPM, 60 s files) loop on whole bars with at least 1.5 s of crossfade', () => {
