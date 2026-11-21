@@ -18,8 +18,8 @@ export const SAMPLE_PLAY: Record<string, Omit<PlayOpts, 'group'>> = {
   [SFX.explosion]: { max: 3, gain: 0.85, cents: 60, db: 1.5 },
   /** A 40 mm round landing: the explosion, smaller (faster and quieter). */
   'boom40': { max: 4, gain: 0.3, rate: 1.4, duration: 1.6, fade: 0.5, cents: 80, db: 2 },
-  /** Two pulses of the recorded alarm (0.4 s on, 0.35 s off: 1.3 a second). */
-  [SFX.alarm]: { max: 1, gain: 0.3, duration: 1.3, fade: 0.15, cents: 0, db: 0 },
+  /** Two pulses of the recorded alarm (0.4 s on, 0.35 s off: 1.3 a second), under the synthesised two-tone. */
+  [SFX.alarm]: { max: 1, gain: 0.2, duration: 1.3, fade: 0.15, cents: 0, db: 0 },
 };
 
 /**
@@ -153,12 +153,9 @@ export class Sfx {
     const o = this.out;
     if (!o || this.muted) return;
     const t = o.ctx.currentTime;
-    if (this.sample(SFX.alarm)) {
-      this.alarmUntil = t + (SAMPLE_PLAY[SFX.alarm].duration ?? 1.3);
-      this.duck(DUCK.alarm);
-      return;
-    }
-    this.alarmUntil = t + 0.5;
+    // The square-wave two-tone below is the specified friendly-fire cue and always plays; the
+    // recorded alarm, if loaded, is layered under it (two slow pulses) and holds radio blips off too.
+    this.alarmUntil = this.sample(SFX.alarm) ? t + (SAMPLE_PLAY[SFX.alarm].duration ?? 1.3) : t + 0.5;
     for (const [i, f] of [[0, 880], [1, 660], [2, 880], [3, 660]]) {
       const osc = o.ctx.createOscillator();
       const g = o.ctx.createGain();

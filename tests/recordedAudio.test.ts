@@ -186,6 +186,15 @@ describe('recorded effects', () => {
     expect(made.buffers).toBe(2);
   });
 
+  it('friendly fire always sounds the synthesised two-tone; the recorded alarm is layered under it', () => {
+    const { out, made } = fakeOutput({ [SFX.alarm]: buf(2) });
+    const sfx = new Sfx(() => out);
+    sfx.unlock();
+    sfx.alarm();
+    expect(made.oscillators).toBe(4);
+    expect(made.buffers).toBe(1);
+  });
+
   it('the 25 mm keeps a synthesised crack per round and lays the recorded burst at most every RETRIGGER_25 s', () => {
     const { out, made, ctx } = fakeOutput({ [SFX.fire25]: buf(2) });
     const sfx = new Sfx(() => out);

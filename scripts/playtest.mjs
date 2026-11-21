@@ -701,9 +701,12 @@ async function audioChecks(browser) {
     if (first?.playing !== 'mission' || !first?.ambience) errors.push(`mission score/ambience not playing: ${JSON.stringify(first)}`);
 
     // Recorded files: all 34 load (fetched lazily after the click), and the recorded score and bed take over.
+    // Headless on a busy machine, decoding the 60 s music files can take a while (152 s measured under a load average of 14 on 4 cores): allow up to 4 min.
+    const t0 = Date.now();
     await page
-      .waitForFunction(() => { const a = window.__spooky.audio?.(); return a?.assets?.pending === 0 && a.recorded?.score && a.recorded?.bed; }, null, { timeout: 45000, polling: 250 })
+      .waitForFunction(() => { const a = window.__spooky.audio?.(); return a?.assets?.pending === 0 && a.recorded?.score && a.recorded?.bed; }, null, { timeout: 240000, polling: 250 })
       .catch(() => undefined);
+    out.loadSeconds = Math.round((Date.now() - t0) / 100) / 10;
     const loaded = await read();
     out.assets = loaded?.assets;
     out.recorded = loaded?.recorded;
