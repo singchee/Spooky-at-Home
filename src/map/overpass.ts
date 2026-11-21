@@ -86,6 +86,8 @@ export interface OverpassElement {
   lon?: number;
   geometry?: { lat: number; lon: number }[];
   center?: { lat: number; lon: number };
+  /** Included on relations by `out geom`. */
+  bounds?: { minlat: number; minlon: number; maxlat: number; maxlon: number };
   members?: OverpassMember[];
   tags?: Record<string, string>;
 }
@@ -259,7 +261,11 @@ export function parseOverpass(json: OverpassJson, origin: LatLon, half: number, 
   const seen = new Set<string>();
   const addFeature = (id: string, tags: Record<string, string>, p: V2, pts?: V2[]) => {
     const category = featureCategory(tags);
-    if (!category || !inMap(p) || seen.has(id) || !worthKeeping(category, tags, pts)) return;
+    // Protected places (schools, kindergartens, childcare, playgrounds) count if ANY of their grounds reach
+    // into the map, even when their middle is outside it (guardrail, PLAN §9).
+    const protectedPlace = category === 'school' || category === 'kindergarten' || category === 'playground';
+    const reaches = inMap(p) || (protectedPlace && !!pts && pts.some(inside));
+    if (!category || !reaches || seen.has(id) || !worthKeeping(category, tags, pts)) return;
     seen.add(id);
     features.push({ id, category, name: tags.name, p, ...(pts ? { pts } : {}) });
   };
@@ -288,12 +294,17 @@ export function parseOverpass(json: OverpassJson, origin: LatLon, half: number, 
         // not just a circle around the middle (guardrail, PLAN §9).
         const outer: V2[] = [];
         for (const m of el.members) {
-          if (m.type !== 'way' || (m.role && m.role !== 'outer')) continue;
+          if (m.type !== 'way' || (m.role && m.role !== 'outer' && m.role !== 'perimeter')) continue;
           for (const g of m.geometry ?? []) if (g && Number.isFinite(g.lat) && Number.isFinite(g.lon)) outer.push(toLocal(origin, g.lat, g.lon));
         }
         const hull = convexHull(outer);
         if (hull.length >= 3) addFeature(`r${el.id}`, tags, centroid(hull), hull);
-        else if (el.center) addFeature(`r${el.id}`, tags, toLocal(origin, el.center.lat, el.center.lon));
+        else if (el.bounds) {
+          // No usable outline (e.g. a site relation of nodes): protect its bounding box.
+          const b = el.bounds;
+          const box = [toLocal(origin, b.minlat, b.minlon), toLocal(origin, b.minlat, b.maxlon), toLocal(origin, b.maxlat, b.maxlon), toLocal(origin, b.maxlat, b.minlon)];
+          addFeature(`r${el.id}`, tags, centroid(box), box);
+        } else if (el.center) addFeature(`r${el.id}`, tags, toLocal(origin, el.center.lat, el.center.lon));
       } else if (el.center && Number.isFinite(el.center.lat) && Number.isFinite(el.center.lon)) {
         addFeature(`r${el.id}`, tags, toLocal(origin, el.center.lat, el.center.lon));
       }
