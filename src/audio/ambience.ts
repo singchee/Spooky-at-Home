@@ -8,6 +8,8 @@ import { Kit } from './kit';
 
 /** The aircraft orbit takes 120 s (sim ORBIT.period); the drone swells twice per lap as it banks. */
 const BANK_RATE = 1 / 60;
+/** The whole bed sits well under the score and the guns. */
+const LEVEL = 0.25;
 
 export class Ambience {
   private kit: Kit;
@@ -30,7 +32,7 @@ export class Ambience {
     this.nextAlarm = now + 25 + this.rng() * 25;
     this.out = k.own(ctx.createGain());
     this.out.gain.value = 0;
-    this.out.gain.setTargetAtTime(1, now, 1.2);
+    this.out.gain.setTargetAtTime(LEVEL, now, 1.2);
     this.out.connect(dest);
 
     // Engines: two slightly detuned blade-pass tones (a slow 0.4 Hz beat) and a sub, low-passed.

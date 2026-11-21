@@ -6,7 +6,7 @@
 import type { Settings } from '../ui/settings';
 
 /** Where each bus sits at full slider, before the player's settings. Music sits under the guns. */
-export const BUS_LEVEL = { music: 0.32, sfx: 1, radio: 1 } as const;
+export const BUS_LEVEL = { music: 0.7, sfx: 1, radio: 1 } as const;
 
 /** How far ducking pulls each layer down at full duck (0..1 of its gain). */
 export const DUCK_DEPTH = { music: 0.6, ambience: 0.35 } as const;
