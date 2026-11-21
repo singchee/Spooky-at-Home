@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { buildQuery, geocode, parseOverpass, type OverpassJson } from '../src/map/overpass';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { buildQuery, capFeatures, checkOverpassAnswer, featureCategory, fetchOverpass, geocode, parseOverpass, type OverpassElement, type OverpassJson } from '../src/map/overpass';
+import type { Feature, FeatureCategory } from '../src/map/types';
 
 // A point in the open ocean: test coordinates must never point at anyone's home.
 const origin = { lat: -10.0, lon: 100.0 };
@@ -119,8 +120,9 @@ describe('parseOverpass: recon categories (phase 2)', () => {
     expect(cats('school')[0].pts!.length).toBe(4);
   });
 
-  it('counts tennis from sport=tennis pitches and club=tennis', () => {
-    expect(cats('tennis').map((f) => f.name ?? '').sort()).toEqual(['', 'Coral Tennis Club']);
+  it('counts tennis from club=tennis; an unnamed sport=tennis pitch is just a sports ground', () => {
+    expect(cats('tennis').map((f) => f.name ?? '').sort()).toEqual(['Coral Tennis Club']);
+    expect(cats('pitch').map((f) => f.id).sort()).toEqual(['w106', 'w107']);
   });
 
   it('skips private backyard pools but keeps the public one', () => {
@@ -159,5 +161,85 @@ describe('parseOverpass: recon categories (phase 2)', () => {
     expect(q).toContain('"natural"="tree"');
     expect(q).toContain('"club"="tennis"');
     expect(q.match(/^out /gm)).toHaveLength(3);
+  });
+});
+
+describe('featureCategory: tennis', () => {
+  it('only club=tennis or a named tennis place is a tennis club', () => {
+    expect(featureCategory({ leisure: 'pitch', sport: 'tennis' })).toBe('pitch');
+    expect(featureCategory({ leisure: 'pitch', sport: 'tennis;basketball' })).toBe('pitch');
+    expect(featureCategory({ leisure: 'sports_centre', sport: 'tennis' })).toBe('sports_centre');
+    expect(featureCategory({ sport: 'tennis' })).toBe(null);
+    expect(featureCategory({ leisure: 'pitch', sport: 'tennis', name: 'Coral Courts' })).toBe('tennis');
+    expect(featureCategory({ leisure: 'sports_centre', sport: 'tennis', name: 'Reef Tennis Centre' })).toBe('tennis');
+    expect(featureCategory({ club: 'tennis' })).toBe('tennis');
+    expect(featureCategory({ club: 'tennis', leisure: 'pitch' })).toBe('tennis');
+  });
+});
+
+describe('feature cap', () => {
+  const f = (id: string, category: FeatureCategory): Feature => ({ id, category, p: { x: 0, z: 0 } });
+
+  it('drops car parks and pitches first, and never schools, kindergartens or playgrounds', () => {
+    const list = [f('s', 'school'), f('pk1', 'parking'), f('h', 'hospital'), f('pi', 'pitch'), f('k', 'kindergarten'), f('pk2', 'parking'), f('po', 'police'), f('pg', 'playground'), f('rs', 'train_station')];
+    expect(capFeatures(list, 6).map((x) => x.id)).toEqual(['s', 'h', 'k', 'po', 'pg', 'rs']); // original order kept
+    expect(capFeatures(list, 7).map((x) => x.id)).toEqual(['s', 'h', 'pi', 'k', 'po', 'pg', 'rs']);
+    // Even past the cap, every child place stays (the exclusion zone needs them).
+    expect(capFeatures(list, 2).map((x) => x.id)).toEqual(['s', 'k', 'pg']);
+    expect(capFeatures(list, 100)).toBe(list);
+  });
+
+  it('a map flooded with car parks still keeps its hospital, police, station and school', () => {
+    const els: OverpassElement[] = [];
+    for (let i = 0; i < 2100; i++) els.push({ type: 'node', id: 5000 + i, lat: -10.0 + (i % 50) * 0.00005, lon: 100.0 + Math.floor(i / 50) * 0.00005, tags: { amenity: 'parking' } });
+    els.push(
+      { type: 'node', id: 1, lat: -10.001, lon: 100.001, tags: { amenity: 'hospital', name: 'Flood Hospital' } },
+      { type: 'node', id: 2, lat: -10.002, lon: 100.002, tags: { amenity: 'police', name: 'Flood Police' } },
+      { type: 'node', id: 3, lat: -10.003, lon: 100.003, tags: { railway: 'station', name: 'Flood Central' } },
+      { type: 'node', id: 4, lat: -10.004, lon: 100.004, tags: { amenity: 'school', name: 'Flood Primary' } },
+      { type: 'node', id: 6, lat: -10.0045, lon: 100.0045, tags: { leisure: 'playground' } },
+    );
+    const m = parseOverpass({ elements: els }, origin, 600, 'Flood');
+    expect(m.features).toHaveLength(2000);
+    const cats = m.features!.map((x) => x.category);
+    for (const c of ['hospital', 'police', 'train_station', 'school', 'playground']) expect(cats, c).toContain(c);
+  });
+});
+
+describe('fetchOverpass: a failed query is a failure, even with HTTP 200', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  // Inline fixtures: what Overpass sends when a query runs out of time or memory.
+  const timedOut: OverpassJson = { elements: [], remark: 'runtime error: Query timed out in "query" at line 3 after 61 seconds.' };
+  const outOfMemory: OverpassJson = { elements: [], remark: 'runtime error: Query run out of memory using about 2048 MB of RAM.' };
+  const good: OverpassJson = { elements: [{ type: 'node', id: 6, lat: -10.0005, lon: 100.0005, tags: { amenity: 'hospital', name: 'Test Hospital' } }] };
+  const answer = (json: unknown) => ({ ok: true, status: 200, json: async () => json }) as unknown as Response;
+
+  it('asks for a 60 s server timeout', () => {
+    expect(buildQuery(origin, 500)).toMatch(/^\[out:json\]\[timeout:60\];/);
+  });
+
+  it('treats a "runtime error" or "timed out" remark as a failure', () => {
+    expect(() => checkOverpassAnswer(timedOut, 'a')).toThrow(/timed out/);
+    expect(() => checkOverpassAnswer(outOfMemory, 'a')).toThrow(/runtime error/);
+    expect(() => checkOverpassAnswer({ elements: [], remark: 'Query timed out' } as OverpassJson, 'a')).toThrow();
+    expect(checkOverpassAnswer(good, 'a')).toBe(good);
+    expect(checkOverpassAnswer({ ...good, remark: 'some harmless note' }, 'a').elements).toHaveLength(1);
+  });
+
+  it('moves on to the next server when the first one times out', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(url);
+      return answer(urls.length === 1 ? timedOut : good);
+    }));
+    const json = await fetchOverpass(origin, 500);
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).not.toBe(urls[1]);
+    expect(json.elements).toHaveLength(1);
+  });
+
+  it('fails clearly when every server times out', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => answer(timedOut)));
+    await expect(fetchOverpass(origin, 500)).rejects.toThrow(/Could not download map data.*timed out/);
   });
 });

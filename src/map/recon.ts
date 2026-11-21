@@ -1,15 +1,15 @@
 import type { Feature, FeatureCategory, MapData, V2 } from './types';
 import { FEATURE_CATEGORIES } from './types';
-import { centroid, dist, distToSegment, polygonArea } from './geom';
+import { centroid, dist, distToSegment, pointInPolygon, polygonArea } from './geom';
 import { hashString } from '../util/rng';
 
 /**
  * Recon: what's in the area, and which missions suit it. Pure and deterministic
  * (same map + seed → same report and suggestions), no DOM, no three.js.
  *
- * Guardrail (PLAN §9): no mission template puts children in the scene. Schools may only
- * serve as the adult survivors' safehouse; kindergartens and playgrounds are listed in
- * recon but never anchor a mission.
+ * Guardrail (PLAN §9, issue #11): until the owner decides the rules for school missions, no
+ * mission is anchored at, built around, or sheltered in a school, kindergarten or playground.
+ * Recon still lists them, and they mark an exclusion zone (see `childZones`).
  */
 export interface CategoryInfo {
   /** Singular and plural for the recon list ("1 tennis club", "3 tennis clubs"). */
@@ -60,6 +60,59 @@ export function mapFeatures(map: MapData): Feature[] {
     out.push({ id: a.id, category: a.kind === 'wood' ? 'forest' : 'park', name: a.name, p: centroid(a.pts), pts: a.pts });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------------------
+// Guardrail: places where children are. Missions keep well away from them (PLAN §9).
+// ---------------------------------------------------------------------------------------
+
+/** Recon categories no mission may be anchored at, built around or sheltered in. */
+export const CHILD_CATEGORIES: readonly FeatureCategory[] = ['school', 'kindergarten', 'playground'];
+/** Landmark (poi) and building kinds that are never a safehouse. */
+export const CHILD_KINDS: readonly string[] = ['school', 'kindergarten', 'college'];
+/** Metres to keep between a mission's places and a school, kindergarten or playground. */
+export const CHILD_BUFFER = 50;
+
+/** A school, kindergarten or playground: its point, and its outline when the map has one. */
+export interface ChildZone {
+  p: V2;
+  pts?: V2[];
+}
+
+const zoneCache = new WeakMap<MapData, ChildZone[]>();
+
+/** Every school, kindergarten and playground on the map: recon places, landmarks and buildings. */
+export function childZones(map: MapData): ChildZone[] {
+  const cached = zoneCache.get(map);
+  if (cached) return cached;
+  const zones: ChildZone[] = [];
+  for (const f of mapFeatures(map)) {
+    if (CHILD_CATEGORIES.includes(f.category)) zones.push(f.pts && f.pts.length >= 3 ? { p: f.p, pts: f.pts } : { p: f.p });
+  }
+  for (const p of map.pois) if (CHILD_KINDS.includes(p.kind) || p.kind === 'playground') zones.push({ p: p.p });
+  for (const b of map.buildings) if (b.pts.length >= 3 && CHILD_KINDS.includes(b.kind)) zones.push({ p: centroid(b.pts), pts: b.pts });
+  zoneCache.set(map, zones);
+  return zones;
+}
+
+/** Distance from a point to a zone: 0 inside its outline, else to its edge (or its point). */
+function zoneDist(p: V2, z: ChildZone): number {
+  if (!z.pts) return dist(p, z.p);
+  if (pointInPolygon(p, z.pts)) return 0;
+  let d = Infinity;
+  for (let i = 0, j = z.pts.length - 1; i < z.pts.length; j = i++) d = Math.min(d, distToSegment(p, z.pts[j], z.pts[i]));
+  return d;
+}
+
+/** True when a point is inside, or within `buffer` metres of, a school, kindergarten or playground. */
+export function nearChildPlace(map: MapData, p: V2, buffer = CHILD_BUFFER): boolean {
+  return childZones(map).some((z) => zoneDist(p, z) < buffer);
+}
+
+/** True when an outline contains a school, kindergarten or playground (a park with a playground in it). */
+export function containsChildPlace(map: MapData, pts: V2[] | undefined): boolean {
+  if (!pts || pts.length < 3) return false;
+  return childZones(map).some((z) => pointInPolygon(z.p, pts) || (z.pts ?? []).some((q) => pointInPolygon(q, pts)));
 }
 
 const plural = (n: number, c: FeatureCategory) => `${n} ${n === 1 ? CATEGORY_INFO[c].one : CATEGORY_INFO[c].many}`;
@@ -155,7 +208,6 @@ export type TemplateId =
   | 'clear-tennis'
   | 'forest-sweep'
   | 'escort-shops'
-  | 'escort-school'
   | 'escort-station'
   | 'hold-landmark'
   | 'clear-park'
@@ -179,7 +231,6 @@ export const MISSION_TEMPLATES: Record<TemplateId, MissionTemplate> = {
   'clear-tennis': { id: 'clear-tennis', base: 'clear', name: 'Clear the tennis club', anchors: ['tennis'], weight: 72 },
   'hold-sports': { id: 'hold-sports', base: 'defend', name: 'Hold the sports centre', anchors: ['sports_centre', 'stadium'], weight: 70 },
   'escort-shops': { id: 'escort-shops', base: 'escort', name: 'Get them home from the shops', anchors: ['mall', 'supermarket'], weight: 66 },
-  'escort-school': { id: 'escort-school', base: 'escort', name: 'Get them home from the school', anchors: ['school'], weight: 60 },
   'escort-station': { id: 'escort-station', base: 'escort', name: 'Last train home', anchors: ['train_station', 'bus_station'], weight: 58 },
   'clear-park': { id: 'clear-park', base: 'clear', name: 'Clear the park', anchors: ['park'], weight: 52 },
   'hold-landmark': { id: 'hold-landmark', base: 'defend', name: 'Hold the line', anchors: ['police', 'fire_station', 'hospital'], weight: 50 },
@@ -218,6 +269,8 @@ export function templateAnchors(map: MapData, id: TemplateId, seed: number): Fea
   return mapFeatures(map)
     .filter((f) => t.anchors.includes(f.category) && playable(map, f))
     .filter((f) => id !== 'forest-sweep' || !f.pts || polygonArea(f.pts) >= 2500)
+    // Guardrail: never next to, or wrapped around, a school, kindergarten or playground.
+    .filter((f) => !CHILD_CATEGORIES.includes(f.category) && !nearChildPlace(map, f.p) && !containsChildPlace(map, f.pts))
     .map((f) => ({ f, s: score(f) }))
     .sort((a, b) => b.s - a.s || (a.f.id < b.f.id ? -1 : 1))
     .map((x) => x.f);
@@ -257,8 +310,6 @@ function describe(map: MapData, id: TemplateId, f: Feature | undefined, count: n
     }
     case 'escort-shops':
       return { title: `Get them home from ${name}`, why: `Late-night shoppers are barricaded inside ${name}${others}. Walk them home through real streets.` };
-    case 'escort-school':
-      return { title: `Get them home from ${name}`, why: `${Name} is the local safehouse. The adults sheltering there need walking home.` };
     case 'escort-station': {
       const what = f?.category === 'bus_station' ? 'last bus' : 'last train';
       return { title: `Last ${what.split(' ')[1]} home: ${name}`, why: `Passengers off the ${what} are stuck at ${name}. Get them home on foot.` };

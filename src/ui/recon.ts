@@ -27,7 +27,7 @@ export function showRecon(parent: HTMLElement, map: MapData, start: { seed: numb
 
   const grid = el('div', 'recon-grid', undefined, root);
   const mapBox = el('div', 'tmap-wrap recon-map', undefined, grid);
-  // Size the map's text for the space it really gets, so labels stay readable on a phone.
+  // A first guess at the map's width; it measures its real width on screen and redraws, so text stays 14 px or more.
   const tm = new TacticalMap(map, { size: Math.max(300, Math.min(600, window.innerWidth - 72)), label: `Tactical map of ${map.name}` });
   mapBox.appendChild(tm.svg);
 

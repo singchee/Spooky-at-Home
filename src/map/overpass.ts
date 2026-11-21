@@ -33,7 +33,7 @@ export function buildQuery(origin: LatLon, half: number): string {
   const bb = `${b.south.toFixed(6)},${b.west.toFixed(6)},${b.north.toFixed(6)},${b.east.toFixed(6)}`;
   const hw = Object.keys(ROAD_WIDTHS).join('|');
   const am = [...POI_AMENITIES, 'kindergarten', 'parking', 'bus_station'].join('|');
-  return `[out:json][timeout:30];
+  return `[out:json][timeout:60];
 (
   way["building"](${bb});
   way["highway"~"^(${hw})$"](${bb});
@@ -88,6 +88,15 @@ export interface OverpassElement {
 
 export interface OverpassJson {
   elements: OverpassElement[];
+  /** Overpass reports a query that ran out of time or memory here, with HTTP 200 and partial (or no) elements. */
+  remark?: string;
+}
+
+/** A 200 answer can still be a failed query: Overpass says so in `remark`. Throws for those. */
+export function checkOverpassAnswer(json: OverpassJson, url: string): OverpassJson {
+  if (!json || !Array.isArray(json.elements)) throw new Error(`${url} sent an answer with no map data`);
+  if (typeof json.remark === 'string' && /runtime error|timed out/i.test(json.remark)) throw new Error(`${url} could not finish the query (${json.remark.slice(0, 120)})`);
+  return json;
 }
 
 export async function fetchOverpass(origin: LatLon, half: number, signal?: AbortSignal): Promise<OverpassJson> {
@@ -102,7 +111,8 @@ export async function fetchOverpass(origin: LatLon, half: number, signal?: Abort
         signal,
       });
       if (!res.ok) throw new Error(`${url} answered ${res.status}`);
-      return (await res.json()) as OverpassJson;
+      // A timed-out or failed query still answers 200; try the next server instead.
+      return checkOverpassAnswer((await res.json()) as OverpassJson, url);
     } catch (e) {
       if (signal?.aborted) throw e;
       lastErr = e;
@@ -137,8 +147,10 @@ const hasValue = (v: string | undefined, want: string) => !!v && v.split(';').ma
 
 /** Which recon category an OpenStreetMap object belongs to, if any. */
 export function featureCategory(tags: Record<string, string>): FeatureCategory | null {
+  // A tennis club is club=tennis, or a named tennis place. An unnamed court (leisure=pitch +
+  // sport=tennis) is just a sports ground: lone courts sit in backyards and school grounds.
   if (tags.club === 'tennis') return 'tennis';
-  if (hasValue(tags.sport, 'tennis') && (!tags.leisure || ['pitch', 'sports_centre'].includes(tags.leisure))) return 'tennis';
+  if (hasValue(tags.sport, 'tennis') && !!tags.name && (!tags.leisure || ['pitch', 'sports_centre'].includes(tags.leisure))) return 'tennis';
   switch (tags.amenity) {
     case 'school': return 'school';
     case 'kindergarten': return 'kindergarten';
@@ -197,6 +209,33 @@ export function dedupeFeatures(list: Feature[]): Feature[] {
   // A stable, readable order: by category, then named before unnamed, then id.
   const order = (c: FeatureCategory) => FEATURE_CATEGORIES.indexOf(c);
   return out.sort((a, b) => order(a.category) - order(b.category) || (a.name ? 0 : 1) - (b.name ? 0 : 1) || byId(a, b));
+}
+
+/**
+ * Which places survive the MAX_FEATURES cap, best first. Schools, kindergartens and playgrounds
+ * are never dropped: the mission guardrail's exclusion zone depends on them (PLAN §9). Hospitals,
+ * police and stations come next; car parks and sports pitches, the most numerous, go last.
+ */
+const CAP_PRIORITY: readonly FeatureCategory[] = [
+  'school', 'kindergarten', 'playground',
+  'hospital', 'police', 'fire_station', 'train_station', 'bus_station',
+  'mall', 'supermarket', 'sports_centre', 'stadium', 'tennis', 'forest', 'park', 'swimming_pool',
+  'pitch', 'parking',
+];
+const NEVER_DROP: readonly FeatureCategory[] = ['school', 'kindergarten', 'playground'];
+
+/** Keeps at most `max` features (plus every school, kindergarten and playground), in their original order. */
+export function capFeatures(list: Feature[], max = MAX_FEATURES): Feature[] {
+  if (list.length <= max) return list;
+  const must = list.filter((f) => NEVER_DROP.includes(f.category)).length;
+  const keep = new Set(
+    list
+      .map((f, i) => ({ f, i }))
+      .sort((a, b) => CAP_PRIORITY.indexOf(a.f.category) - CAP_PRIORITY.indexOf(b.f.category) || a.i - b.i)
+      .slice(0, Math.max(max, must))
+      .map((x) => x.f),
+  );
+  return list.filter((f) => keep.has(f));
 }
 
 /** Turns raw Overpass JSON into the game's local-metre map format. */
@@ -273,7 +312,7 @@ export function parseOverpass(json: OverpassJson, origin: LatLon, half: number, 
     areas,
     pois,
     attribution: 'Map data © OpenStreetMap contributors (ODbL)',
-    features: dedupeFeatures(features).slice(0, MAX_FEATURES),
+    features: capFeatures(dedupeFeatures(features)),
     busRoutes: [...routes.values()].map(({ members: _members, ...r }) => r).filter((r) => r.lines.length > 0),
     trees,
     lamps,

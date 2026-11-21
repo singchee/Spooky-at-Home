@@ -1,4 +1,5 @@
 import type { Feature, FeatureCategory, MapData, V2 } from '../map/types';
+import { bounds } from '../map/geom';
 import { CATEGORY_INFO, mapFeatures } from '../map/recon';
 import { likelyWaveDirections, type Mission, type WaveDirection } from '../sim/missions';
 import { ORBIT } from '../sim/sim';
@@ -15,7 +16,8 @@ export interface TacticalOptions {
   mission?: Mission;
   /** Likely wave directions (defend missions), from likelyWaveDirections(). */
   waves?: WaveDirection[];
-  /** Nominal width in CSS pixels: line widths and text sizes are tuned for it. */
+  /** First guess at the width in CSS pixels. Once the map is on screen it measures its real width
+   *  (ResizeObserver) and redraws, so text is always TEXT_PX or more on screen. */
   size?: number;
   /** Zoom to the mission area (briefing) instead of showing the whole map. */
   focus?: boolean;
@@ -39,6 +41,11 @@ function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Attrs = {}, pa
 }
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
+
+/** Smallest text on the map, in real on-screen CSS pixels (QUALITY: no text under 14 px). */
+const TEXT_PX = 14;
+/** Monospace glyph width as a share of the font size, for label boxes. */
+const CHAR_W = 0.62;
 const polyD = (pts: V2[], close: boolean) => pts.map((p, i) => `${i ? 'L' : 'M'}${r1(p.x)} ${r1(p.z)}`).join('') + (close ? 'Z' : '');
 
 /** Symbol families, coloured like a briefing board: civic, sport and open space, shops, transport. */
@@ -65,33 +72,69 @@ export class TacticalMap {
   /** Compact (minimap) mode only: a separate transparent SVG for the live layer, stacked on top,
    *  so moving the aircraft never repaints the whole static map. */
   readonly live: SVGSVGElement | null = null;
-  private dyn: SVGGElement;
-  private u: number;
+  private dyn!: SVGGElement;
+  /** Map metres per on-screen CSS pixel. Text and line sizes are multiples of it. */
+  private u = 1;
   private half: number;
   /** The visible square, in map metres (the whole map, or the mission area when focused). */
   private view: { x0: number; z0: number; span: number };
+  private full: { x0: number; z0: number; span: number };
+  private pad: number;
   private lastAircraft: V2 | null = null;
   private boxes: Box[] = [];
+  /** The width (CSS px) the map was last drawn for. */
+  private drawnFor = 0;
+  private highlightId: string | null = null;
+  private resize: ResizeObserver | null = null;
+  private readonly id = `tm${++uid}`;
 
   constructor(private map: MapData, private opts: TacticalOptions = {}) {
     const half = map.half;
     this.half = half;
-    const pad = half * 0.03;
-    const full = { x0: -half - pad, z0: -half - pad, span: 2 * (half + pad) };
-    this.view = opts.focus && opts.mission ? focusView(opts.mission, full) : full;
+    this.pad = half * 0.03;
+    this.full = { x0: -half - this.pad, z0: -half - this.pad, span: 2 * (half + this.pad) };
+    this.view = opts.focus && opts.mission ? focusView(opts.mission, this.full) : this.full;
     const v = this.view;
-    const size = opts.size ?? 560;
-    const u = v.span / size; // map metres per CSS pixel
-    this.u = u;
-    const id = `tm${++uid}`;
-    const root = svg('svg', {
+    this.svg = svg('svg', {
       viewBox: `${r1(v.x0)} ${r1(v.z0)} ${r1(v.span)} ${r1(v.span)}`,
       class: `tmap${opts.compact ? ' compact' : ''}`,
       role: 'img',
       'aria-label': opts.label ?? `Tactical map of ${map.name}`,
       preserveAspectRatio: 'xMidYMid meet',
     });
-    this.svg = root;
+    if (opts.compact) {
+      this.live = svg('svg', { viewBox: this.svg.getAttribute('viewBox')!, class: 'tmap-live', 'aria-hidden': 'true', preserveAspectRatio: 'xMidYMid meet' });
+      this.dyn = svg('g', { class: 'tm-dyn' }, this.live);
+    }
+    this.highlightId = opts.highlight ?? null;
+    this.render(opts.size ?? 560);
+    // The map's CSS width is a share of its container, so the first guess is often off (a phone, a
+    // narrow column). Measure the real width and redraw, so text is never under TEXT_PX on screen.
+    if (!opts.compact && typeof ResizeObserver !== 'undefined') {
+      this.resize = new ResizeObserver((entries) => {
+        if (!this.svg.isConnected) {
+          this.resize?.disconnect();
+          return;
+        }
+        const w = entries[entries.length - 1]?.contentRect.width ?? 0;
+        if (w > 0 && Math.abs(w - this.drawnFor) >= 1) this.render(w);
+      });
+      this.resize.observe(this.svg);
+    }
+  }
+
+  /** Draws everything for a map shown `width` CSS pixels wide. */
+  private render(width: number): void {
+    const opts = this.opts;
+    const v = this.view;
+    const full = this.full;
+    const id = this.id;
+    this.drawnFor = width;
+    const u = v.span / width; // map metres per CSS pixel
+    this.u = u;
+    this.boxes = [];
+    const root = this.svg;
+    root.replaceChildren();
     const defs = svg('defs', {}, root);
     const clip = svg('clipPath', { id: `${id}-clip` }, defs);
     svg('rect', { x: full.x0, y: full.z0, width: full.span, height: full.span }, clip);
@@ -105,7 +148,12 @@ export class TacticalMap {
     svg('rect', { x: v.x0, y: v.z0, width: v.span, height: v.span, class: 'tm-outside' }, root);
     const g = svg('g', { 'clip-path': `url(#${id}-clip)` }, root);
     svg('rect', { x: full.x0, y: full.z0, width: full.span, height: full.span, class: 'tm-bg' }, g);
-    this.drawGrid(g, pad);
+    this.drawGrid(g, this.pad);
+    // Claim space for things labels must never cover: grid references, north arrow, scale bar,
+    // hordes and the safehouse.
+    const gridRefs = opts.compact ? [] : this.gridRefs();
+    if (!opts.compact) this.reserveFurniture();
+    if (opts.mission && !opts.compact) this.reserveMission(opts.mission);
     this.drawGround(g, id);
     this.drawRoads(g);
     this.drawBuildings(g);
@@ -114,12 +162,16 @@ export class TacticalMap {
     if (opts.mission) this.drawMission(g, opts.mission, id);
     if (opts.mission && !opts.compact) this.drawMissionLabels(g, opts.mission);
     if (!opts.compact) this.drawFeatures(g);
-    if (opts.compact) {
-      this.live = svg('svg', { viewBox: root.getAttribute('viewBox')!, class: 'tmap-live', 'aria-hidden': 'true', preserveAspectRatio: 'xMidYMid meet' });
-      this.dyn = svg('g', { class: 'tm-dyn' }, this.live);
-    } else this.dyn = svg('g', { class: 'tm-dyn' }, root);
-    if (!opts.compact) this.drawFurniture(root);
-    if (opts.highlight) this.setHighlight(opts.highlight);
+    // Grid references go on top of everything on the map, with a dark halo, so they always read.
+    if (gridRefs.length) {
+      const layer = svg('g', { class: 'tm-gridrefs' }, g);
+      for (const r of gridRefs) svg('text', { ...r.attrs, class: 'tm-gridref', 'font-size': TEXT_PX * u, 'stroke-width': r1(4 * u) }, layer, r.text);
+    }
+    if (!opts.compact) {
+      this.dyn = svg('g', { class: 'tm-dyn' }, root);
+      this.drawFurniture(root);
+    }
+    if (this.highlightId) this.setHighlight(this.highlightId);
   }
 
   // ---------- base map ----------
@@ -130,20 +182,62 @@ export class TacticalMap {
     let d = '';
     for (let v = first; v <= half; v += step) d += `M${v} ${-half - pad}V${half + pad}M${-half - pad} ${v}H${half + pad}`;
     svg('path', { d, class: 'tm-grid', 'stroke-width': 0.8 * this.u }, g);
-    if (this.opts.compact) return;
-    // Grid references along the top (letters) and left (numbers) of the view, like a map sheet.
-    // They're counted from the map's own corner, so a zoomed briefing map uses the same squares.
-    const fs = 12 * this.u;
+  }
+
+  /**
+   * Grid references along the top (letters) and left (numbers) of the view, like a map sheet.
+   * They're counted from the map's own corner, so a zoomed briefing map uses the same squares.
+   * Their space is reserved now; they're drawn last, on top of the map.
+   */
+  private gridRefs(): { text: string; attrs: Attrs }[] {
+    const half = this.half;
+    const step = half > 800 ? 200 : 100;
+    const first = -Math.floor(half / step) * step;
+    const u = this.u;
+    const fs = TEXT_PX * u;
     const vw = this.view;
+    const inset = 4 * u;
+    const out: { text: string; attrs: Attrs }[] = [];
     let k = 0;
     for (let v = first; v < half; v += step, k++) {
       const mid = v + step / 2;
-      if (mid > vw.x0 + fs && mid < vw.x0 + vw.span - fs * 2) {
-        svg('text', { x: mid, y: vw.z0 + fs * 0.5, class: 'tm-gridref', 'font-size': fs, 'text-anchor': 'middle', 'dominant-baseline': 'hanging' }, g, String.fromCharCode(65 + (k % 26)));
+      const letter = String.fromCharCode(65 + (k % 26));
+      // Letters stay clear of the north arrow (top right); numbers clear of the letters and the scale bar.
+      if (mid > vw.x0 + fs * 2 && mid < vw.x0 + vw.span - 32 * u) {
+        const y = vw.z0 + inset;
+        this.boxes.push({ x0: mid - fs * 0.5, y0: y, x1: mid + fs * 0.5, y1: y + fs * 1.1 });
+        out.push({ text: letter, attrs: { x: r1(mid), y: r1(y), 'text-anchor': 'middle', 'dominant-baseline': 'hanging' } });
       }
-      if (mid > vw.z0 + fs * 2 && mid < vw.z0 + vw.span - fs * 2) {
-        svg('text', { x: vw.x0 + fs * 0.5, y: mid, class: 'tm-gridref', 'font-size': fs, 'dominant-baseline': 'middle' }, g, String(k + 1));
+      if (mid > vw.z0 + fs * 2.5 && mid < vw.z0 + vw.span - 30 * u) {
+        const x = vw.x0 + inset;
+        const t = String(k + 1);
+        this.boxes.push({ x0: x, y0: mid - fs * 0.6, x1: x + t.length * fs * CHAR_W + u, y1: mid + fs * 0.6 });
+        out.push({ text: t, attrs: { x: r1(x), y: r1(mid), 'dominant-baseline': 'central' } });
       }
+    }
+    return out;
+  }
+
+  /** The north arrow and scale bar's corners: no label goes there. */
+  private reserveFurniture(): void {
+    const u = this.u;
+    const v = this.view;
+    this.boxes.push({ x0: v.x0 + v.span - 30 * u, y0: v.z0, x1: v.x0 + v.span, y1: v.z0 + 50 * u });
+    const len = scaleLength(v.span);
+    const label = `${len} m`;
+    this.boxes.push({ x0: v.x0, y0: v.z0 + v.span - 30 * u, x1: v.x0 + 14 * u + len + 8 * u + label.length * TEXT_PX * CHAR_W * u, y1: v.z0 + v.span });
+  }
+
+  /** Horde circles and the safehouse: labels and symbols must not cover them. */
+  private reserveMission(m: Mission): void {
+    const u = this.u;
+    for (const h of m.hordes) {
+      const r = 30 + (h.cold > 0 ? 7.5 * u : 1 * u);
+      this.boxes.push({ x0: h.centre.x - r, y0: h.centre.z - r, x1: h.centre.x + r, y1: h.centre.z + r });
+    }
+    if (m.safehouse) {
+      const b = bounds(m.safehouse.poly);
+      this.boxes.push({ x0: b.minX - 2 * u, y0: b.minZ - 2 * u, x1: b.maxX + 2 * u, y1: b.maxZ + 2 * u });
     }
   }
 
@@ -217,9 +311,9 @@ export class TacticalMap {
   /** A small boxed tag (used for bus route numbers). */
   private tag(g: SVGGElement, p: V2, text: string, cls: string): void {
     const u = this.u;
-    const fs = 12 * u;
-    const w = text.length * fs * 0.62 + 6 * u;
-    const h = fs + 5 * u;
+    const fs = TEXT_PX * u;
+    const w = text.length * fs * CHAR_W + 8 * u;
+    const h = fs + 6 * u;
     if (!this.reserve(p.x - w / 2, p.z - h / 2, p.x + w / 2, p.z + h / 2)) return;
     const t = svg('g', { class: cls, transform: `translate(${r1(p.x)} ${r1(p.z)})` }, g);
     svg('rect', { x: -w / 2, y: -h / 2, width: w, height: h, rx: 2 * u, 'stroke-width': u }, t);
@@ -245,11 +339,11 @@ export class TacticalMap {
       .filter((f) => Math.abs(f.p.x) <= this.half && Math.abs(f.p.z) <= this.half)
       .sort((a, b) => (b.id === anchorId ? 1 : 0) - (a.id === anchorId ? 1 : 0) || CATEGORY_INFO[b.category].weight - CATEGORY_INFO[a.category].weight || (b.name ? 1 : 0) - (a.name ? 1 : 0) || (a.id < b.id ? -1 : 1))
       .slice(0, 80);
-    const fs = 12 * u;
+    const fs = TEXT_PX * u;
     for (const f of feats) {
       const code = CATEGORY_INFO[f.category].code;
-      const w = Math.max(24, code.length * 8.5 + 9) * u;
-      const h = 17 * u;
+      const w = Math.max(28, code.length * TEXT_PX * 0.68 + 10) * u;
+      const h = (TEXT_PX + 6) * u;
       if (!this.reserve(f.p.x - w / 2 - 2 * u, f.p.z - h / 2 - 2 * u, f.p.x + w / 2 + 2 * u, f.p.z + h / 2 + 2 * u)) continue;
       const s = svg('g', { class: `tm-sym tm-${FAMILY[f.category]}`, transform: `translate(${r1(f.p.x)} ${r1(f.p.z)})`, 'data-feature': f.id }, layer);
       symbolFrame(s, f.category, w, h, u);
@@ -260,9 +354,9 @@ export class TacticalMap {
 
   private label(layer: SVGGElement, f: Feature, symH: number): void {
     const u = this.u;
-    const fs = 14 * u;
+    const fs = TEXT_PX * u;
     const text = f.name!.length > 28 ? `${f.name!.slice(0, 27)}…` : f.name!;
-    const w = text.length * fs * 0.6;
+    const w = text.length * fs * CHAR_W;
     const y = f.p.z + symH / 2 + 3 * u;
     if (!this.reserve(f.p.x - w / 2, y, f.p.x + w / 2, y + fs * 1.1)) return;
     svg('text', { x: r1(f.p.x), y: r1(y), class: 'tm-label', 'font-size': fs, 'text-anchor': 'middle', 'dominant-baseline': 'hanging', 'stroke-width': 3 * u, 'data-feature': f.id }, layer, text);
@@ -270,6 +364,7 @@ export class TacticalMap {
 
   /** Emphasise one place (e.g. the mission card under the pointer). Pass null to clear. */
   setHighlight(featureId: string | null): void {
+    this.highlightId = featureId;
     for (const e of this.svg.querySelectorAll('.tm-sym.hl')) e.classList.remove('hl');
     this.svg.querySelector('.tm-hl-outline')?.remove();
     if (!featureId) return;
@@ -348,8 +443,8 @@ export class TacticalMap {
     svg('path', { d: `M${r1(end.x)} ${r1(end.z)}L${r1(base.x - uz * hw)} ${r1(base.z + ux * hw)}L${r1(base.x + uz * hw)} ${r1(base.z - ux * hw)}Z`, class: 'tm-wave-head' }, g);
     if (text) {
       // Label a third of the way along, kept inside the view; it claims its space before place names.
-      const fs = 12 * u;
-      const w = text.length * fs * 0.62;
+      const fs = TEXT_PX * u;
+      const w = text.length * fs * CHAR_W;
       const v = this.view;
       const x = Math.max(v.x0 + w / 2 + 4 * u, Math.min(v.x0 + v.span - w / 2 - 4 * u, start.x + (base.x - start.x) * 0.33));
       const y = Math.max(v.z0 + fs, Math.min(v.z0 + v.span - fs, start.z + (base.z - start.z) * 0.33));
@@ -361,27 +456,33 @@ export class TacticalMap {
   private drawMissionLabels(g: SVGGElement, m: Mission): void {
     const u = this.u;
     const layer = svg('g', { class: 'tm-mlabels' }, g);
-    const fs = 13 * u;
-    /** Tries above, below, then to either side; mission labels never overlap each other. */
-    const put = (p: V2, text: string, cls: string, clear: number) => {
-      const w = text.length * fs * 0.62;
-      const h = fs * 1.15;
-      const spots: [number, number, 'middle' | 'start' | 'end'][] = [
-        [0, -clear - 3 * u, 'middle'],
-        [0, clear + h, 'middle'],
-        [clear + 4 * u, fs * 0.4, 'start'],
-        [-clear - 4 * u, fs * 0.4, 'end'],
+    const fs = TEXT_PX * u;
+    /**
+     * Tries above, below, then to either side of a thing `cx` by `cz` metres from its centre (half
+     * width and height). Labels never overlap each other, hordes, the safehouse or the grid letters.
+     */
+    const put = (p: V2, text: string, cls: string, cx: number, cz = cx) => {
+      const w = text.length * fs * CHAR_W;
+      const h = fs * 1.25;
+      const gap = 3 * u;
+      // [left edge, top edge, text x, anchor]
+      const spots: [number, number, number, 'middle' | 'start' | 'end'][] = [
+        [p.x - w / 2, p.z - cz - gap - h, p.x, 'middle'],
+        [p.x - w / 2, p.z + cz + gap, p.x, 'middle'],
+        [p.x + cx + gap, p.z - h / 2, p.x + cx + gap, 'start'],
+        [p.x - cx - gap - w, p.z - h / 2, p.x - cx - gap, 'end'],
       ];
-      for (const [dx, dy, anchor] of spots) {
-        const x = p.x + dx;
-        const y = p.z + dy;
-        const x0 = anchor === 'middle' ? x - w / 2 : anchor === 'start' ? x : x - w;
-        if (!this.reserve(x0, y - fs, x0 + w, y + fs * 0.25)) continue;
-        svg('text', { x: r1(x), y: r1(y), class: `tm-mlabel ${cls}`, 'font-size': fs, 'text-anchor': anchor, 'stroke-width': 3 * u }, layer, text);
+      for (const [x0, y0, x, anchor] of spots) {
+        if (!this.reserve(x0, y0, x0 + w, y0 + h)) continue;
+        svg('text', { x: r1(x), y: r1(y0 + h * 0.8), class: `tm-mlabel ${cls}`, 'font-size': fs, 'text-anchor': anchor, 'stroke-width': r1(3 * u) }, layer, text);
         return;
       }
     };
-    if (m.safehouse) put(m.safehouse.centre, 'SAFEHOUSE', 'safe', 12 * u);
+    if (m.safehouse) {
+      const b = bounds(m.safehouse.poly);
+      const c = { x: (b.minX + b.maxX) / 2, z: (b.minZ + b.maxZ) / 2 };
+      put(c, 'SAFEHOUSE', 'safe', (b.maxX - b.minX) / 2 + 2 * u, (b.maxZ - b.minZ) / 2 + 2 * u);
+    }
     if (m.home) put(m.home.centre, 'HOME', 'home', 9 * u);
     // Hordes at the same place share one label, so a cluster in a park reads as one group.
     const groups = new Map<string, Mission['hordes']>();
@@ -392,12 +493,12 @@ export class TacticalMap {
       const n = hs.reduce((s, h) => s + h.count, 0);
       const cold = hs.reduce((s, h) => s + h.cold, 0);
       const what = hs.length > 1 ? `${hs.length} HORDES ×${n}` : `HORDE ×${n}`;
-      put(c, cold ? `${what} · ${cold} COLD` : what, 'hostile', spread + 30 + 4 * u);
+      put(c, cold ? `${what} · ${cold} COLD` : what, 'hostile', spread + 30 + 8 * u);
     }
     const shelter = m.survivors.find((s) => !s.route);
     if (shelter) put(shelter.start, 'FRIENDLIES', 'friendly', 6 * u);
     if (m.route && m.route.length > 2) put(m.route[Math.floor(m.route.length / 2)], 'AMBUSH ZONE', 'hostile', 64);
-    if (Math.abs(m.orbitCentre.x) < this.half * 0.95 && Math.abs(m.orbitCentre.z) < this.half * 0.95) put(m.orbitCentre, 'ORBIT CTR', 'orbit', 9 * u);
+    // The orbit centre has its own mark and a legend entry; it needs no label.
   }
 
   // ---------- north arrow, scale bar ----------
@@ -409,13 +510,13 @@ export class TacticalMap {
     const nx = v.x0 + v.span - 18 * u;
     const ny = v.z0 + 10 * u;
     svg('path', { d: `M${r1(nx)} ${r1(ny)}l${r1(6 * u)} ${r1(18 * u)}l${r1(-6 * u)} ${r1(-5 * u)}l${r1(-6 * u)} ${r1(5 * u)}Z`, class: 'tm-north' }, f);
-    svg('text', { x: r1(nx), y: r1(ny + 31 * u), 'font-size': 12 * u, 'text-anchor': 'middle', class: 'tm-furn-text' }, f, 'N');
+    svg('text', { x: r1(nx), y: r1(ny + 33 * u), 'font-size': TEXT_PX * u, 'text-anchor': 'middle', class: 'tm-furn-text', 'stroke-width': r1(3 * u) }, f, 'N');
     // Scale bar, bottom left: a round length near a fifth of the view.
-    const len = [50, 100, 200, 250, 500, 1000].reduce((best, L) => (Math.abs(L - v.span / 5) < Math.abs(best - v.span / 5) ? L : best), 100);
+    const len = scaleLength(v.span);
     const sx = v.x0 + 14 * u;
     const sy = v.z0 + v.span - 12 * u;
     svg('path', { d: `M${r1(sx)} ${r1(sy - 4 * u)}V${r1(sy)}H${r1(sx + len)}V${r1(sy - 4 * u)}M${r1(sx + len / 2)} ${r1(sy - 3 * u)}V${r1(sy)}`, class: 'tm-scale', 'stroke-width': 1.5 * u }, f);
-    svg('text', { x: r1(sx + len + 5 * u), y: r1(sy), 'font-size': 12 * u, class: 'tm-furn-text', 'stroke-width': 3 * u }, f, `${len} m`);
+    svg('text', { x: r1(sx + len + 5 * u), y: r1(sy), 'font-size': TEXT_PX * u, class: 'tm-furn-text', 'stroke-width': r1(3 * u) }, f, `${len} m`);
   }
 
   // ---------- live layer (HUD minimap) ----------
@@ -447,6 +548,11 @@ export class TacticalMap {
       }
     }
   }
+}
+
+/** A round scale-bar length near a fifth of the view. */
+function scaleLength(span: number): number {
+  return [50, 100, 200, 250, 500, 1000].reduce((best, L) => (Math.abs(L - span / 5) < Math.abs(best - span / 5) ? L : best), 100);
 }
 
 /** The square that frames a mission's area of operations (at least ~500 m across), inside the map. */
