@@ -143,7 +143,9 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
         el('button', 'primary', 'Scout my neighbourhood', row).addEventListener('click', () => exit('scout'));
         el('button', undefined, 'Fly a mission', row).addEventListener('click', () => exit('menu'));
         el('button', undefined, 'Front page', row).addEventListener('click', () => exit('landing'));
-        el('p', 'coach-small', 'Press Esc to free the mouse. Or stay and keep practising.', coach);
+        // Shown over the pause screen: this reveals the game's own Resume button underneath.
+        el('button', 'coach-stay', 'Keep practising', row).addEventListener('click', () => coach.classList.add('dismissed'));
+        el('p', 'coach-small', 'Press Esc to free the mouse and choose. Or stay and keep practising.', coach);
       } else {
         kicker.textContent = `TRAINING NIGHT · STEP ${steps.index} OF ${TutorialSteps.TEACHING_STEPS}`;
         el('button', 'coach-skip', 'Skip tutorial', row).addEventListener('click', skip);
@@ -172,6 +174,10 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
     raf = requestAnimationFrame(tick);
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
+    // While paused, the coach shrinks to its title (or, once done, becomes the main card).
+    const paused = game.screen === 'paused';
+    coach.classList.toggle('paused', paused);
+    if (!paused) coach.classList.remove('dismissed');
     if (game.screen !== 'playing') return;
     clock += dt;
     const aim = game.aimPoint();

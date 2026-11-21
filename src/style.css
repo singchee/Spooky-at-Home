@@ -172,6 +172,16 @@ button:disabled { opacity: 0.5; }
 .coach-marker.edge::after { width: 0; height: 0; border: 0; border-radius: 0; border-left: 18px solid currentColor; border-top: 11px solid transparent; border-bottom: 11px solid transparent;
   margin-top: 8px; transform: rotate(var(--a, 0rad)); filter: drop-shadow(0 0 2px #000); }
 @media (prefers-reduced-motion: reduce) { .coach-bar span { transition: none; } }
+.coach-stay { display: none; }
+/* Paused: the coach shrinks to its title so it doesn't cover the pause card... */
+.coach.paused .coach-body, .coach.paused .coach-hint, .coach.paused .coach-bar { display: none; }
+/* ...except at the end, when it becomes the main card (with a scrim over the pause card). */
+.coach.paused[data-step=done] { top: 50%; bottom: auto; transform: translate(-50%, -50%); width: min(680px, calc(100% - 32px)); padding: 24px;
+  background: rgba(8, 12, 10, 0.98); box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.6); }
+.coach.paused[data-step=done] .coach-body { display: block; }
+.coach.paused[data-step=done] .coach-stay { display: inline-block; }
+.coach.paused[data-step=done] .coach-small { display: none; }
+.coach.dismissed { display: none; }
 @media (max-width: 900px) {
   .coach { top: auto; bottom: 16px; }
   .coach[data-step=intro] { bottom: auto; }
