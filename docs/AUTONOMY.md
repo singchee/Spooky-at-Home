@@ -60,10 +60,11 @@ Then the crew squash-merges, so each change is one commit that can be undone wit
 | **Undo** | Squash merges; `main` CI is checked after every merge and auto-reverted if red. |
 | **Digest** | One pinned issue, `Crew digest`, with a comment per run: merged (A), merged and highlighted (B), waiting on you (C), anything stopped (D). |
 | **Spot checks** | Weekly `/debrief` picks 2 auto-merged PRs at random for you to look at. Automation makes it easy to lose touch with what's being changed (Bainbridge's "ironies of automation"); a small regular sample keeps you calibrated. |
-| **No spending** | The scheduled run has no connectors attached, so it can't spend ElevenLabs credits or call paid APIs even by mistake. |
+| **No spending** | The run's instructions forbid using any connector (ElevenLabs, Gmail, Drive and so on) or adding keys. **This is an instruction, not a lock**: this account can't remove connectors from scheduled runs. If you want a hard lock, disconnect ElevenLabs while the crew is running unattended. |
 
 ## 6. What remains risky after these nets
 
 - **Taste drift:** a run of class B features, each fine on its own, can move the game somewhere you don't want. The highlighted digest and veto window are the only defence, so skim the digest weekly.
 - **Shared blind spots:** checkers and builder are the same underlying model, so they can miss the same kind of bug. Escaped bugs found by you are tracked in `/debrief` so the checklists improve.
+- **Connectors are reachable:** a confused run could in principle use an attached connector despite being told not to. Spending connectors are the concern (ElevenLabs credits).
 - **The classifier's gaps:** it catches what it has rules for. A harmful change that triggers no rule is class A. Its rules can only grow through class C changes, which you approve.
