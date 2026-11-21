@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Figure lab (dev only)</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font: 13px/1.2 monospace; }
+      canvas { display: block; }
+      .lab-label { position: absolute; transform: translate(-50%, 0); color: #ffcc33; text-shadow: 0 0 3px #000, 0 0 2px #000; white-space: nowrap; pointer-events: none; }
+      .lab-title { position: absolute; left: 8px; top: 6px; color: #ffcc33; text-shadow: 0 0 3px #000; }
+    </style>
+  </head>
+  <body>
+    <!-- Dev-only test scene for the animated figures: `npm run dev`, then open /tools/figure-lab.html.
+         Not part of the production build (vite only builds index.html). See tools/figureLab.ts. -->
+    <script type="module" src="./figureLab.ts"></script>
+  </body>
+</html>
