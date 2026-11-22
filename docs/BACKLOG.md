@@ -80,6 +80,9 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 | 3.37 | Landmark markers only show in the 105's wide view (the 25/40 lenses are too narrow to contain a landmark): add edge-of-screen indicators for nearby off-screen landmarks (small arrow + name), same declutter and child-place rules | playtest, feel | todo |
 | 3.38 | Tool: `npm run -s classify` diffs against main, so phase-branch work inherits unrelated findings; `--base <branch>` fails inside git merge-base. Fix the base option so a branch can be classified against its own base | review | todo |
 
+| 3.39 | High-rise visibility (owner: New York "all high rise, can't see anything"): cut-away buildings between the gunship and the aim point; steeper camera over tall blocks | review, playtest, feel | in-progress (Art Director) |
+| 3.40 | Swap the New York preset centre to the Central Park edge (open ground for hordes, city around it); after the 4-city download batch finishes (fair use) | map-check, playtest | todo |
+
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game
