@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { MapData, V2 } from '../map/types';
-import type { Sim, SimEvent } from '../sim/sim';
+import { ORBIT, type Sim, type SimEvent } from '../sim/sim';
 import { Bot, SKILL } from '../sim/bot';
 import { WEAPONS, weaponById } from '../sim/weapons';
 import { buildWorld, type World } from '../world/buildWorld';
@@ -28,6 +28,8 @@ import { KEYS_SENTENCE, TOUCH_SENTENCE, keyAction, nextView, viewLabel, type Con
 import { TouchControls } from './touchControls';
 import { LandmarkLayer } from '../ui/landmarkLayer';
 import { landmarkList, type Landmark } from '../ui/landmarks';
+import { GunshipOrbit, offVertical, orbitTarget, tallFactor, turnHeading } from './gunshipOrbit';
+import { AIM_KEEP, type Keep } from '../world/cutaway';
 
 /** The browser game: renders the simulation, handles input, camera, sound and screens. */
 export interface GameOptions {
@@ -62,6 +64,16 @@ interface TestHooks {
   holdFire?: (on: boolean) => void;
   /** Where the aim point appears relative to the screen centre, CSS px (the camera kick, as last drawn). */
   aimOffset?: () => [number, number];
+  /**
+   * Line of sight at a ground point (3.39), from where the gunship is now: `masked` when a building
+   * stands between the gunship and a body there (the reticle's MASKED), `covered` when what is drawn
+   * solid after the cut-away still hides it; `cut` counts the buildings cut away now.
+   */
+  sight?: (x: number, z: number) => { masked: boolean; covered: boolean; cut: number };
+  /** The gunship's orbit as drawn (3.39): centre, radius, position, degrees off vertical at the aim, the city's height there. */
+  orbit?: () => { cx: number; cz: number; r: number; gunship: { x: number; y: number; z: number }; offVertical: number; tallness: number; masked: boolean };
+  /** Turn the cut-away off or on (test-only: before/after screenshots of the same moment). */
+  cutaway?: (on: boolean) => void;
   /** Where a ground point appears on screen now, CSS px (the touch stick checks measure which way the aim moved). */
   screenOf?: (x: number, z: number) => [number, number];
   /** The places that may get a landmark marker (3.19), most relevant first. */
@@ -84,12 +96,14 @@ const SWITCH_TIME = 0.7;
 /** Reduce flicker: the switch cover fades in over this long before the picture changes, then fades out. */
 const CALM_RISE = 0.18;
 /**
- * The camera looks in at this angle off vertical, from wherever the gunship is in its orbit (the
- * bearing follows the plane; the range is the plane's real slant range). The real orbit is steeper
- * (about 34 degrees at the centre); a constant, slightly shallower slant shows the walls of houses
- * and keeps figures upright on screen.
+ * The camera looks along the gun's real line of fire (3.39): from the gunship (gunshipOrbit.ts) to
+ * the aim point, so what you see is what you could hit. Figures lean back a little on steep views
+ * (modelShader.ts) so they read as they did at the old fixed 40° slant.
+ * The picture's up turns at most this fast (rad/s) when the line is near vertical (no flip overhead).
  */
-const CAM_TILT_DEG = 40;
+const HEADING_RATE = 0.5;
+/** A body's height above the ground for the MASKED test, metres (roads sit at 1 m). */
+const SIGHT_Y = 1.5;
 /**
  * Zoom multiplies the gun's own lens (WeaponDef.fov). Z or the ZOOM button toggles between 1 and Z_ZOOM;
  * the mouse wheel and a pinch step along ZOOM_LEVELS (out to a wider view, in to a closer one).
@@ -167,6 +181,18 @@ export class Game {
   /** The camera the picture shows; with reduce flicker it changes under the fade, not before it. */
   private shownSensor: SensorId = 'thermal';
   private camRight = new THREE.Vector3();
+  /** The gunship as drawn (3.39): flies the sim's orbit over low-rise ground, a tighter, steeper one over tall blocks. */
+  private orbit!: GunshipOrbit;
+  private gunship = { x: 0, y: ORBIT.altitude, z: 0 };
+  /** The picture's up, a ground heading (radians), and whether it has been set yet. */
+  private heading = 0;
+  private headingSet = false;
+  /** Game clock at the last round fired (reduced motion only changes the orbit between bursts). */
+  private lastShot = -99;
+  /** A building stands between the gunship and the aim point (the reticle's MASKED). */
+  private masked = false;
+  /** Test hook only: the cut-away can be switched off for comparison screenshots. */
+  private cutawayOn = true;
   private camUp = new THREE.Vector3();
   /** Test hook only (see TestHooks.fixedStep): seconds per frame, or null for real time. */
   private fixedDt: number | null = null;
@@ -221,6 +247,7 @@ export class Game {
     this.offSettings = onSettingsChange(applySettings);
     const m = sim.mission;
     this.aim = m.route ? { ...m.route[0] } : m.safehouse ? { ...m.safehouse.centre } : { ...m.orbitCentre };
+    this.orbit = new GunshipOrbit(orbitTarget(this.tallK(), m.orbitCentre, this.aim, ORBIT.radius), this.aim);
 
     this.bindInput();
     audio.claim('mission'); // the mission score and engine drone (start on the first click or key)
@@ -250,6 +277,17 @@ export class Game {
       hooks.screenOf = (x, z) => {
         const p = this.screenPos({ x, z }, 0);
         return [p.x, p.y];
+      };
+      hooks.sight = (x, z) => {
+        const c = this.world.cutaway;
+        return { masked: c.blocker({ x, z }, this.gunship, SIGHT_Y) >= 0, covered: c.coverer({ x, z }, this.gunship, SIGHT_Y) >= 0, cut: c.cutCount };
+      };
+      hooks.cutaway = (on) => {
+        this.cutawayOn = on;
+      };
+      hooks.orbit = () => {
+        const g = this.gunship;
+        return { ...this.orbit.shape, gunship: { ...g }, offVertical: offVertical(Math.hypot(g.x - this.aim.x, g.z - this.aim.z), g.y), tallness: this.world.cutaway.heights.tallness(this.aim), masked: this.masked };
       };
       hooks.landmarks = () => this.landmarkPlaces.map((l) => ({ id: l.id, label: l.label, x: l.p.x, z: l.p.z }));
       hooks.holdFire = (on) => {
@@ -602,23 +640,43 @@ export class Game {
     return THREE.MathUtils.radToDeg(half * 2);
   }
 
-  /** Where the camera sits: on the gunship's bearing from the aim point, at its slant range, CAM_TILT_DEG off vertical. */
-  private cameraPos(ac: { x: number; y: number; z: number }, out: THREE.Vector3): THREE.Vector3 {
-    const dx = ac.x - this.aim.x;
-    const dz = ac.z - this.aim.z;
-    const flat = Math.hypot(dx, dz) || 1;
-    const range = Math.hypot(dx, ac.y, dz);
-    const tilt = THREE.MathUtils.degToRad(CAM_TILT_DEG);
-    const across = Math.sin(tilt) * range;
-    return out.set(this.aim.x + (dx / flat) * across, Math.cos(tilt) * range, this.aim.z + (dz / flat) * across);
+  /** 0 over low-rise ground, 1 over high-rise blocks: how tight the gunship's orbit is around the aim. */
+  private tallK(): number {
+    return tallFactor(this.world.cutaway.heights.tallness(this.aim));
   }
 
   /**
-   * Where a round's tracer starts: the gunship's real position in its orbit, so rounds fly in along the
-   * slant line from the plane and enter from the edge of the picture. The camera looks from a slightly
-   * different slant (CAM_TILT_DEG), so the plane is normally just off screen; when the two lines nearly
-   * coincide (the plane would sit inside the picture and rounds would pop out of the middle), the start
-   * point swings around the target, at the same range, until it is just outside the field of view.
+   * Fly the gunship (3.39) and put the camera on it, looking along the line of fire at the aim point.
+   * The orbit angle is the sim's; the orbit's centre and radius ease toward the tight one over tall
+   * blocks (dt-scaled; with reduced motion only in one cut, between bursts or after a long aim move).
+   */
+  private flyCamera(dt: number): void {
+    const m = this.sim.mission;
+    const ac = this.sim.aircraft();
+    const angle = Math.atan2(ac.z - m.orbitCentre.z, ac.x - m.orbitCentre.x);
+    const idle = this.firing ? 0 : this.clock - this.lastShot;
+    this.orbit.update(dt, orbitTarget(this.tallK(), m.orbitCentre, this.aim, ORBIT.radius), this.aim, { reducedMotion: reducedMotion(), idle });
+    this.gunship = this.orbit.position(angle, ac.y);
+    const g = this.gunship;
+    const dx = this.aim.x - g.x;
+    const dz = this.aim.z - g.z;
+    // Picture up = away from the gunship along the ground; near vertical that direction swings fast,
+    // so there it turns at a capped rate instead of flipping.
+    const target = Math.atan2(dx, dz);
+    const deg = offVertical(Math.hypot(dx, dz), g.y);
+    const t = Math.max(0, Math.min(1, (deg - 6) / 8));
+    if (!this.headingSet || t >= 1) this.heading = target;
+    else this.heading = turnHeading(this.heading, target, HEADING_RATE * (1 + 12 * t * t), dt);
+    this.headingSet = true;
+    this.camera.position.set(g.x, g.y, g.z);
+    this.camera.up.set(Math.sin(this.heading), 0, Math.cos(this.heading));
+  }
+
+  /**
+   * Where a round's tracer starts: the gunship, so rounds fly in along its slant line. The camera rides
+   * on that line too (3.39), so a tracer from the plane itself would pop out of the middle of the
+   * picture: the start point swings around the target, at the same range, until it is just outside the
+   * field of view, and rounds enter from the edge of the picture.
    * Rendering only: the flight time is still the sim's (range / WeaponDef.speed).
    */
   private tracerOrigin(from: { x: number; y: number; z: number }, to: V2): { x: number; y: number; z: number } {
@@ -667,8 +725,11 @@ export class Game {
     const mPerPx = (2 * range * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2))) / h;
     const fwd = new THREE.Vector3();
     cam.getWorldDirection(fwd);
-    const right = new THREE.Vector3().crossVectors(fwd, cam.up).normalize();
-    const flatF = new THREE.Vector2(fwd.x, fwd.z).normalize();
+    cam.updateMatrixWorld();
+    const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
+    // Screen up on the ground (the view's forward on an oblique view; still defined looking straight down).
+    const flatF = new THREE.Vector2(up.x, up.z).normalize();
     const elev = Math.asin(Math.min(1, cam.position.y / range));
     this.aim.x += right.x * dx * mPerPx - flatF.x * (dy * mPerPx) / Math.max(0.3, Math.sin(elev));
     this.aim.z += right.z * dx * mPerPx - flatF.y * (dy * mPerPx) / Math.max(0.3, Math.sin(elev));
@@ -742,7 +803,9 @@ export class Game {
       this.opts.onAction?.({ type: 'sim', event: e });
       switch (e.type) {
         case 'fire':
-          this.effects.fire(e.weapon, this.tracerOrigin(e.from, e.to), e.to, e.tof, now);
+          // Rendering only: the round comes from the gunship as drawn; the flight time is still the sim's.
+          this.effects.fire(e.weapon, this.tracerOrigin(this.gunship, e.to), e.to, e.tof, now);
+          this.lastShot = now;
           this.sfx.fire(e.weapon);
           break;
         case 'impact':
@@ -800,8 +863,6 @@ export class Game {
   }
 
   private render(dt: number): void {
-    const ac = this.sim.aircraft();
-    const fov = this.lensFov(Math.hypot(ac.x - this.aim.x, ac.y, ac.z - this.aim.z));
     if (this.bot && this.screen === 'playing') {
       // In bot mode, the camera follows the action so screenshots show something useful.
       const live = this.sim.zombies.filter((z) => z.alive);
@@ -812,11 +873,14 @@ export class Game {
         this.aim.z += (target.z - this.aim.z) * Math.min(1, dt * 2);
       }
     }
+    this.flyCamera(Math.max(0, dt));
+    const g = this.gunship;
+    const fov = this.lensFov(Math.hypot(g.x - this.aim.x, g.y, g.z - this.aim.z));
     this.camera.fov = fov;
-    this.cameraPos(ac, this.camera.position);
     this.camera.lookAt(this.aim.x, 0, this.aim.z);
     this.applyKick(fov);
     this.camera.updateProjectionMatrix();
+    this.updateCutaway(Math.max(0, dt));
 
     this.agents.update(this.sim, this.clock);
     this.effects.update(this.clock, dt);
@@ -834,12 +898,24 @@ export class Game {
     this.hudTimer -= dt;
     if (this.hudTimer <= 0) {
       this.hudTimer = 0.1;
-      this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose(), this.touch.active);
-      this.hud.updateMinimap(ac, this.aim, this.sim.survivors.filter((s) => s.alive && !s.home), this.sim.regroupPoints().map((g) => g.p));
+      this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose(), this.touch.active, this.masked);
+      this.hud.updateMinimap(this.sim.aircraft(), this.aim, this.sim.survivors.filter((s) => s.alive && !s.home), this.sim.regroupPoints().map((g) => g.p));
     }
     const markers = this.markers();
     this.hud.setMarkers(markers);
     this.updateLandmarks(fov, markers);
+  }
+
+  /**
+   * The cut-away (3.39), subtle on purpose: only buildings hiding the aim point, or a mission marker
+   * near it, fade, and only above the line of sight (cutaway.ts). And the reticle's MASKED state: a
+   * building on the line of fire to the aim point, judged on whole buildings, never the cut-away.
+   */
+  private updateCutaway(dt: number): void {
+    const keep: Keep[] = this.cutawayOn ? [{ p: this.aim, r: AIM_KEEP }] : [];
+    if (this.cutawayOn) for (const mk of this.markerPoints()) if (Math.hypot(mk.p.x - this.aim.x, mk.p.z - this.aim.z) < 60) keep.push({ p: mk.p, r: 6 });
+    this.world.cutaway.update(this.gunship, keep, dt);
+    this.masked = this.world.cutaway.blocker(this.aim, this.gunship, SIGHT_Y) >= 0;
   }
 
   /** Landmark markers this frame (3.19): projected here, decluttered and drawn by the layer. */
@@ -901,6 +977,19 @@ export class Game {
   }
 
   private markers() {
+    const out = this.markerPoints();
+    const wpx = this.renderer.domElement.clientWidth;
+    const hpx = this.renderer.domElement.clientHeight;
+    const v = new THREE.Vector3();
+    return out.map((o) => {
+      v.set(o.p.x, 4, o.p.z).project(this.camera);
+      const visible = v.z < 1 && Math.abs(v.x) < 1 && Math.abs(v.y) < 1;
+      return { label: o.label, x: ((v.x + 1) / 2) * wpx, y: ((1 - v.y) / 2) * hpx, visible };
+    });
+  }
+
+  /** The mission's markers on the ground (safehouse, home, the escort group, regroup points). */
+  private markerPoints() {
     const m = this.sim.mission;
     const out: { label: string; p: V2 }[] = [];
     if (m.safehouse) out.push({ label: 'SAFEHOUSE', p: m.safehouse.centre });
@@ -911,14 +1000,7 @@ export class Game {
     }
     // Spec 002 feel M1: a scattered horde's regroup point while its runners are out (map text: textContent in the HUD).
     for (const g of this.sim.regroupPoints()) out.push({ label: g.label, p: g.p });
-    const wpx = this.renderer.domElement.clientWidth;
-    const hpx = this.renderer.domElement.clientHeight;
-    const v = new THREE.Vector3();
-    return out.map((o) => {
-      v.set(o.p.x, 4, o.p.z).project(this.camera);
-      const visible = v.z < 1 && Math.abs(v.x) < 1 && Math.abs(v.y) < 1;
-      return { label: o.label, x: ((v.x + 1) / 2) * wpx, y: ((1 - v.y) / 2) * hpx, visible };
-    });
+    return out;
   }
 
   private resize(): void {
@@ -943,6 +1025,7 @@ export class Game {
       zoomLevel: this.zoom,
       gfx: this.post.tier,
       fov: Number(this.camera.fov.toFixed(2)),
+      masked: this.masked,
       aim: { ...this.aim },
       touch: this.touch.active,
       reviewing: this.reviewing,
@@ -954,7 +1037,7 @@ export class Game {
     this.disposed = true;
     // Test hooks must not outlive this game (they'd point at a dead one).
     const hooks = window.__spooky as TestHooks | undefined;
-    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf', 'landmarks'] as const) delete hooks[k];
+    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf', 'landmarks', 'sight', 'orbit', 'cutaway'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
     audio.release('mission');
     this.offSettings();

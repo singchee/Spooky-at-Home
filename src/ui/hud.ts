@@ -65,7 +65,7 @@ export class Hud {
     if (this.lines.length > 5) this.lines.shift();
   }
 
-  update(s: SimState, m: Mission, weapon: string, sensor: string, polarity: number, zoom: number, switching: boolean, now: number, danger = false, touch = false): void {
+  update(s: SimState, m: Mission, weapon: string, sensor: string, polarity: number, zoom: number, switching: boolean, now: number, danger = false, touch = false, masked = false): void {
     // Weapons
     this.weapons.replaceChildren();
     for (const w of WEAPONS) {
@@ -108,6 +108,10 @@ export class Hud {
     this.switching.style.display = switching ? 'block' : 'none';
     this.cross.classList.toggle('danger', danger);
     this.cross.dataset.label = danger ? 'DANGER CLOSE' : '';
+    // 3.39: a building stands between the gunship and the aim point (shown over the cut-away: the HUD is
+    // never see-through, so a player never takes a masked shot for a clear one).
+    this.cross.classList.toggle('masked', masked);
+    this.cross.dataset.mask = masked ? 'MASKED' : '';
   }
 
   setMarkers(ms: HudMarker[]): void {

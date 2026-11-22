@@ -134,19 +134,22 @@ All of it works on sensor values *before* the display mapping, so black-hot inve
 
 ## 8. Camera
 
-- **Slant:** the camera looks in **40° off vertical**, on the gunship's bearing (it turns with the orbit) at the gunship's real slant range. You see the walls of houses.
+- **Line of fire (3.39):** the camera rides the gun's real line of fire, from the gunship to the aim point: what you see is what you could hit. Over low-rise ground the gunship flies the sim's orbit (1000 m radius, 1500 m up: about 34° off vertical at the orbit's centre, more or less elsewhere). Over tall blocks (median built height around the aim above 16 m, fully by 28 m; `src/game/gunshipOrbit.ts`) it eases onto a tighter orbit around the aim area: radius `TIGHT_RADIUS` 750 m, about **27° off vertical**. Moderate on purpose (owner, after Paris): firing round buildings stays a puzzle, and street canyons open up only at some points of the circle. Easing: 2 s time constant, centre at most 160 m/s, radius 80 m/s. Reduced motion: the orbit holds, and changes in one cut only after a 150 m aim move or a 1 s pause in firing. The picture's up is "away from the gunship"; near vertical it turns at a capped rate so it never flips overhead.
+- **Figures on steep views:** they lean back, away from the camera (a shear pivoting at the feet, at most 0.6 m per m of height; `FIGURE_LEAN_MAX`), just enough to keep the screen height they would have at 40°. Bodies lying down barely move.
+- **Cut-away (3.39, `src/world/cutaway.ts`):** only a building at least 12 m tall that hides the aim point (8 m around it) or a mission marker near it from the gunship fades, and only above the line of sight from that area (never below a 3 m stump). Above the cut line it stays **45% opaque** (`GHOST.wall` in `src/world/shading.ts`; owner range 35-50%: it must still read as solid cover), with roof line, corners and the cut line as edges at 90% (sensor value: heat 0.33, visible 0.17: never above road heat, so no hot spots). Each building fades on its own in **0.25 s** (the cut line sweeps down; nothing pops). Blending only lowers contrast, so cold-blooded zombies on grass stay hidden. One extra draw call (the see-through part; nothing is drawn when nothing is cut).
+- **MASKED (3.39):** when a whole building (cut away or not) stands on the line of fire to the aim point, the crosshair turns amber and dashed with a steady MASKED tag above it. HUD, never see-through, never blinks. Render-side for now; the sim rule comes next.
 - **Lenses** (`WeaponDef.fov`, degrees at 1.8 km; at other ranges the angle is adjusted so the view covers the same ground, so a person is the same size wherever you look):
 
 | Gun | Lens | Ground covered (height) | Person on a 1080 px screen |
 |---|---|---|---|
 | 25 mm | 1.6° | ~50 m | ~36 px |
-| 40 mm (default) | 2.0° | ~63 m | ~27 px |
+| 40 mm (default) | 2.0° | ~63 m | ~27 px (kept on steep views by the figure lean) |
 | 105 mm | 6° | ~190 m | ~10 px |
 
 - **Zoom:** everything goes through `Game.zoomBy(-1|0|1)`. Z or the ZOOM button toggles ×1 ↔ ×1.6; the mouse wheel and a pinch step along ×0.45, ×0.7, ×1, ×1.6, ×2.4. Each gun remembers its own zoom. The narrowest lens is 1.0° (25 mm zoomed: a person is ~65 px). People are drawn at `MODEL_DISPLAY_SCALE` 1.7 (about 3 m: exaggerated on purpose so they read), tuned with these lenses.
 - **Near/far:** 600 m / 6000 m. Roads sit 1 m above the ground plane and areas 0.4 m (no z-fighting at this near plane).
 - **105 kick:** at most 5 px, one damped swing (0.4 s), off with reduced motion or reduce flicker.
-- **Tracers come in from off screen:** rounds fly from the gunship's real orbit position along its slant line to the impact (flight time = the sim's range / `WeaponDef.speed`). The camera's slant differs from the plane's, so the plane sits just off the picture; if the two lines nearly coincide, the tracer's start swings around the target (same range) until it is just outside the field of view. Rounds never pop out of the middle of the screen.
+- **Tracers come in from off screen:** rounds fly from the gunship (as drawn) along its slant line to the impact (flight time = the sim's range / `WeaponDef.speed`). The camera rides that same line, so the tracer's start swings around the target (same range) until it is just outside the field of view. Rounds never pop out of the middle of the screen.
 
 ## 9. Photosensitivity (non-negotiable)
 

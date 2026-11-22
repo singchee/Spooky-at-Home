@@ -23,6 +23,9 @@ export const MODEL_PANEL_SIZE = 0.28;
 /** The panel is drawn as if this much nearer the camera, so its own body never hides it. */
 const PANEL_PULL = 0.9;
 
+/** The most a figure leans back on a steep view (horizontal metres per metre of height). */
+export const FIGURE_LEAN_MAX = 0.6;
+
 const vertexShader = /* glsl */ `
   uniform highp sampler2D uPos;
   uniform highp sampler2D uNrm;
@@ -67,6 +70,17 @@ const vertexShader = /* glsl */ `
     p = rYaw * p;
     n = rYaw * n;
 
+    // 3.39: the camera rides the line of fire, often steeper than the old 40° slant, where a standing
+    // figure would shrink to a blob. Lean it back, away from the camera (a shear, pivot at the feet, so
+    // a body lying down barely moves), just enough to keep the screen height it had at 40°.
+    vec3 toCam = cameraPosition - vec3(iA.x, uBase, iA.y);
+    float hz = length(toCam.xz);
+    if (hz > 1e-3) {
+      float sv = hz / length(toCam);        // sin of the angle off vertical
+      float cv = toCam.y / length(toCam);   // cos
+      float lean = clamp((${Math.sin((40 * Math.PI) / 180).toFixed(4)} - sv) / max(cv, 0.2), 0.0, ${FIGURE_LEAN_MAX.toFixed(2)});
+      p.xz -= toCam.xz / hz * p.y * lean;
+    }
     vec4 world = modelMatrix * vec4(iA.x + p.x, uBase + p.y, iA.y + p.z, 1.0);
     vec4 mv = viewMatrix * world;
     if (aPanel > 0.5) {
