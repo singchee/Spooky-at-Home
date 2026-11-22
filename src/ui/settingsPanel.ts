@@ -1,6 +1,7 @@
 import { defaultSettings, getSettings, onSettingsChange, updateSettings, type Settings } from './settings';
 import { el } from './dom';
 import { placeCache } from './placeCache';
+import { forgetWaits } from './loadEstimate';
 
 /**
  * The settings panel: volumes, mouse, comfort. Opens over the pause screen, the front page or the menu.
@@ -146,6 +147,7 @@ export function openSettingsPanel(parent: HTMLElement, o: SettingsPanelOptions =
   void countPlaces();
   forgetAll.addEventListener('click', async () => {
     forgetAll.disabled = true;
+    forgetWaits(); // this device's load times (the scouting estimate) go too
     const ok = await placeCache().forgetAll();
     if (ok) await countPlaces();
     else {

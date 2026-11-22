@@ -373,14 +373,17 @@ button:disabled { opacity: 0.5; }
 .scout-stages li[data-state='active']::before { content: '▸'; left: 5px; color: var(--accent); }
 /* Downloading with a known size: a still bar that fills. Bytes but no size: the sweep, slower. */
 .scout-sweep[data-mode='determinate'] span { animation: none; transform: none; transition: width 0.3s linear; }
+/* Waiting, with an estimate (3.26): a still fill creeping toward the estimate, never past 90%. */
+.scout-sweep[data-mode='estimate'] span { animation: none; transform: none; transition: width 1s linear; background: rgba(184, 255, 138, 0.45); }
+.scout-estimate { margin: 0 0 4px; overflow-wrap: anywhere; }
 .scout-sweep[data-mode='bytes'] span { animation-duration: 4s; background: rgba(184, 255, 138, 0.7); }
-.scout-progress.still .scout-sweep:not([data-mode='determinate']) span { animation: none; width: 100%; opacity: 0.6; }
+.scout-progress.still .scout-sweep:not([data-mode='determinate']):not([data-mode='estimate']) span { animation: none; width: 100%; opacity: 0.6; }
 .scout-progress.still .scout-sweep span { transition: none; }
 .scout-place { overflow-wrap: anywhere; }
 .scout-load { margin-top: 8px; }
 .scout-load-text { margin: 0 0 4px; overflow-wrap: anywhere; }
 .scout-load-meta { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
-.scout-elapsed { font-variant-numeric: tabular-nums; }
+.scout-estimate { font-variant-numeric: tabular-nums; }
 .scout-cancel { margin-top: 6px; min-height: 48px; min-width: 96px; }
 .scout-ask { margin-top: 10px; }
 .scout-ask-text { margin: 0 0 8px; font-weight: 700; }
@@ -393,7 +396,7 @@ button:disabled { opacity: 0.5; }
 .scout-msg p { margin: 0; }
 .scout-alt { margin-top: 14px; }
 @media (prefers-reduced-motion: reduce) {
-  .scout-sweep:not([data-mode='determinate']) span { animation: none; width: 100%; opacity: 0.6; }
+  .scout-sweep:not([data-mode='determinate']):not([data-mode='estimate']) span { animation: none; width: 100%; opacity: 0.6; }
   .scout-sweep span { transition: none; }
 }
 @media (max-width: 640px) {

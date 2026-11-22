@@ -240,6 +240,8 @@ export interface DownloadStats {
   host: string;
   /** Waiting for a first answer, on every server asked (a slow first server counts too). */
   waitMs: number;
+  /** Waiting on the server that answered, alone (for this device's estimate, 3.26). */
+  hostWaitMs: number;
   /** First byte to last byte on the server that answered. */
   downloadMs: number;
   bytes: number;
@@ -352,7 +354,7 @@ export async function fetchOverpassTimed(origin: LatLon, half: number, signal?: 
         });
         // A timed-out or failed query still answers 200; try the next server instead.
         const ok = checkOverpassAnswer(json as OverpassJson, url);
-        return { json: ok, stats: { host, waitMs: waited + (tFirst - t0), downloadMs: now() - tFirst, bytes, attempts: attempt + 1 } };
+        return { json: ok, stats: { host, waitMs: waited + (tFirst - t0), hostWaitMs: tFirst - t0, downloadMs: now() - tFirst, bytes, attempts: attempt + 1 } };
       } catch (e) {
         if (signal?.aborted) throw isAbort(e) ? e : new DOMException('cancelled', 'AbortError');
         const err = gaveUp === 'wait'

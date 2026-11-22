@@ -1073,10 +1073,13 @@ async function wayInChecks(browser) {
   const readoutState = (page) => page.evaluate(() => ({
     text: document.querySelector('.scout-load-text:not([hidden])')?.textContent ?? null,
     server: document.querySelector('.scout-server:not([hidden])')?.textContent ?? null,
-    elapsed: document.querySelector('.scout-elapsed')?.textContent ?? null,
+    // The one clock (3.26), counted from pressing Scout, in the estimate line.
+    elapsed: /(\d+:\d\d) so far$/.exec(document.querySelector('.scout-estimate:not([hidden])')?.textContent ?? '')?.[1] ?? null,
+    clocks: document.querySelectorAll('.scout-progress:not([hidden]) .scout-elapsed').length,
     mode: document.querySelector('.scout-sweep')?.dataset.mode ?? null,
     width: document.querySelector('.scout-sweep span')?.style.width ?? '',
     anim: getComputedStyle(document.querySelector('.scout-sweep span')).animationName,
+    estimate: document.querySelector('.scout-estimate:not([hidden])')?.textContent ?? null,
     stage: document.querySelector('.scout-stages li[data-state=active]')?.textContent ?? null,
     role: document.querySelector('.scout-progress')?.getAttribute('role') ?? null,
     hiddenFromSr: document.querySelector('.scout-load')?.getAttribute('aria-hidden') === 'true',
@@ -1151,10 +1154,13 @@ async function wayInChecks(browser) {
     const busy = await page.evaluate(() => ({
       cancel: !!document.querySelector('.scout-progress:not([hidden]) .scout-cancel'),
       sweep: getComputedStyle(document.querySelector('.scout-sweep span')).animationName,
+      mode: document.querySelector('.scout-sweep')?.dataset.mode ?? '',
+      width: document.querySelector('.scout-sweep span')?.style.width ?? '',
       place: document.querySelector('.scout-place')?.textContent ?? '',
     }));
     if (!busy.cancel) errs.push('no Cancel button while scouting');
-    if (busy.sweep !== 'scout-sweep') errs.push(`loading indicator isn't animated (${busy.sweep})`);
+    // A moving sweep, or (3.26, while the server prepares the area) the estimate bar, which fills over time.
+    if (busy.sweep !== 'scout-sweep' && !(busy.mode === 'estimate' && busy.width.endsWith('%'))) errs.push(`loading indicator isn't moving (${busy.sweep}, ${busy.mode})`);
     if (!busy.place.includes(PLACE)) errs.push(`the readout doesn't name the place found: ${busy.place}`);
     shots.loading = `${out}/wayin-loading-${name}.png`;
     await page.screenshot({ path: shots.loading });
@@ -1397,11 +1403,15 @@ async function wayInChecks(browser) {
     const w1 = await readoutState(page);
     await page.waitForTimeout(2100);
     const w2 = await readoutState(page);
-    if (w1.mode !== 'waiting' || w1.anim !== 'scout-sweep') errs.push(`while the server works: a moving bar, not a fill (${w1.mode}, ${w1.anim})`);
+    // 3.26: while the server works, the estimate (no history yet: the default) and a fill creeping toward it.
+    if (w1.mode !== 'estimate' || w1.anim !== 'none') errs.push(`while the server works: the estimate bar (${w1.mode}, ${w1.anim})`);
+    if (!/^Usually about 1–3 min · 0:0\d so far$/.test(w1.estimate ?? '') || !/^Usually about 1–3 min · 0:0\d so far$/.test(w2.estimate ?? '')) errs.push(`estimate line: ${w1.estimate} → ${w2.estimate}`);
+    if (!(parseFloat(w2.width) > parseFloat(w1.width) && parseFloat(w2.width) <= 90)) errs.push(`the estimate bar should creep forward, never past 90%: ${w1.width} → ${w2.width}`);
     if (!/^Downloading streets and buildings…$/.test(w1.stage ?? '')) errs.push(`stage while waiting: ${w1.stage}`);
     if (!/Asking overpass-api\.de/.test(w1.server ?? '')) errs.push(`doesn't say which server: ${w1.server}`);
     if (!(secs(w2.elapsed) >= secs(w1.elapsed) + 1)) errs.push(`the elapsed clock doesn't run: ${w1.elapsed} → ${w2.elapsed}`);
-    if (/%/.test(JSON.stringify(w2))) errs.push('a percentage while nothing is known');
+    if (w1.clocks || w2.clocks) errs.push('two clocks on screen: one only, in the estimate line');
+    if (/%/.test([w2.text, w2.estimate, w2.server].join(' '))) errs.push('a percentage on screen while nothing is known');
     if (w1.role !== 'status' || !w1.hiddenFromSr) errs.push('readout: the busy numbers should be hidden from screen readers, with a status line instead');
     if (w1.cancel < 44) errs.push(`Cancel is too small to tap: ${w1.cancel}px`);
     shots.waiting = `${out}/wayin-progress-waiting-desktop.png`;
@@ -1433,9 +1443,54 @@ async function wayInChecks(browser) {
     const spoken = await page.evaluate(() => window.__spoken.filter(Boolean));
     if (spoken.length > 6) errs.push(`screen readers hear the readout too often (${spoken.length} times for 12 chunks): ${spoken.join(' / ')}`);
     if (!spoken.some((s) => /Waiting for OpenStreetMap/.test(s)) || !spoken.some((s) => /Downloading/.test(s))) errs.push(`screen readers miss a stage: ${spoken.join(' / ')}`);
+    if (!spoken.some((s) => /Waiting for OpenStreetMap.*Usually about 1 to 3 minutes\./.test(s))) errs.push(`screen readers don't hear the estimate: ${spoken.join(' / ')}`);
+    const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('spooky-load-times') ?? '[]'));
+    if (kept.length !== 1 || kept[0].host !== 'overpass-api.de' || !(kept[0].waitMs >= 3500)) errs.push(`this device's load time wasn't kept for next time: ${JSON.stringify(kept)}`);
     shots.reconAdded = `${out}/wayin-recon-extras-added-desktop.png`;
     await page.screenshot({ path: shots.reconAdded });
     res.push({ type: 'way in: slow server, streamed bytes, extras merge later (desktop)', errors: errs, timing: after.timing, spoken: spoken.join(' / '), shots });
+    await page.close();
+  }
+
+  // 8a2. With this device's own history (3.26): the estimate says so; past it, "Taking longer than usual".
+  //      Forget all saved places forgets the history too. The page clock is fast-forwarded.
+  {
+    const { page, errs } = await wayInPage(browser, desktop, OSM.none(), null);
+    await page.clock.install();
+    await page.addInitScript(() => {
+      if (!localStorage.getItem('spooky-load-times')) {
+        localStorage.setItem('spooky-load-times', JSON.stringify([20, 22, 25].map((s, i) => ({ host: 'overpass-api.de', waitMs: s * 1000, at: i }))));
+      }
+    });
+    await page.addInitScript(slowOsm, slowPlan({ core: { any: 'hang' } }));
+    await page.goto(`http://localhost:${PORT}/?screen=scout`);
+    await scoutFor(page, 'Test Reef');
+    await page.waitForFunction(() => /^Usually about/.test(document.querySelector('.scout-estimate:not([hidden])')?.textContent ?? ''), null, { timeout: 10000 });
+    await page.clock.fastForward('00:10');
+    await page.waitForTimeout(1200);
+    const e1 = await readoutState(page);
+    if (!/^Usually about 20–30 s on this device \(last 3 loads\) · 0:1\d so far$/.test(e1.estimate ?? '')) errs.push(`estimate from history: ${e1.estimate}`);
+    const shots = { estimate: `${out}/wayin-progress-estimate-desktop.png` };
+    await page.screenshot({ path: shots.estimate });
+    await page.clock.fastForward('00:30');
+    await page.waitForTimeout(1200);
+    const e2 = await readoutState(page);
+    if (!/^Taking longer than usual · 0:4\d so far$/.test(e2.estimate ?? '') || parseFloat(e2.width) !== 90) errs.push(`past the estimate: ${e2.estimate} (${e2.width})`);
+    shots.longer = `${out}/wayin-progress-longer-than-usual-desktop.png`;
+    await page.screenshot({ path: shots.longer });
+    await page.click('.scout-cancel');
+    await page.click('.screen-settings');
+    await page.waitForSelector('.settings-forget-places');
+    // No place is saved here (it never loaded), so the button may be off: forget through the same path.
+    const forgot = await page.evaluate(async () => {
+      const b = document.querySelector('.settings-forget-places');
+      b.disabled = false;
+      b.click();
+      await new Promise((r) => setTimeout(r, 300));
+      return localStorage.getItem('spooky-load-times');
+    });
+    if (forgot !== null) errs.push('"Forget all saved places" kept the load times');
+    res.push({ type: 'way in: load estimate from this device, then "taking longer than usual"', errors: errs, estimate: e1.estimate, longer: e2.estimate, shots });
     await page.close();
   }
 
@@ -1448,8 +1503,10 @@ async function wayInChecks(browser) {
     await scoutFor(page, 'Test Reef', 'click');
     await page.waitForFunction((w) => document.querySelector('.scout-load-text')?.textContent === w, WAITING, { timeout: 10000 });
     const w = await readoutState(page);
-    if (reduced && w.anim !== 'none') errs.push(`reduced motion: the bar still moves (${w.anim})`);
-    if (!reduced && w.anim !== 'scout-sweep') errs.push(`the bar doesn't move while waiting (${w.anim})`);
+    if (w.mode !== 'estimate' || w.anim !== 'none') errs.push(`waiting: the estimate bar (${w.mode}, ${w.anim})`);
+    // Reduced motion: the estimate fill moves in whole 10% steps, with no sliding.
+    const tr = await page.evaluate(() => getComputedStyle(document.querySelector('.scout-sweep span')).transitionDuration);
+    if (reduced && (Math.round(parseFloat(w.width) * 10) % 100 !== 0 || tr !== '0s')) errs.push(`reduced motion: the estimate bar should step (${w.width}, transition ${tr})`);
     await page.waitForFunction(() => /^Downloading… \d+ KB of \d+ KB$/.test(document.querySelector('.scout-load-text')?.textContent ?? ''), null, { timeout: 10000 });
     const widths = [];
     for (let i = 0; i < 4; i++) {
@@ -1482,7 +1539,7 @@ async function wayInChecks(browser) {
     await page.clock.fastForward('00:46');
     await page.waitForFunction(() => /kumi/.test(document.querySelector('.scout-server')?.textContent ?? ''), null, { timeout: 10000 });
     const f = await readoutState(page);
-    if (!/^ · No answer from overpass-api\.de within 45 seconds, so now asking overpass\.kumi\.systems$/.test(f.server ?? '')) errs.push(`fallback not explained: ${f.server}`);
+    if (!/^No answer from overpass-api\.de within 45 seconds, so now asking overpass\.kumi\.systems$/.test(f.server ?? '')) errs.push(`fallback not explained: ${f.server}`);
     if (!(secs(f.elapsed) >= 46)) errs.push(`elapsed clock after the wait: ${f.elapsed}`);
     const shot = `${out}/wayin-progress-fallback-desktop.png`;
     await page.screenshot({ path: shot });
