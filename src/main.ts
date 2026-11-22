@@ -11,6 +11,7 @@ import { showLanding, type LandingChoice } from './ui/landing';
 import { startTutorial, trainingDone, type TutorialHandle } from './ui/tutorial';
 import { el } from './ui/dom';
 import { openSettingsPanel } from './ui/settingsPanel';
+import { introStatus, rememberIntro } from './ui/introSeen';
 import type { SensorId } from './render/sensors';
 
 // Colours in this game are sensor values, not display colours: switch off colour conversion.
@@ -23,7 +24,7 @@ let tutorial: TutorialHandle | null = null;
 /** Closes whichever non-game screen is showing (landing page or menu). */
 let closeScreen: (() => void) | null = null;
 let last: MenuChoice | null = null;
-type ScreenName = 'landing' | 'menu' | 'tutorial' | 'game';
+type ScreenName = 'landing' | 'menu' | 'tutorial' | 'game' | 'intro';
 
 declare global {
   interface Window {
@@ -118,14 +119,18 @@ function menu(mode: MenuMode, o: { message?: string; sample?: boolean } = {}): v
 /** Back from a mission: to recon for a recon mission, otherwise to the manual form it came from. */
 const menuAfter = (c: MenuChoice | null): MenuMode => (c?.template ? 'recon' : 'custom');
 
-function landing(notice?: string): void {
+function landing(notice?: string, enter = false): void {
   clear();
   window.__spooky!.screen = 'landing';
+  // The intro is offered once, on the first visit; afterwards it's a "Watch intro" link.
+  const offer = introStatus() === null;
+  if (offer) rememberIntro('offered');
   const close = showLanding(app, (c: LandingChoice) => {
     if (c === 'scout') menu('scout');
     else if (c === 'sample') menu('recon', { sample: true });
+    else if (c === 'intro') intro();
     else training();
-  }, { notice, trained: trainingDone() });
+  }, { notice, trained: trainingDone(), intro: offer ? 'offer' : 'link', enter });
   const settings = settingsButton('on-landing');
   closeScreen = () => {
     settings();
@@ -145,6 +150,33 @@ function settingsButton(where: string): () => void {
     close?.();
     b.remove();
   };
+}
+
+/**
+ * The 44 s intro (src/ui/intro.ts, loaded on demand so the first page stays small). Started from a
+ * click on the front page, never by itself. Ends, or is skipped, back to the front page.
+ */
+function intro(): void {
+  clear();
+  window.__spooky!.screen = 'intro';
+  let handle: { dispose(): void } | null = null;
+  let gone = false;
+  closeScreen = () => {
+    gone = true;
+    handle?.dispose();
+    handle = null;
+  };
+  import('./ui/intro')
+    .then(({ playIntro }) => {
+      if (gone) return;
+      handle = playIntro(app, () => {
+        handle = null;
+        landing(undefined, true);
+      });
+    })
+    .catch(() => {
+      if (!gone) landing();
+    });
 }
 
 function training(): void {
@@ -193,6 +225,9 @@ if (params.get('autostart') === '1') {
   menu('custom');
 } else if (params.get('screen') === 'tutorial') {
   training();
+} else if (params.get('screen') === 'intro') {
+  intro(); // no click: plays muted, with captions
+
 } else {
   landing();
 }

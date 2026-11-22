@@ -18,13 +18,17 @@ import { audio } from '../audio/engine';
  * three steps that explain the idea, and three ways in. Render-only, no HUD. The menu theme starts
  * on the first click or key press (browsers need a gesture) and carries on into the menu.
  */
-export type LandingChoice = 'scout' | 'sample' | 'training';
+export type LandingChoice = 'scout' | 'sample' | 'training' | 'intro';
 
 export interface LandingOptions {
   /** A one-line notice above the title (e.g. after finishing training). Static text only. */
   notice?: string;
   /** Has the player finished Training night before? (Skipping it doesn't count.) */
   trained?: boolean;
+  /** The 44 s intro: offered up top (first visit), or a quiet "Watch intro" link (afterwards). */
+  intro?: 'offer' | 'link';
+  /** Fade in (coming from the intro's fade to black). */
+  enter?: boolean;
 }
 
 export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) => void, opts: LandingOptions = {}): () => void {
@@ -38,8 +42,16 @@ export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) =>
   el('div', 'landing-shade', undefined, root);
   decor(root);
 
+  if (opts.enter) root.classList.add('landing-enter');
   const main = el('main', 'landing-content', undefined, root);
   if (opts.notice) el('p', 'landing-notice', opts.notice, main);
+  // The intro never starts by itself (sound needs a click): first time, it's offered here.
+  let introBtn: HTMLButtonElement | null = null;
+  if (opts.intro === 'offer') {
+    const offer = el('div', 'landing-intro-offer', undefined, main);
+    el('span', 'lio-text', 'First time here? There’s a 44-second intro.', offer);
+    introBtn = el('button', 'primary la-intro', '▶ Play intro', offer);
+  }
   el('div', 'landing-kicker', 'GUNSHIP · NIGHT SHIFT', main);
   const h1 = el('h1', 'landing-title', undefined, main);
   el('span', 'lt-1', 'SPOOKY', h1);
@@ -67,6 +79,8 @@ export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) =>
   // Shown only on touch screens (CSS: pointer: coarse): missions bring up on-screen controls there (3.11).
   el('p', 'landing-touch', 'On a touch screen, missions show a thumb stick and FIRE, GUN and VIEW buttons.', main);
 
+  if (opts.intro === 'link') introBtn = el('button', 'la-intro la-intro-link', '▶ Watch intro (44 s)', main);
+
   el('p', 'landing-privacy', 'Your search goes straight from your browser to OpenStreetMap. Nothing is stored.', main);
   el('p', 'landing-credit', 'Map data © OpenStreetMap contributors (ODbL)', main);
 
@@ -83,6 +97,10 @@ export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) =>
   scout.addEventListener('click', choose('scout'));
   sample.addEventListener('click', choose('sample'));
   training.addEventListener('click', choose('training'));
+  introBtn?.addEventListener('click', () => {
+    audio.unlock(); // the click is the gesture sound needs
+    choose('intro')();
+  });
 
   return () => {
     window.removeEventListener('keydown', unlock);
