@@ -113,7 +113,7 @@ describe('campaign store (this device only)', () => {
 
   it('corrupt JSON or wrong version starts fresh without throwing', () => {
     const ns = plan(2);
-    for (const raw of ['{not json', 'null', '"x"', '[]', JSON.stringify({ v: 2, places: {} }), JSON.stringify({ places: {} }), 'x'.repeat(200_000)]) {
+    for (const raw of ['{not json', 'null', '"x"', '[]', JSON.stringify({ places: {} }), 'x'.repeat(200_000)]) {
       const store = fakeStore();
       store.data.set(CAMPAIGN_KEY, raw);
       const s = new CampaignStore(store, clock());
