@@ -184,18 +184,22 @@ describe('recorded effects', () => {
   });
 
   it('uses the recorded sample when loaded and the synthesised sound when not', () => {
+    // Every shot also gets its weight layer (weight.ts): one sub oscillator and one noise body.
     const { out, made } = fakeOutput({ [SFX.fire105]: buf(4), [SFX.explosion]: buf(4) });
     const sfx = new Sfx(() => out);
     sfx.unlock();
     sfx.fire('105');
     sfx.impact('105');
     expect(made.buffers).toBe(2);
-    expect(made.oscillators).toBe(0);
+    expect(made.oscillators).toBe(2); // the two weight subs
+    expect(made.noise).toBe(2); // their bodies only: no generated bang under the recorded ones
     sfx.fire('40'); // not loaded: synthesised
-    expect(made.oscillators).toBe(1);
+    expect(made.oscillators).toBe(3);
+    expect(made.noise).toBe(4); // weight body + the generated bang
     sfx.muted = true;
     sfx.fire('105');
     expect(made.buffers).toBe(2);
+    expect(made.oscillators).toBe(3);
   });
 
   it('friendly fire always sounds the synthesised two-tone; the recorded alarm is layered under it', () => {
@@ -217,7 +221,9 @@ describe('recorded effects', () => {
       sfx.fire('25');
       rounds++;
     }
-    expect(made.noise).toBe(rounds);
+    // A crack per round, plus one weight body per weight layer (one sub oscillator each, gated like the burst).
+    expect(made.noise).toBe(rounds + made.oscillators);
+    expect(made.oscillators).toBeLessThanOrEqual(Math.ceil(2 / RETRIGGER_25));
     expect(made.buffers).toBeGreaterThanOrEqual(4);
     expect(made.buffers).toBeLessThanOrEqual(Math.ceil(2 / RETRIGGER_25));
   });
