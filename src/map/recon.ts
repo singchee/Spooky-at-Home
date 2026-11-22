@@ -109,6 +109,36 @@ export function nearChildPlace(map: MapData, p: V2, buffer = CHILD_BUFFER): bool
   return childZones(map).some((z) => zoneDist(p, z) < buffer);
 }
 
+/**
+ * Spec 003: the walk-grid cells within `buffer` metres of a school, kindergarten or playground, measured from the
+ * cell's centre (callers add half a cell's diagonal to make it hold for every point in the cell). Box-culled per
+ * zone; cached per grid and buffer.
+ */
+const maskCache = new WeakMap<object, Map<number, Uint8Array>>();
+export function childMask(map: MapData, grid: { n: number; cell: number; half: number; col(x: number): number; cx(i: number): number; cz(j: number): number }, buffer: number): Uint8Array {
+  let byBuf = maskCache.get(grid);
+  if (!byBuf) maskCache.set(grid, (byBuf = new Map()));
+  const hit = byBuf.get(buffer);
+  if (hit) return hit;
+  const n = grid.n;
+  const mask = new Uint8Array(n * n);
+  for (const z of childZones(map)) {
+    const b = zoneBox(z);
+    const i0 = Math.max(0, grid.col(b.minX - buffer));
+    const i1 = Math.min(n - 1, grid.col(b.maxX + buffer));
+    const j0 = Math.max(0, grid.col(b.minZ - buffer));
+    const j1 = Math.min(n - 1, grid.col(b.maxZ + buffer));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const k = j * n + i;
+        if (!mask[k] && zoneDist({ x: grid.cx(i), z: grid.cz(j) }, z) < buffer) mask[k] = 1;
+      }
+    }
+  }
+  byBuf.set(buffer, mask);
+  return mask;
+}
+
 /** Twice the signed area of a, b, c: which side of a->b the point c is on. */
 const orient = (a: V2, b: V2, c: V2) => (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
 
