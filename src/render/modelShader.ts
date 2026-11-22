@@ -12,6 +12,12 @@ import type { BakedModel } from './characterModels';
  * in front of the body, exactly as the procedural figures do it.
  */
 
+/**
+ * How much larger than real height the models are drawn (1 = 1.75 m people). The figures are tiny
+ * from the current 1.8 km orbit (about 5 px at the 40 mm); the new oblique camera should size them,
+ * and this is the one knob if they still need exaggerating for readability (the old figures were 2.7 m, i.e. ~1.55).
+ */
+export const MODEL_DISPLAY_SCALE = 1;
 /** Side of the survivors' cold ID panel, metres (about two thirds of the chest's width). */
 export const MODEL_PANEL_SIZE = 0.28;
 /** The panel is drawn as if this much nearer the camera, so its own body never hides it. */
@@ -107,10 +113,13 @@ export class ModelBatch {
   readonly c: Float32Array;
   readonly d: Float32Array;
   readonly material: THREE.ShaderMaterial;
+  /** The model's clip names, in a fixed order (an agent's clip is an index into this). */
+  readonly clipNames: string[];
   private geo: THREE.InstancedBufferGeometry;
   private attrs: THREE.InstancedBufferAttribute[];
 
   constructor(readonly model: BakedModel, kind: 'zombie' | 'survivor', readonly capacity: number) {
+    this.clipNames = Object.keys(model.clips);
     const src = model.geometry;
     const nV = src.attributes.position.count;
     const extra = kind === 'survivor' ? 4 : 0;
@@ -166,7 +175,7 @@ export class ModelBatch {
         uNrm: { value: model.nrm },
         uKind: { value: kind === 'zombie' ? 0 : 1 },
         uBase: { value: 1.05 },
-        uScale: { value: 1 },
+        uScale: { value: MODEL_DISPLAY_SCALE },
       },
       vertexShader,
       fragmentShader,

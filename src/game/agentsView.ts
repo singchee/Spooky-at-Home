@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Sim } from '../sim/sim';
 import { FIGURE_SCALE, FigureBatch, HEAD_TOP, StrobeSprites } from '../render/figureShader';
 import { loadCharacterModels, type BakedClip, type BakedModel, type CharacterModels } from '../render/characterModels';
-import { ModelBatch, clipRows } from '../render/modelShader';
+import { MODEL_DISPLAY_SCALE, ModelBatch, clipRows } from '../render/modelShader';
 import {
   ANIM,
   COWER_RANGE,
@@ -330,7 +330,7 @@ export class AgentsView {
   ): void {
     const f = tr.f;
     const model = batch.model;
-    const names = Object.keys(model.clips);
+    const names = batch.clipNames;
     const want = model.clips[name] ?? model.clips[name === 'crouch' ? 'idle' : 'walk'] ?? model.clips[names[0]];
     const idx = names.indexOf(want.name);
     if (f.clip[i] !== idx) {
@@ -388,7 +388,7 @@ export class AgentsView {
   /** A tracked point of a model (0 head top, 1 chest) for agent i as last written, rotated and scaled as the shader does. */
   private modelPoint(batch: ModelBatch, tr: Track, i: number, which: number, seed: number): [number, number, number] {
     const model: BakedModel = batch.model;
-    const names = Object.keys(model.clips);
+    const names = batch.clipNames;
     const clip = model.clips[names[tr.f.clip[i]]];
     if (!clip) return [0, 1.8, 0];
     const [row0, row1, fr] = clipRows(clip, tr.f.ctime[i]);
@@ -400,8 +400,8 @@ export class AgentsView {
     // Survivors' build in the shader: height 0.95-1.05 (r3), width 0.97-1.03 (r1).
     const r3 = (seed * 29.13 + 0.07) % 1;
     const s1 = (seed * 7.31 + 0.13) % 1;
-    const h = 0.95 + 0.1 * r3;
-    const w = 0.97 + 0.06 * s1;
+    const h = (0.95 + 0.1 * r3) * MODEL_DISPLAY_SCALE;
+    const w = (0.97 + 0.06 * s1) * MODEL_DISPLAY_SCALE;
     const yaw = tr.f.yaw[i];
     const c = Math.cos(yaw);
     const s = Math.sin(yaw);
