@@ -184,7 +184,7 @@ export class Sim {
   private fewSaid = false;
   private coldSaid = false;
 
-  constructor(mission: Mission, map: MapData, graph: RoadGraph, grid: WalkGrid, opts: { scatter?: boolean } = {}) {
+  constructor(mission: Mission, map: MapData, graph: RoadGraph, grid: WalkGrid, opts: { scatter?: boolean; drift?: boolean } = {}) {
     this.mission = mission;
     this.map = map;
     this.graph = graph;
@@ -208,7 +208,7 @@ export class Sim {
     });
     // Clear missions: after the grace period, the horde nearest the sheltering friendlies drifts toward them,
     // so there is real pressure to find and protect them (the critic found the friendlies were never threatened).
-    const shelter = mission.type === 'clear' ? mission.survivors.find((s) => !s.route) : undefined;
+    const shelter = mission.type === 'clear' && opts.drift !== false ? mission.survivors.find((s) => !s.route) : undefined;
     if (shelter && anchors.length) {
       let best = 0;
       anchors.forEach((a, k) => {
