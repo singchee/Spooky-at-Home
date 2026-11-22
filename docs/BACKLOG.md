@@ -65,6 +65,10 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 
 | 3.29 | Tech abilities (owner idea, later; pairs with 3.28 upgrades): radar, motion sensors, target indicators, targeted bombing run. Chief's note: anything that shows every zombie undercuts the sensor game and the cold-blooded mechanic (pillar 3), so make them limited and readable: a motion-sensor pulse on a cooldown that shows movers for a few seconds (a counter to cold-blooded that still needs the right camera), Ground marking targets with an IR designator visible in night vision, and a called-in bombing run on a long cooldown with a danger-close check, the school guardrail and flash-safety limits. | pitch, plan, balance, feel | later |
 
+| 3.30 | Motion override (owner): Settings "Motion: follow my device / full / reduced", and on the intro slideshow a note "Showing still frames because your device asks for reduced motion · Play animated". Device setting stays the default | review, playtest, feel | next (Sonnet) |
+| 3.31 | Intro update (owner, later): besides the guns, cover the vision features (white hot, black hot, night vision, cold-blooded, zoom). Needs a script revision and new voice lines within the ElevenLabs cap | story, sound, playtest | later |
+| 3.32 | Bug: cold-blooded stragglers can be impossible to find and the game seems endless (owner). Reproduce, fix causes, add endgame help (radio names the area, soft search circle, restless stragglers) | review, balance, playtest | in-progress |
+
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game
