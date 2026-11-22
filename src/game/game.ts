@@ -26,6 +26,7 @@ import { LINES, captionText, line } from '../sim/campaignText';
 import { effectiveReduceFlicker, mouseAimDelta } from './input';
 import { KEYS_SENTENCE, TOUCH_SENTENCE, keyAction, nextView, viewLabel, type ControlAction } from './controls';
 import { TouchControls } from './touchControls';
+import { CROWD_SIZES } from '../sim/crowd';
 
 /** The browser game: renders the simulation, handles input, camera, sound and screens. */
 export interface GameOptions {
@@ -119,7 +120,7 @@ export class Game {
   private post: SensorPost;
   private gfx: GfxGovernor;
   private world: World;
-  private agents = new AgentsView();
+  private agents: AgentsView;
   private effects = new Effects();
   private hud: Hud;
   private sfx = sharedSfx;
@@ -188,6 +189,9 @@ export class Game {
     this.scene.add(sun);
 
     this.world = buildWorld(map, sim.mission.seed);
+    // Crowd nights (spec 003): level of detail and the body cap inside the 1,200-figure total.
+    const crowd = sim.mission.crowd && CROWD_SIZES[sim.mission.crowd.size];
+    this.agents = new AgentsView(crowd ? { lod: { models: crowd.models, bodies: crowd.bodies } } : {});
     this.scene.add(this.world.group, this.agents.group, this.effects.group);
 
     // Picture quality: ?gfx=high|low forces a tier; otherwise start high and drop to low if frames
@@ -807,7 +811,7 @@ export class Game {
     this.applyKick(fov);
     this.camera.updateProjectionMatrix();
 
-    this.agents.update(this.sim, this.clock);
+    this.agents.update(this.sim, this.clock, { camera: this.camera, height: this.renderer.domElement.clientHeight });
     this.effects.update(this.clock, dt);
 
     const u = this.post.uniforms;

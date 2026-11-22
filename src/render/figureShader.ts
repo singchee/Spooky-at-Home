@@ -321,6 +321,7 @@ const vertexShader = /* glsl */ `
     float bounce = dead * sin(clamp((age - 0.66) / 0.24, 0.0, 1.0) * 3.1416) * 0.08;
     float live = 1.0 - fall;
     float react = iC.w * (1.0 - dead);
+    float sink = iC.w * dead;   // bodies: how far through sinking out of sight (spec 003 body cap), 0-1
     float idleW = (1.0 - dead) * (1.0 - clamp(amp * 3.0, 0.0, 1.0)) * (1.0 - crouch) * (1.0 - zombie);
 
     // ---- Legs (both, so the standing leg sets the hip height and the feet stay on the ground).
@@ -445,7 +446,7 @@ const vertexShader = /* glsl */ `
     p = rYaw * p;
     n = normalize(rYaw * n);
 
-    vec4 world = modelMatrix * vec4(iA.x + p.x, uBase + p.y, iA.y + p.z, 1.0);
+    vec4 world = modelMatrix * vec4(iA.x + p.x, uBase + p.y - sink * ${f(1.6)}, iA.y + p.z, 1.0);
     vec4 mv = viewMatrix * world;
     if (isPanel > 0.5) {
       mv.xy += corner.xy * uScale;                                  // a square facing the camera
