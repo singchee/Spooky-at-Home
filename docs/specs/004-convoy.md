@@ -166,6 +166,215 @@ Escort is about people on foot. They spread out, they can be grabbed from any si
 ---
 ## Technical design  *(added by tech-lead)*
 
+*Reviewed against feat/phase-3 at 70e6f15 (538 tests pass, typecheck clean), plus `feat/003-horde-night` (adeb398), `feat/3.39-highrise-visibility` (8460f96) and BACKLOG 3.41. Read alongside the Feel & access review below. Where we touch the same thing (danger close, strobes, the orbit), this design follows Feel M1, M3 and M4. "Probed" means measured headless on this tree. The probe script lives in the scratchpad and isn't committed.*
+
+### 0. What the code says today (it shapes the design)
+- **Escort already has most of the threat plumbing, keyed to `Sim.survivors`.** Zombies target active survivors (25 m direct chase, plus a flow field rebuilt every 1 s from their cells). `updateWaves` puts ambushes 90–230 m ahead of the leading survivor along `route`, and keeps `MIN_SPAWN_GAP` from every survivor. `updateShells` counts friendly fire per survivor. `checkResult` compares `home` against `needHome`. The bot avoids survivors. If the trucks are survivors, all of this works for them unchanged.
+- **Danger close has three different definitions today.** The HUD uses `radius × 1.6 + 4` from survivor centres (`Game.dangerClose`). The sim's near-miss event uses `r × 3` (`updateShells`). The bot uses `radius × 1.6 + 4` from centres. None of them knows about trucks, outlines or flight time. Feel M1 needs one shared rule, and so does the briefing (hard rule 9).
+- **Flight time is long, and the target moves.** The orbit is fixed: 1,000 m radius, 1,500 m up, around `mission.orbitCentre`. An edge-to-edge route on a 1.2 km map puts route points up to about 1,540 m from the gunship horizontally, which is about 2.15 km slant. At that range the 105 takes up to **4.3 s** to land, and the lead truck covers about **21 m** at cruise in that time.
+- **Probed route supply** (main roads = trunk, primary, secondary, tertiary; at least 80% of the length on them; entry and exit at least 90° apart; inside 0.9 × half; up to 24 entry nodes per map):
+
+  | Map | Routes at a 54 m child gap | Routes at the 74 m gap (§6) | Lengths (median / max) |
+  |---|---|---|---|
+  | Sample town | 12 | 12 | 880 / 880 m between nodes. Clipped to the 0.9 box (§2) it's **990 m** |
+  | Adelaide CBD | 1,147 | 1,121 | 1,432 / 1,881 m |
+  | Gundagai | 16 | 16 | 1,356 / 1,601 m (the Hume motorway is excluded) |
+  | West Hobart | 6 | **0** | 1,180 m. **Convoy isn't offered at the 74 m gap** |
+  | New York preset | 902 | 902 | 1,532 / 2,147 m |
+  | Paris preset | 10 | 10 | 809 / 872 m between nodes. **None reaches 900 m**. Clipping to the box adds up to about 80 m at each end, so a few may reach the 850 m floor. That's a `/map-check` item, not a test assertion |
+
+  Dijkstra costs 0.1–2.3 ms per run on 1.3k–5.5k nodes, so 24 runs is at most about 60 ms per generation.
+- **The sample town has exactly two main roads:** Main Street (primary, north–south) and Bridge Avenue (secondary, east–west). They cross at the centre, the school's nearest building is about 130 m from Main Street, and junctions are 110 m apart. The spec's 900–1,500 m band "rising with difficulty" **can't be met on the sample town** (990 m at most), and Paris is marginal. See change 2.
+- **`likelyWaveDirections` returns `[]` for Escort**, so spec §7's "wave directions use the existing `likelyWaveDirections`" would draw nothing. Convoy ambushes come from *the road ahead*, and that's the true intel (§7 below).
+- **Template plumbing assumes one of two shapes: anchored on a place, or classic.** `generateFromTemplate` sends every `anchors: []` template to the classic generator. `rankMissions` offers every `anchors: []` template on any map with roads. `tests/templates.test.ts` asserts that every non-clear template has a `safehouse`, and a convoy has none. Campaign plans use explicit preference lists (`NIGHT_PREFERENCES`), so a new template can't leak into Three Nights.
+- **School-heavy town (`tests/worldFixture.ts`) is all residential**, so a convoy is simply never offered there. On its own it can't test the guardrail in play (change 7).
+
+### 1. Where it lives
+| File | Change |
+|---|---|
+| `src/sim/convoy.ts` (new) | `CONVOY` tuning data (Balance owns it): trucks by difficulty, `spacing` 20, `cruise` 5, `accel` 1.5, `brake` 4, `slowZone` 40, `stopZone` 12, `restart` 1 s, `hp` 100, `drain` 2 per zombie per second, truck `length` 8, `width` 2.5, `contact` 0.8 m, `corridor` 9 m half-width, `ffDamage` per gun. `CONVOY_DANGER_CLOSE` per gun (§3). `CONVOY_ZOMBIE_GAP`, `CONVOY_CHILD_GAP` (§6). `ConvoyPlan` type. `findConvoyRoute(map, g, d, rng)`. `buildConvoy(ctx) → MissionResult`. `corridorIndex(grid, route)` (§2). `truckBox(route, s)`. `dangerCloseAt(sim, gunId, aim) → truck index or -1`. Pure: no three.js, no DOM. |
+| `src/sim/missions.ts` | `Mission.convoy?: ConvoyPlan` (next to 003's `crowd`). `SurvivorPlan.truck?: true`. `generateFromTemplate` sends `convoy-main-road` to `buildConvoy` **before** the classic shortcut. **`type` stays `'escort'`, and `MISSION_TYPES` is untouched.** |
+| `src/map/recon.ts` | `TemplateId` gets `'convoy-main-road'`. `MissionTemplate.on?: 'main-road'` (a route-anchored template). `rankMissions` offers it only when `hasMainRoads(map)` is true; the UI's existing `accept` (the generator) drops it where no route qualifies. Add a `describe` case whose reason is true without the route ("Ground's trucks are coming through {map name} on the main roads. Keep the road ahead clear."). Export `isChildPlaceName(name)` (today's `CHILD_NAME` test) for checkpoint labels. Reuses 003's `childMask`. |
+| `src/sim/sim.ts` | Trucks are `Survivor` entries with `truck?: TruckState` (`hp`, `v`, `state`, `restartAt`, `passOffset`). Gated branches, each `if (s.truck)` or `if (this.mission.convoy)`, so they never run in another mode: `updateSurvivors` → `updateTruck`; zombie chase, contact and stop distance measured to the truck's outline; truck damage in `updateShells` instead of death; spawn positions and every zombie move kept outside the convoy no-go mask (003's `noGo` / `free()`); convoy win/lose reasons in `checkResult`; `SimState.convoy` (omitted otherwise); `convoy` events. |
+| `src/sim/bot.ts` | Convoy-aware when `mission.convoy` is set: friendly-fire safety via `dangerCloseAt`, and a threat score that favours the corridor ahead of the lead truck. Without this, the "kills ahead" balance measure measures the bot, not the design (§8). |
+| `src/game/trucksView.ts` (new) | Instanced placeholder box, heat zones per Feel S5, and roof strobes on the **shared** blink (Feel M3). `AgentsView` skips `s.truck` survivors. |
+| `src/ui/convoyHud.ts` (new), `src/sim/convoyText.ts` (new) | Convoy HUD lines (Feel S1–S3) and the Story Writer's text-only radio lines, keyed by event. `textContent` only. |
+| `src/game/game.ts` | **One gated block**, `if (m.convoy)`: trucks view, convoy HUD, truck labels (Feel M2), `DANGER CLOSE` from `dangerCloseAt` (not `Game.dangerClose`), convoy captions instead of survivor voice lines (Feel M5), and a `__spooky.convoy()` test hook. Escort's own `dangerClose` is unchanged. |
+| `src/ui/tacticalMap.ts`, `briefingTour.ts`, `briefingDiorama.ts`, `hud.ts` (minimap) | Route, entry and exit arrows, three checkpoints, live truck dots (Feel M6), and tour stops (Feel M4). |
+| `src/main.ts` | Nothing new. `?template=convoy-main-road` already works once the id is in `TEMPLATE_IDS`. |
+| `tests/worldFixture.ts` | `schoolHeavyTown({ mainRoads: true })`: three streets become primary or secondary. One passes a school at 60 m (must never be used), one at 80 m (allowed). The default is unchanged. |
+
+**Layering:** `convoy.ts` and `convoyText.ts` sit in `src/sim` and import only map, sim and util modules. `tests/layering.test.ts` covers them with no change.
+
+### 2. Data flow
+```
+recon / URL (?template=convoy-main-road&seed&difficulty)
+  → generateFromTemplate → buildConvoy(ctx), rng = mulberry32(hashString('convoy|' + map + '|' + seed + '|' + d))
+      box      = |x|,|z| ≤ map.half × HORDE_EDGE (0.9): where the picture doesn't fade and the aim can reach
+      cost     = main-road edge: length · minor road: length × 4 · motorway: closed
+                 · any edge within CONVOY_CHILD_GAP of a child place: closed (cached per graph + gap)
+      entries  = main-road nodes inside the box with a main-road edge leaving it, in stable order, ≤ 24
+      for each entry: one dijkstra → every exit at least 90° away (bearing from the map centre)
+      keep     = main share ≥ 80% · no doubling back (corridor cells claimed twice, more than 2 × corridor apart in s)
+                 · length ≥ 850 m after clipping each end to the box edge
+      pick     = nearest to target(d) = 900 + 100(d−1) m; seeded tie-break among the three nearest
+      none     → ok:false with the Story Writer's reason (§4)
+      checkpoints at 25 / 50 / 75 %: the cross street at the nearest junction within 40 m, else placeLabel;
+                 never a child-place name (isChildPlaceName → compass phrase)
+      trucks   = SurvivorPlan{ start: entry, route, delay: i × spacing / cruise, truck: true } × n(d)
+      timeLimit = 2 × (L + (n−1) × spacing) / cruise + 60 (+ acceleration allowance)
+      waves    = Escort's formula; kinds planned over the drive time (not escortMinTime)
+  → Mission{ type 'escort', route, survivors: trucks, needHome n−1, home: exit, orbitCentre: route bbox centre,
+             waves, convoy: { entry, exit, checkpoints, n, dangerClose, … } }
+Sim (each step, dt-scaled):
+  corridor: one cell lookup per living zombie (corridorIndex: route s, or −1) → nearest blocker ahead of each truck
+  truck i:  gap = min s of a corridor zombie ahead of its front, then the truck ahead (spacing), ignoring trucks put out of action
+            gap ≤ 12 → brake to 0; 12–40 → target speed rises linearly up to cruise; clear for 1 s → move off
+            accel / brake limits × dt · s ≥ route length → home ('through')
+  contact:  zombies within `contact` of a truck's outline → hp −= drain × n × dt; hp ≤ 0 → 'out'
+            (alive = false, a 'convoy' event and no 'survivor-lost' event; trucks behind pass it with a lateral offset)
+  shells:   blast reaches the outline → friendly-fire incident + ffDamage (same rng draw pattern as survivors)
+  state():  convoy { trucks[{hp, state, s}], lead, blockedBy {truck, cold, place}, toExit, through, need }
+Game: trucksView · convoyHud · labels · DANGER CLOSE = dangerCloseAt(sim, gun, aim) · captions
+```
+**`corridorIndex`** is a `Float32Array` with one entry per walk cell. It holds the route distance `s` of the nearest route point for cells within `corridor` of the route, and −1 otherwise. It's built once per Sim from the route and the grid, so the per-step stop test is O(living zombies), with no polyline projection.
+
+### 3. Danger close, and the moving target against the orbit centre (3.39, 3.41)
+- **One rule, in the sim** (Feel M1). `CONVOY_DANGER_CLOSE = { '25': 10, '40': 20, '105': 35 }` metres. A test asserts each is at least `radius × KILL_REACH + 3 × spread` (8.1, 16.5 and 33 m). `dangerCloseAt(sim, gun, aim)` measures from the aim point to each truck's **outline**, swept over the route it will cover during that gun's flight time from the gunship's current position. It uses the truck's current speed, or cruise if its move-off beat has started, and it stops at its own stop point. The HUD, the bot, the sim's near-miss event (convoy only) and the briefing all read this one table. The briefing quotes the exact numbers ("the 40 inside 20 m, the 105 inside 35 m"), never a rounded "about". Feel M1's "about 15 / about 30" wording takes these values.
+- **The sim's orbit stays fixed for Convoy v1.** `orbitCentre` is the route's bounding-box centre, as for Escort, and `aircraft(t)` stays a pure function of `t`. Reasons:
+  1. Every flight time, the bot's lead and the 3.41 line of fire come from `aircraft()`. A centre that moved with the convoy would change all three mid-mission, and it would need its own trace.
+  2. The generator already keeps the whole route inside the 0.9 box, which is in sight and reachable by the aim (the aim is clamped to ±half). Slant range stays under about 2.2 km.
+  3. Feel M4 asks for no forced camera motion.
+- **3.39 (render orbit).** Over tall blocks the drawn gunship eases its centre toward the aim (`CENTRE_PULL` 1, τ 2 s, capped at 160 m/s). The aim sits 100–200 m ahead of a convoy moving at 5 m/s, so the drawn orbit tracks it easily, and Convoy needs no render change. Convoy adds **no new reader** of the gunship's position: `dangerCloseAt` takes flight time from `sim.aircraft()`, the same as `fire()`. So the existing gap between the drawn and fired-from positions (3.39's known gap) is neither widened nor duplicated.
+- **3.41 (shots blocked by buildings).** Once rounds stop at the first building on the line from the sim's gunship, the real impact can land short of the aim. **`dangerCloseAt` must then take 3.41's predicted impact point (`predictImpact(gun, aim)`) instead of the aim point.** That's one argument, and 3.41's scope lists it. 3.41 also changes `updateShells`, where Convoy's truck-damage branch lives. That's a merge surface of about 10 lines, not a design conflict. A rooftop hit lands up to about h × tan(34–47°) short of the aim, toward the gunship. Convoy's in-play guardrail test (§8, test 9) is the regression gate 3.41 must run.
+- **If a moving orbit is ever wanted** (an orbit that follows the lead truck), it must be a sim function of sim state, eased with `dt`, and convoy-gated. `aircraft()`, the 3.39 render orbit (as its base) and the 3.41 line of fire must all read it. It isn't in this build.
+
+### 4. Determinism
+- Map + seed + difficulty → the same route, checkpoints, trucks and run. The generator uses its own seeded stream. Truck kinematics, the stop rule and contact damage **draw no random numbers**. The only rng draws on trucks are the friendly-fire 50% band in `updateShells`, in the same pattern as survivors.
+- Everything is dt-scaled: speeds, acceleration and braking limits, the 1 s move-off beat, drain, and radio hysteresis (sim time, not wall clock). Test: an unopposed convoy arrives at dt 1/30 and at dt 1/60 within 0.1 s of each other.
+- Every other mode stays byte-identical. Every branch is gated on `s.truck` or `mission.convoy`, and `state().convoy`, `Mission.convoy` and `SurvivorPlan.truck` are left out of JSON when absent. `EXPECTED_FINGERPRINT`, the escort, clear and defend traces and fingerprints, the 002 traces, the campaign fingerprints and 003's crowd trace all stay unchanged. `MISSION_TYPES` stays `['clear', 'escort', 'defend']`.
+- The 003 no-go mask (`free()`) is `!isBlocked` when `noGo` is null, so applying it in the normal move path changes nothing for other modes. The traces prove it.
+
+### 5. Failure modes
+| Input | Missing / malformed / huge |
+|---|---|
+| A map with no trunk, primary, secondary or tertiary roads (school-heavy town, many villages, old map files that lost road classes) | `hasMainRoads` is false, so the template isn't offered. If it's forced through the URL: "There aren't enough main roads through here for a convoy." (Story Writer's words.) |
+| Main roads that don't form a route of at least 850 m with 80% on main roads and ends 90° apart (possibly Paris) | `ok:false` with the same reason. The UI's `accept` hides the card. |
+| Every route passes within 74 m of a school, kindergarten or playground (West Hobart today) | `ok:false`: "Every main road through here passes a school or playground, so there's no convoy here." **The gap is never shrunk.** |
+| Unnamed main roads, or unnamed cross streets | Entry and exit read "an unnamed road from the south". Checkpoints fall back to `placeLabel`, then to a compass phrase. Every label goes through `isChildPlaceName`, and all text is shown with `textContent` (canvas `fillText` on maps). |
+| A route that doubles back on itself, or a junction loop | Rejected (corridor cells claimed twice). The next candidate is tried. |
+| Huge map (Adelaide or New York: 1,100+ qualifying pairs) | Entries are capped at 24 (stable order), one dijkstra each (≤ 2.3 ms probed), and the closed-edge cache is shared, so at most about 60 ms per generation, run once per recon card. |
+| A wave spawn landing inside the no-go mask (`WAVE_SPREAD` jitter) | Falls back to the nearest free cell outside the mask. The spawn node is at least 66 m out (`WAVE_CHILD_GAP`), so one is always a cell or two away. Asserted in test 9. |
+| A truck put out of action in the only lane | Trucks behind pass at `passOffset` (3.5 m) within ±12 m of it. If that offset is blocked by a building, they pass on the centreline (the sim has no truck collisions). Out-of-action trucks never block the stop test. |
+| URL hook with a bad seed or difficulty | Existing handling (`generateMission` rejects a non-finite difficulty; seed parsing is unchanged). |
+
+No new network calls, no user files, and nothing stored.
+
+### 6. Guardrail (school and child-place gap)
+- **The zombie mask:** `CONVOY_ZOMBIE_GAP = MAX_KILL_REACH (24) + CHILD_FIRE_CLEARANCE (30) + 3 × the 105's spread (9) + half a cell's diagonal (2.1) ≈ 65 m`. It goes through 003's `childMask(map, grid, gap)` and applies to the convoy flow field, to every zombie move and to every spawn position. A living zombie can therefore never stand within 63 m of a child place. A 105 aimed at it, landing three spreads off, still leaves 30 m of clear ground.
+- **The route gap:** `CONVOY_CHILD_GAP = CONVOY_ZOMBIE_GAP + corridor (9) ≈ 74 m`, so the whole corridor (every spot where a zombie can stop the convoy) sits outside the mask. Spec §5 asks for "54 m plus a few metres". This is that rule with the shell spread and the corridor counted, and it costs West Hobart its convoy.
+- **Ambushes:** they use the existing `noSpawn` nodes (66 m) plus the mask on their walk in, so spec §5's "along their walk to the route" holds by construction, which answers the spec's question about the 003 mask.
+
+### 7. Intel (hard rule 9)
+- The briefing's entry street, exit street, compass words, checkpoints, truck count, target (`needHome`) and danger-close numbers are read from `mission.convoy`, the same object the HUD, radio and tour use.
+- **Wave intel:** no tactical-map arrows (Escort has none). Instead: "They'll come at the road ahead of the trucks." That's true by the sim's ambush rule (spawn 90–230 m ahead of the lead, or the fallback 140–300 m from that point). The existing cold and wave-kind intel lines stay.
+- Feel S5: if hitting a truck that's already out of action counts as friendly fire, the `updateShells` branch includes trucks in the `out` state, and the briefing says so. The default proposed here is **yes** (the crew are inside). That's the owner's or Director's call, flagged for `/build`.
+
+### 8. Performance against QUALITY §2
+| Budget | Estimate | Gate |
+|---|---|---|
+| Sim step | Escort today plus one corridor lookup per living zombie, plus ≤ 5 outline distances in chase and contact. At Escort's d5 cap (`maxAlive` 576) that's about 3k cheap operations, **est. +0.1 ms**. | New test: convoy step, 600 living zombies + 2,000 dead entries (003's `living` index), < 4 ms. |
+| Generation | ≤ 60 ms probed-equivalent on the densest fixture, once per recon card | Recorded, not gated. |
+| Draw calls | +1 instanced truck mesh. The strobes reuse the existing strobe batch (raise `MAX_S` by 5 if needed). | < 150 (`info().drawCalls`) in the playtest scenario. |
+| JS size | about +6–8 KB gzipped | < 400 KB |
+| Flashes | Guns unchanged. Five strobes on the shared 1 Hz blink is **one** flash per second (Feel M3: no phase offsets). | Flash meter: 5 strobes in NV + a 105 danger-close impact, ≤ 3/s and < 25% of the screen. |
+
+### 9. Test plan (write first; tests 1–9 fail before the convoy code exists)
+**`tests/convoy.test.ts` (new):**
+1. *Determinism:* sample town, New York preset and Adelaide fixture, d1–5, seeds 1–3. Same inputs give an identical `ConvoyPlan` (route, checkpoints, entry, exit, n).
+2. *Route rules:*
+   - at least 80% of the length on the four classes;
+   - entry and exit on the 0.9 box edge (±1 m), at least 90° apart from the map centre;
+   - length ≥ 850 m;
+   - `routeNearChildPlace(map, route, CONVOY_CHILD_GAP) === false`;
+   - no doubling back;
+   - no motorway edge;
+   - checkpoint labels are non-empty and never match `isChildPlaceName`.
+
+   On `schoolHeavyTown({ mainRoads: true })`, the street 60 m from a school is never on any route at any seed.
+3. *Not offered:*
+   - school-heavy town (default) → `ok:false`, main-roads reason;
+   - West Hobart → `ok:false`, schools reason;
+   - `rankMissions` leaves the convoy out where `hasMainRoads` is false.
+4. *Nothing else moves:*
+   - `MISSION_TYPES` deep-equals today's;
+   - a hash of `generateMission(type:'auto')` for sample town seeds 1–20 × d1–5 equals a constant **captured in commit 1 before any generator change**;
+   - every existing fingerprint and trace passes unedited.
+5. *Stop rule* (`addZombie` in the corridor):
+   - 10 m ahead of T1 → T1 stops within braking distance, and T2–Tn stop at spacing ±1 m;
+   - 30 m ahead → T1 slows (0 < v < cruise);
+   - kill it → all move off 1 s (±dt) later;
+   - the same zombie 15 m off the corridor → no slowing.
+6. *Moving is safe:* a zombie released beside T2 at cruise → T2 loses ≤ 2 hp.
+7. *Winnable:* no waves → every truck through by ≤ 50% of `timeLimit`, at d1–5. Arrival at dt 1/30 and 1/60 within 0.1 s.
+8. *G6:* no input → lost at every difficulty, sample town seeds 1–6.
+9. *Guardrail in play:* `schoolHeavyTown({ mainRoads: true })` and the sample town, d1/3/5, seeds 1–4, `Bot(SKILL.human)` firing all guns, step 1/30:
+   - **every living zombie, every step**, is ≥ 63 m from every child zone;
+   - **every impact** is ≥ `CHILD_FIRE_CLEARANCE` from every child zone (spec §5);
+   - no zombie ever spawns inside the mask.
+10. *Danger close:*
+    - every table value is ≥ reach + 3σ;
+    - a 105 aim point outside 35 m of T1 now but inside it at impact → `dangerCloseAt` ≥ 0 (Feel M1's test);
+    - the briefing contains the table's numbers verbatim.
+11. *Friendly fire on trucks:* a 105 on T2 → `friendlyHits` +1 and T2's hp drops, with no `survivor-lost` event. Two incidents → lost, with the existing reason.
+12. *Out of action:* T2 drained to 0 → `out`; T3 passes it (s₃ > s₂) and isn't blocked by it. With `needHome` no longer reachable → lost, with the convoy reason.
+13. *Intel:* the briefing names the entry street, exit street and compass words, and the three checkpoint labels in order. These equal `mission.convoy` and the labels in `state().convoy`, the HUD and the radio events.
+14. *Budget:* 600 living + 2,000 dead convoy step < 4 ms.
+
+**Other test files:**
+- `tests/sim.test.ts`: a new `EXPECTED_CONVOY_TRACE` (sample town, seed 1, d3, ace bot, 300 s). All existing constants stay unedited.
+- `tests/templates.test.ts`: **named test change, in its own commit.** "every template builds a valid mission" asserts a `safehouse` for every non-clear template, and that's no longer true. Replace it with: non-clear and not route-anchored → `safehouse`; route-anchored → `convoy` and `route`.
+- `tests/recon.test.ts`: the sample town's three suggestions still have real-name reasons, and the convoy card's reason contains no street it doesn't drive.
+- **Render:** `tests/trucks.test.ts` checks that the engine is the truck's hottest part and ≤ live zombie heat, that the roof panel is cold, and that strobes share the survivors' phase.
+- **Tour:** in `steps` mode the tour has exactly five stops and no tween (Feel M4).
+
+**Balance (`/balance`):** sample town plus the New York preset and the Adelaide fixture, 12 seeds, each difficulty, with the spec's table. Add one row that tests the assumption in the design itself: **the road-ahead bot's win rate must beat a near-truck bot's** (the same bot with the stock threat score) by ≥ 15 points at d3. If it doesn't, the stop rule isn't rewarding forward play, whatever the kill share says.
+
+**Playtest (`/playtest`):** `?template=convoy-main-road&seed=1&difficulty=3&autostart=1&bot=1` at desktop, 1280×800 and about 844×390:
+- the spec's screenshots;
+- the strobe and 105 flash case;
+- `DANGER CLOSE` via `aimAt` 25 m ahead of a moving T1;
+- truck labels;
+- the edge pin;
+- draw calls;
+- no console errors.
+
+### 10. Build order and shared files
+- **003 merges first** (owner queue: then 001's finale and screens). Shared files with 003: `src/sim/sim.ts` (`living`, `noGo`/`free()`, step order), `src/sim/missions.ts` (the `Mission` fields sit side by side), `src/map/recon.ts` (`childMask`), `src/sim/bot.ts`, `src/game/game.ts`, `src/game/agentsView.ts`, `src/ui/hud.ts`, `src/main.ts`, `scripts/playtest.mjs`, `tests/sim.test.ts`, `tests/worldFixture.ts`, `docs/QUALITY.md`.
+- **3.39** touches `game.ts` and `hud.ts` (orbit, MASKED). Convoy's game block goes in after it.
+- **3.41** touches `fire()` and `updateShells`. Either order works. Whichever lands second rebases about 10 lines in `updateShells`, and `dangerCloseAt` takes `predictImpact` once 3.41 exists (§3).
+- **Commit 1 touches no shared file** (below), so it can land while 003 is still open.
+
+### 11. Smallest first step
+**Commit 1: "Convoy route finder, headless".**
+- It adds `src/sim/convoy.ts` with `findConvoyRoute`, `corridorIndex` and the gap and length constants, plus `schoolHeavyTown({ mainRoads })` and `tests/convoy.test.ts` tests 1–3, plus test 4's auto-mission snapshot captured **before** any generator change.
+- Not yet in it: no template, no `Mission` field, no Sim change.
+- It proves the design's first unknown (do real maps leave guardrail-safe, main-road routes long enough to matter?) on code that can't move any existing fingerprint.
+
+**Commit 2 (after 003 merges): "Trucks in the sim".** It adds `TruckState`, the stop rule, contact, out of action, truck friendly fire, the convoy no-go mask, win and lose, `state().convoy`, and the template wiring (with the named `templates.test.ts` change in its own commit before it). Tests 4–14 and `EXPECTED_CONVOY_TRACE` come with it. That's where the assumption becomes measurable headless (the forward-bot against near-bot row) before any UI exists. The render, HUD, tour and radio follow.
+
+### Verdict: **APPROVED WITH CHANGES**
+1. **Child gap made concrete.** The route keeps 74 m from child places. Zombies are held outside a 65 m mask in the flow field, on every move and at spawn (003's `childMask` / `free()`). This is checked every step in play at 63 m with no allowance. It costs West Hobart its convoy, and the gap is never shrunk.
+2. **Length band.** The floor is 850 m. The target is 900 + 100(d−1) m, clamped to what the map allows. Both ends are clipped to the 0.9 box, so the sample town gives 990 m. "Rising with difficulty" becomes a target, not a reason to refuse.
+3. **One danger-close rule in the sim.** `CONVOY_DANGER_CLOSE` (25: 10 m, 40: 20 m, 105: 35 m) is measured to the truck's outline over its path during the round's flight time. The HUD, bot, near-miss event and briefing all use it, and the briefing quotes the exact numbers. After 3.41 it uses the predicted impact. Escort's own warning is unchanged.
+4. **Trucks are gated `Survivor` entries, not a new agent list.** That reuses Escort's targeting, ambushes, spawn gap, friendly-fire counting and win check. Every difference is an `s.truck` branch.
+5. **The sim orbit stays fixed** around the route's box centre. There's no moving sim orbit in v1, and Convoy adds no new reader of the gunship's position.
+6. **No wave arrows.** The briefing says ambushes come at the road ahead, which is true by the sim's rule. This replaces spec §7's `likelyWaveDirections` line.
+7. **Template wiring.** The convoy is a route-anchored template (`on: 'main-road'`), offered only with main roads and filtered by the generator. `tests/templates.test.ts` gets a named assertion change in its own commit. The guardrail test needs `schoolHeavyTown({ mainRoads: true })`, because the stock fixture never offers a convoy.
+8. **A convoy-aware bot** (gated), plus the forward-against-near bot row in `/balance`, so the assumption is measured on the design, not on the bot.
+9. **Checkpoint labels** prefer the cross street and never use a child-place name (`isChildPlaceName`).
+10. **Strobes stay in phase** (Feel M3; this replaces §6's "offset phases" option). For the owner via the Chief: does hitting a truck that's already out of action count as friendly fire? (Feel S5; proposed: yes.)
+
 ## Feel & access  *(added by feel-designer)*
 
 ## Owner decision (22 Nov 2026)
