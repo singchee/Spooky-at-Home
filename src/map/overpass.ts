@@ -9,7 +9,20 @@ import { hashString, mulberry32 } from '../util/rng';
  * The player's browser makes these requests directly; nothing passes through a game server.
  * Overpass is a shared community service: keep requests small and infrequent.
  */
-const OVERPASS_ENDPOINTS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+export const OVERPASS_ENDPOINTS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'] as const;
+
+/**
+ * How long the game waits (BACKLOG 3.20). A busy server can sit on a query for minutes before
+ * saying so; past these limits the game moves on, one server at a time (never both at once:
+ * Overpass is a shared service).
+ * - firstAnswerMs: the first server gets this long to start answering, then the next one is asked.
+ * - overallWaitMs: total time spent waiting for any server to start answering; then "busy".
+ * - stallMs: once an answer is arriving, how long it may go without sending a single byte.
+ * A download that keeps arriving is never cut off: a slow home connection still gets its map.
+ */
+export const LOAD_LIMITS = { firstAnswerMs: 45_000, overallWaitMs: 120_000, stallMs: 30_000 };
+/** The extras are only looks: wait less for them, and say nothing if they never come. */
+export const EXTRAS_LIMITS = { firstAnswerMs: 60_000, overallWaitMs: 90_000, stallMs: 30_000 };
 
 const ROAD_WIDTHS: Record<string, number> = {
   motorway: 14, trunk: 12, primary: 10, secondary: 9, tertiary: 8, unclassified: 6, residential: 7,
@@ -26,16 +39,37 @@ const MAX_TREES = 5000;
 const MAX_LAMPS = 3000;
 
 /**
- * One request per map, in three output blocks: ways and nodes with full geometry; big
- * multipolygon places (forests, parks, schools) as a centre point only, which keeps the answer
- * small; and bus routes with their geometry clipped to the map square.
+ * The map comes in two parts (BACKLOG 3.23), so the player reaches recon as soon as the part that
+ * matters has arrived:
+ * - 'core': everything missions, recon and the guardrail use. Ways and nodes with full geometry;
+ *   protected campuses (school, kindergarten, childcare) as relations with full geometry, so their
+ *   whole grounds are protected (PLAN §9); big multipolygon places (forests, parks, hospitals) as a
+ *   centre point only, which keeps the answer small.
+ * - 'extras': things that only change how the map looks: mapped trees, street lamps, and bus
+ *   routes with their geometry clipped to the map square. Fetched afterwards, in the background;
+ *   if it never arrives, the missions are exactly the same.
+ * `timeoutS` is Overpass's own time limit, matched to how long the game will wait for that server,
+ * so a server never keeps working on a query nobody is waiting for.
  */
-export function buildQuery(origin: LatLon, half: number): string {
+export type QueryPart = 'core' | 'extras';
+
+export function buildQuery(origin: LatLon, half: number, part: QueryPart = 'core', timeoutS = LOAD_LIMITS.firstAnswerMs / 1000): string {
   const b = bboxAround(origin, half);
   const bb = `${b.south.toFixed(6)},${b.west.toFixed(6)},${b.north.toFixed(6)},${b.east.toFixed(6)}`;
+  const head = `[out:json][timeout:${Math.max(10, Math.round(timeoutS))}];`;
+  if (part === 'extras') {
+    return `${head}
+(
+  node["highway"="street_lamp"](${bb});
+  node["natural"="tree"](${bb});
+);
+out;
+relation["route"="bus"](${bb});
+out geom(${bb});`;
+  }
   const hw = Object.keys(ROAD_WIDTHS).join('|');
   const am = [...POI_AMENITIES, 'kindergarten', 'childcare', 'parking', 'bus_station'].join('|');
-  return `[out:json][timeout:60];
+  return `${head}
 (
   way["building"](${bb});
   way["highway"~"^(${hw})$"](${bb});
@@ -51,8 +85,6 @@ export function buildQuery(origin: LatLon, half: number): string {
   node["club"="tennis"](${bb});
   node["shop"~"^(supermarket|mall)$"](${bb});
   node["railway"~"^(station|halt)$"](${bb});
-  node["highway"="street_lamp"](${bb});
-  node["natural"="tree"](${bb});
 );
 out geom;
 relation["amenity"~"^(school|kindergarten|childcare)$"](${bb});
@@ -64,9 +96,7 @@ out geom;
   relation["amenity"="hospital"](${bb});
   relation["shop"="mall"](${bb});
 );
-out center tags;
-relation["route"="bus"](${bb});
-out geom(${bb});`;
+out center tags;`;
 }
 
 export interface OverpassMember {
@@ -92,6 +122,11 @@ export interface OverpassElement {
 
 export interface OverpassJson {
   elements: OverpassElement[];
+  /**
+   * Which parts of the map this answer holds (kept with a saved place). Missing: a download from
+   * before the two-part load, which asked for everything at once.
+   */
+  parts?: QueryPart[];
   /** Overpass reports a query that ran out of time or memory here, with HTTP 200 and partial (or no) elements. */
   remark?: string;
 }
@@ -177,30 +212,178 @@ export function checkOverpassAnswer(json: OverpassJson, url: string): OverpassJs
   return json;
 }
 
-export async function fetchOverpass(origin: LatLon, half: number, signal?: AbortSignal): Promise<OverpassJson> {
-  const body = 'data=' + encodeURIComponent(buildQuery(origin, half));
-  let lastErr: unknown;
-  const kinds: MapErrorKind[] = [];
-  for (const url of OVERPASS_ENDPOINTS) {
-    try {
-      const res = await fetchOrOffline(url, {
-        method: 'POST',
-        body,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        signal,
-      }, 'the map server');
-      if (!res.ok) throw new MapLoadError(BUSY_STATUS.has(res.status) ? 'busy' : 'other', `${url} answered ${res.status}`);
-      // A timed-out or failed query still answers 200; try the next server instead.
-      return checkOverpassAnswer((await res.json()) as OverpassJson, url);
-    } catch (e) {
-      if (signal?.aborted || isAbort(e)) throw e;
-      lastErr = e;
-      kinds.push(classifyMapError(e));
+/** What the scout screen shows while a map part downloads. Never a made-up percentage. */
+export interface DownloadProgress {
+  /** 'waiting': asked, no answer yet (the server is still working out the area). 'downloading': bytes are arriving. */
+  stage: 'waiting' | 'downloading';
+  /** The server being asked, e.g. "overpass-api.de". A fixed constant, never map text. */
+  host: string;
+  /** 0 for the first server, 1 for the fallback. */
+  attempt: number;
+  /** Bytes received so far (after the browser has unzipped them, if the server zipped them). */
+  bytes: number;
+  /**
+   * The size the server announced (Content-Length), or null when it didn't say. With a zipped
+   * answer this is the zipped size, so `bytes` can overtake it: see progressFraction.
+   */
+  total: number | null;
+  /** Why the previous server was left, in plain English, when this is a fallback. */
+  movedOn?: string;
+}
+
+/** Where the time went, for the owner's timing line (BACKLOG 3.22). Kept in memory only. */
+export interface DownloadStats {
+  host: string;
+  /** Waiting for a first answer, on every server asked (a slow first server counts too). */
+  waitMs: number;
+  /** First byte to last byte on the server that answered. */
+  downloadMs: number;
+  bytes: number;
+  attempts: number;
+}
+
+export interface FetchOptions {
+  part?: QueryPart;
+  onProgress?: (p: DownloadProgress) => void;
+  limits?: Partial<typeof LOAD_LIMITS>;
+  /** Ask this server first (the extras go to whichever server just answered the core). */
+  preferHost?: string;
+}
+
+const hostOf = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+const now = () => Date.now();
+
+/** Reads the body as a stream, reporting bytes as they arrive. Falls back to res.json() when there's no stream. */
+async function readBody(res: Response, onBytes: (n: number) => void): Promise<unknown> {
+  const reader = res.body && typeof res.body.getReader === 'function' ? res.body.getReader() : null;
+  if (!reader) return res.json();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value?.byteLength) {
+      chunks.push(value);
+      bytes += value.byteLength;
+      onBytes(bytes);
     }
   }
-  // Busy anywhere: worth another go soon. Unreachable everywhere: a connection problem.
-  const kind: MapErrorKind = kinds.includes('busy') ? 'busy' : kinds.every((k) => k === 'offline') ? 'offline' : 'other';
-  throw new MapLoadError(kind, `Could not download map data (${String(lastErr)})`);
+  const all = new Uint8Array(bytes);
+  let at = 0;
+  for (const c of chunks) {
+    all.set(c, at);
+    at += c.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(all));
+  } catch {
+    throw new MapLoadError('other', 'The map server sent an answer this game cannot read');
+  }
+}
+
+/** "Content-Length: 123" as a number, or null. */
+export function announcedLength(res: Pick<Response, 'headers'>): number | null {
+  const v = Number(res.headers?.get?.('content-length') ?? NaN);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/**
+ * Downloads one part of the map from Overpass: one server at a time, each with a time limit,
+ * reporting progress. Throws MapLoadError ('busy', 'offline' or 'other'), or an AbortError on cancel.
+ */
+export async function fetchOverpassTimed(origin: LatLon, half: number, signal?: AbortSignal, o: FetchOptions = {}): Promise<{ json: OverpassJson; stats: DownloadStats }> {
+  const limits = { ...(o.part === 'extras' ? EXTRAS_LIMITS : LOAD_LIMITS), ...o.limits };
+  const urls: string[] = [...OVERPASS_ENDPOINTS];
+  if (o.preferHost) urls.sort((a, b) => (hostOf(b) === o.preferHost ? 1 : 0) - (hostOf(a) === o.preferHost ? 1 : 0));
+  let lastErr: unknown;
+  let movedOn: string | undefined;
+  let waited = 0;
+  const kinds: MapErrorKind[] = [];
+  for (let attempt = 0; attempt < urls.length; attempt++) {
+    const url = urls[attempt];
+    const host = hostOf(url);
+    // The first server gets firstAnswerMs; the next one whatever is left of overallWaitMs.
+    const limit = attempt === 0 ? Math.min(limits.firstAnswerMs, limits.overallWaitMs) : limits.overallWaitMs - waited;
+    if (limit < 5_000) break;
+    const ctrl = new AbortController();
+    const cancel = () => ctrl.abort();
+    signal?.addEventListener('abort', cancel);
+    let gaveUp: 'wait' | 'stall' | null = null;
+    let timer = setTimeout(() => ((gaveUp = 'wait'), ctrl.abort()), limit);
+    const t0 = now();
+    let tFirst = 0;
+    let bytes = 0;
+    let total: number | null = null;
+    try {
+      if (signal?.aborted) throw new DOMException('cancelled', 'AbortError');
+      o.onProgress?.({ stage: 'waiting', host, attempt, bytes: 0, total: null, movedOn });
+      const res = await fetchOrOffline(url, {
+        method: 'POST',
+        body: 'data=' + encodeURIComponent(buildQuery(origin, half, o.part ?? 'core', limit / 1000)),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        signal: ctrl.signal,
+      }, 'the map server');
+      tFirst = now();
+      if (!res.ok) throw new MapLoadError(BUSY_STATUS.has(res.status) ? 'busy' : 'other', `${url} answered ${res.status}`);
+      total = announcedLength(res);
+      const stall = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => ((gaveUp = 'stall'), ctrl.abort()), limits.stallMs);
+      };
+      stall();
+      o.onProgress?.({ stage: 'downloading', host, attempt, bytes: 0, total, movedOn });
+      const json = await readBody(res, (n) => {
+        bytes = n;
+        stall();
+        o.onProgress?.({ stage: 'downloading', host, attempt, bytes, total, movedOn });
+      });
+      // A timed-out or failed query still answers 200; try the next server instead.
+      const ok = checkOverpassAnswer(json as OverpassJson, url);
+      return { json: ok, stats: { host, waitMs: waited + (tFirst - t0), downloadMs: now() - tFirst, bytes, attempts: attempt + 1 } };
+    } catch (e) {
+      if (signal?.aborted) throw isAbort(e) ? e : new DOMException('cancelled', 'AbortError');
+      const err = gaveUp === 'wait'
+        ? new MapLoadError('busy', `${host} didn't start answering within ${Math.round(limit / 1000)} s`)
+        : gaveUp === 'stall'
+          ? new MapLoadError('busy', `${host} stopped sending for ${Math.round(limits.stallMs / 1000)} s`)
+          : e;
+      lastErr = err;
+      const kind = classifyMapError(err);
+      kinds.push(kind);
+      movedOn = gaveUp === 'wait'
+        ? `${host} didn't answer within ${Math.round(limit / 1000)} seconds`
+        : kind === 'offline' ? `couldn't reach ${host}` : `${host} was too busy`;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      waited += (tFirst || now()) - t0;
+    }
+  }
+  // Busy anywhere (or out of time): worth another go soon. Unreachable everywhere: a connection problem.
+  const kind: MapErrorKind = kinds.includes('busy') || !kinds.length ? 'busy' : kinds.every((k) => k === 'offline') ? 'offline' : 'other';
+  throw new MapLoadError(kind, `Could not download map data (${String(lastErr ?? 'out of time')})`);
+}
+
+/** The core of the map (or `part`), without the progress details. */
+export async function fetchOverpass(origin: LatLon, half: number, signal?: AbortSignal, o: FetchOptions = {}): Promise<OverpassJson> {
+  return (await fetchOverpassTimed(origin, half, signal, o)).json;
+}
+
+/**
+ * Adds the extras (trees, street lamps, bus routes) to a map built from the core. Changes `map` in
+ * place, so a recon screen already showing it picks them up; nothing a mission uses changes.
+ */
+export function addExtras(map: MapData, extras: OverpassJson, origin: LatLon): MapData {
+  const x = parseOverpass(extras, origin, map.half, map.name);
+  map.trees = x.trees;
+  map.lamps = x.lamps;
+  map.busRoutes = x.busRoutes;
+  return map;
+}
+
+/** Core and extras as one answer (to keep on this device). */
+export function joinParts(core: OverpassJson, extras: OverpassJson): OverpassJson {
+  return { elements: [...core.elements, ...extras.elements], parts: ['core', 'extras'] };
 }
 
 function buildingHeight(tags: Record<string, string>, id: number): number {

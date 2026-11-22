@@ -1,13 +1,15 @@
 import type { MapData, V2 } from '../map/types';
 import { FEATURE_CATEGORIES } from '../map/types';
 import { makeSampleTown } from '../map/sample';
-import { checkEnoughMap, classifyMapError, fetchOverpass, geocode, mapErrorMessage, parseOverpass, type OverpassJson } from '../map/overpass';
+import { addExtras, checkEnoughMap, classifyMapError, fetchOverpassTimed, geocode, joinParts, mapErrorMessage, parseOverpass, type DownloadProgress, type DownloadStats, type OverpassJson } from '../map/overpass';
 import { centroid } from '../map/geom';
 import type { MissionType } from '../sim/missions';
 import type { TemplateId } from '../map/recon';
 import { el } from './dom';
-import { showRecon, type SavedNote } from './recon';
+import { showRecon, type ReconView, type SavedNote } from './recon';
 import { placeCache, placeId, timeAgo } from './placeCache';
+import { formatClock, formatDuration, readout, SpeakThrottle, timingLine, type BarMode } from './loadProgress';
+import { getSettings } from './settings';
 
 /**
  * Everything between the front page and a briefing:
@@ -72,10 +74,19 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   progress.setAttribute('aria-live', 'polite');
   const sweep = el('div', 'scout-sweep', undefined, progress);
   sweep.setAttribute('aria-hidden', 'true');
-  el('span', undefined, undefined, sweep);
+  const sweepFill = el('span', undefined, undefined, sweep);
   const stageList = el('ol', 'scout-stages', undefined, progress);
   const stageItems = SCOUT_STAGES.map((t) => el('li', undefined, t, stageList));
   const placeLine = el('p', 'small scout-place', undefined, progress);
+  // The download readout (BACKLOG 3.23). It changes every second, so screen readers get the
+  // short sentence in `spoken` instead, now and then.
+  const load = el('div', 'scout-load', undefined, progress);
+  load.setAttribute('aria-hidden', 'true');
+  const loadText = el('p', 'scout-load-text', undefined, load);
+  const loadMeta = el('p', 'small scout-load-meta', undefined, load);
+  const elapsedEl = el('span', 'scout-elapsed', '0:00', loadMeta);
+  const serverEl = el('span', 'scout-server', undefined, loadMeta);
+  const spoken = el('p', 'sr-only scout-spoken', undefined, progress);
   const cancel = el('button', 'scout-cancel', 'Cancel', progress);
   cancel.type = 'button';
 
@@ -120,22 +131,28 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   const currentMap = () => (map ??= makeSampleTown());
 
   // ---------- switching screens ----------
-  let closeRecon: (() => void) | null = null;
+  let recon: ReconView | null = null;
   /** The note under the recon heading for a place kept on this device (only for that map). */
   let savedNote: (SavedNote & { map: MapData }) | null = null;
+  /** How the current map's load went: its extras, and the owner's timing line (memory only). */
+  let loadInfo: { map: MapData; extras: 'pending' | 'added' | 'failed' | null; timing?: string } | null = null;
   const show = (mode: MenuMode) => {
-    closeRecon?.();
-    closeRecon = null;
+    recon?.close();
+    recon = null;
     root.dataset.mode = mode;
     scout.hidden = mode !== 'scout';
     custom.hidden = mode !== 'custom';
     if (mode === 'recon') {
       const m = currentMap();
-      closeRecon = showRecon(root, m, { seed: seedValue(), difficulty: Number(diff.value) }, {
+      recon = showRecon(root, m, { seed: seedValue(), difficulty: Number(diff.value) }, {
         onChoose: (s, d, sd) => onStart({ map: m, type: s.base, template: s.template, anchor: s.anchor?.id, difficulty: d, seed: sd }),
         onCustom: () => show('custom'),
         onBack: () => show('scout'),
       }, savedNote?.map === m ? savedNote : undefined);
+      if (loadInfo?.map === m) {
+        if (loadInfo.extras === 'pending') recon.extras('pending');
+        if (loadInfo.timing) recon.timing(loadInfo.timing);
+      }
     }
     if (mode === 'custom') {
       const m = currentMap();
@@ -156,23 +173,102 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   // ---------- scouting a typed place ----------
   let run = 0;
   let ctrl: AbortController | null = null;
+  let alive = true;
   const setStage = (i: number, text?: string) => {
     stageItems.forEach((li, k) => {
       li.dataset.state = k < i ? 'done' : k === i ? 'active' : 'todo';
       if (k === i && text) li.textContent = text;
     });
+    if (i !== 1) showDetail(null);
+  };
+  // ----- the honest readout: stage, elapsed time, which server, bytes (never a made-up percentage) -----
+  let started = 0;
+  let clock: ReturnType<typeof setInterval> | null = null;
+  let lastProgress: DownloadProgress | null = null;
+  const speak = new SpeakThrottle(20_000);
+  const reduced = () => (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) || getSettings().reduceFlicker;
+  const setBar = (mode: BarMode, fraction: number | null) => {
+    sweep.dataset.mode = mode;
+    sweepFill.style.width = mode === 'determinate' && fraction !== null ? `${(fraction * 100).toFixed(1)}%` : '';
+  };
+  /** Shows a download's progress, or (null) hides the download details. */
+  const showDetail = (p: DownloadProgress | null) => {
+    lastProgress = p;
+    loadText.hidden = !p;
+    serverEl.hidden = !p;
+    if (!p) {
+      setBar('waiting', null);
+      return;
+    }
+    const r = readout(p, Date.now() - started);
+    loadText.textContent = r.text;
+    serverEl.textContent = ` · ${r.server}`;
+    setBar(r.bar, r.fraction);
+    if (speak.ready(`${p.stage}:${p.attempt}`, Date.now())) spoken.textContent = r.spoken;
+  };
+  const tick = () => {
+    elapsedEl.textContent = formatClock(Date.now() - started);
+    // Still waiting: remind screen readers how long it's been (the throttle spaces it out).
+    if (lastProgress?.stage === 'waiting' && speak.ready(`waiting:${lastProgress.attempt}`, Date.now())) spoken.textContent = readout(lastProgress, Date.now() - started).spoken;
   };
   const setBusy = (busy: boolean) => {
     progress.hidden = !busy;
     form.classList.toggle('busy', busy);
     q.disabled = busy;
     go.disabled = busy;
+    if (clock) clearInterval(clock);
+    clock = null;
     if (busy) {
       msg.hidden = true;
       stageItems.forEach((li, k) => (li.textContent = SCOUT_STAGES[k]));
       placeLine.textContent = '';
+      spoken.textContent = '';
+      progress.classList.toggle('still', reduced());
+      started = Date.now();
+      elapsedEl.textContent = formatClock(0);
+      showDetail(null);
+      clock = setInterval(tick, 1000);
     }
   };
+
+  // ----- the extras (trees, lamps, bus routes): fetched after recon shows, merged when they arrive -----
+  let extrasCtrl: AbortController | null = null;
+  const dropExtras = () => {
+    extrasCtrl?.abort();
+    extrasCtrl = null;
+  };
+  const fetchExtras = (place: { lat: number; lon: number }, core: OverpassJson, m: MapData, preferHost?: string) => {
+    dropExtras();
+    const c = new AbortController();
+    extrasCtrl = c;
+    const t0 = Date.now();
+    if (loadInfo?.map === m) loadInfo.extras = 'pending';
+    recon?.extras('pending');
+    fetchOverpassTimed(place, HALF, c.signal, { part: 'extras', preferHost })
+      .then(async ({ json }) => {
+        if (c.signal.aborted) return;
+        // Once a mission has started, the map it flies is left alone; the copy on this device still gets them.
+        if (alive && map === m) {
+          addExtras(m, json, place);
+          if (loadInfo?.map === m) {
+            loadInfo.extras = 'added';
+            if (loadInfo.timing) loadInfo.timing += ` · trees, lamps and bus routes ${formatDuration(Date.now() - t0)} later`;
+          }
+          recon?.extras('added');
+          if (loadInfo?.map === m && loadInfo.timing) recon?.timing(loadInfo.timing);
+        }
+        await cache.update(place.lat, place.lon, joinParts(core, json));
+      })
+      .catch(() => {
+        if (c.signal.aborted) return;
+        if (loadInfo?.map === m) loadInfo.extras = 'failed';
+        if (map === m) recon?.extras('failed'); // looks only: the game carries on without them
+      })
+      .finally(() => {
+        if (extrasCtrl === c) extrasCtrl = null;
+      });
+  };
+  const cache = placeCache();
   const say = (text: string, kind: 'error' | 'note') => {
     msg.hidden = false;
     msg.className = `scout-msg ${kind}`;
@@ -189,12 +285,13 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   /** `refresh`: download this (already found) place again instead of using the copy on this device. */
   const scoutPlace = async (query: string, refresh?: { lat: number; lon: number; label: string }) => {
     const id = ++run;
+    const tStart = Date.now();
+    dropExtras(); // a new place: the last one's trees and lamps aren't wanted any more
     ctrl = new AbortController();
     const signal = ctrl.signal;
     setBusy(true);
     setStage(0);
     cancel.focus({ preventScroll: true });
-    const cache = placeCache();
     try {
       // Scouted before on this device: no request to OpenStreetMap at all.
       let saved = refresh ? null : await cache.findByQuery(query);
@@ -205,6 +302,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
       if (!refresh && !saved) saved = await cache.findByCoords(place.lat, place.lon, query);
       if (id !== run) return;
       let json: OverpassJson;
+      let stats: DownloadStats | null = null;
       if (saved) {
         setStage(1, `Loaded from this device · downloaded ${timeAgo(Date.now() - saved.savedAt)}`);
         placeLine.textContent = `${place.label}.`;
@@ -212,14 +310,19 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
         await painted(400); // long enough to read where it came from
       } else {
         setStage(1);
-        placeLine.textContent = `${place.label}. This can take 10 to 20 seconds.`;
-        json = await fetchOverpass(place, HALF, signal);
+        placeLine.textContent = `${place.label}.`;
+        // The core only: what missions and recon need. The extras follow once recon is showing.
+        const got = await fetchOverpassTimed(place, HALF, signal, { part: 'core', onProgress: (p) => id === run && showDetail(p) });
+        json = { ...got.json, parts: ['core'] };
+        stats = got.stats;
       }
       if (id !== run) return;
       setStage(2);
       await painted();
       if (id !== run) return;
+      let tBuild = Date.now();
       const m = checkEnoughMap(trim(parseOverpass(json, place, HALF, place.label)));
+      let buildMs = Date.now() - tBuild;
       setStage(2, `Reading the map (${m.buildings.length.toLocaleString('en')} buildings, ${m.roads.length.toLocaleString('en')} roads)…`);
       // Keep a fresh download on this device (only a map good enough to fly over is worth keeping).
       const [, kept] = await Promise.all([painted(350), saved ? true : cache.save(query, place, json)]);
@@ -229,6 +332,8 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
       if (id !== run) return;
       ctrl = null;
       setBusy(false);
+      loadInfo = { map: m, extras: null };
+      tBuild = Date.now();
       toRecon(m, kept ? {
         fromDevice: !!saved,
         savedAt: saved?.savedAt ?? Date.now(),
@@ -239,6 +344,13 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
         },
         onForget: () => cache.forget(placeId(place.lat, place.lon)),
       } : undefined);
+      buildMs += Date.now() - tBuild; // reading the map plus finding the missions that fit it
+      loadInfo.timing = stats
+        ? timingLine({ totalMs: Date.now() - tStart, serverMs: stats.waitMs, downloadMs: stats.downloadMs, buildMs, host: stats.host })
+        : `Opened from this device in ${formatDuration(Date.now() - tStart)}`;
+      recon?.timing(loadInfo.timing);
+      // Only the core so far (a fresh download, or one saved before its extras came): get the rest quietly.
+      if (json.parts && !json.parts.includes('extras')) fetchExtras(place, json, m, stats?.host);
     } catch (e) {
       if (id !== run) return; // cancelled, or a newer search started
       ctrl = null;
@@ -269,6 +381,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   });
   const sample = () => {
     stop();
+    dropExtras();
     toRecon(makeSampleTown());
   };
   sampleBtn.addEventListener('click', sample);
@@ -282,6 +395,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
     try {
       const m = loadMapFile(JSON.parse(await f.text()), f.name);
       stop();
+      dropExtras();
       toRecon(m);
     } catch (e) {
       say(`That file isn't a map this game understands (${(e as Error).message}).`, 'error');
@@ -292,6 +406,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
 
   // ---------- custom form actions ----------
   cSample.addEventListener('click', () => {
+    dropExtras();
     map = makeSampleTown();
     status.textContent = describe(map);
     customAttrib.textContent = map.attribution;
@@ -318,8 +433,11 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
 
   show(opts.mode);
   return () => {
+    // The extras keep coming in the background, for the copy on this device only:
+    // the map a mission is flying is never changed under it.
+    alive = false;
     stop();
-    closeRecon?.();
+    recon?.close();
     root.remove();
   };
 }

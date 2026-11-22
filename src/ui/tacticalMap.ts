@@ -123,6 +123,11 @@ export class TacticalMap {
     }
   }
 
+  /** Draws the map again at its current width (its trees and bus routes arrived later). */
+  redraw(): void {
+    this.render(this.drawnFor || this.opts.size || 560);
+  }
+
   /** Draws everything for a map shown `width` CSS pixels wide. */
   private render(width: number): void {
     const opts = this.opts;
