@@ -69,6 +69,8 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 | 3.31 | Intro update (owner, later): besides the guns, cover the vision features (white hot, black hot, night vision, cold-blooded, zoom). Needs a script revision and new voice lines within the ElevenLabs cap | story, sound, playtest | later |
 | 3.32 | Bug: cold-blooded stragglers can be impossible to find and the game seems endless (owner). Reproduce, fix causes, add endgame help (radio names the area, soft search circle, restless stragglers) | review, balance, playtest | in-progress |
 
+| 3.33 | Friendly tracking boxes (owner idea, maybe an upgrade): corner-bracket boxes around friendlies, like body-cam / targeting-pod tracking, in every sensor. Chief's note: telling friend from foe is part of the skill (ID panel in thermal, IR strobe in night vision), so: always on in Training and difficulty 1; an "IFF tracker" unlock in the campaign / Horde Night (pairs with 3.28/3.29); and an accessibility toggle in Settings for anyone who needs it. Boxes must never flash, must follow the friendly smoothly, and must not cover the zombie next to them | pitch, feel, playtest | later |
+
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game
