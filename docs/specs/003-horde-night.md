@@ -360,3 +360,6 @@ Reviewed against the owner's cap (Big 600 on the tablet, Huge 1,200 on desktop, 
 
 ## Owner decision (22 Nov 2026, clarifying "max 1,200")
 **1,200 includes bodies**: at most 1,200 zombie figures drawn at once, living and dead together. The build sets each size's living cap and body cap inside that total (bodies fade out over at least 1 s when the cap removes them, per Feel S4). The sim budget (2,000 living + 6,000 dead under 4 ms) stays as headroom.
+
+## Build note: flash scenario B's target
+Scenario B keeps the spec's **over 50 kills a second sustained over 10 s** and adds **at least one 1-second window of 150+ kills** (the opening burst), so the gate is strictly harder than the spec's and needs no owner sign-off. B now holds fire until Huge is at its 800 cap, opens with the 105 on the densest cell and brings the 40 and 25 onto the same spot: the browser run reached 74.9 kills a second over 10 s and a best second of 291, and passed the flash limits (≤ 3 flashes a second, < 25% of the screen). An earlier build commit proposed lowering the sustained target to 35/s; that is withdrawn.

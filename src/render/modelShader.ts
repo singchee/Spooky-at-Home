@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BakedModel } from './characterModels';
+import { LEAN_GLSL } from './lean';
 
 /**
  * Instanced drawing of a baked character model (see src/render/characterModels.ts): one draw call
@@ -23,31 +24,7 @@ export const MODEL_PANEL_SIZE = 0.28;
 /** The panel is drawn as if this much nearer the camera, so its own body never hides it. */
 const PANEL_PULL = 0.9;
 
-/** The most a figure leans back on a steep view (horizontal metres per metre of height). */
-export const FIGURE_LEAN_MAX = 0.6;
-/** Figures lean back to keep the screen height they would have seen from this many degrees off vertical. */
-export const FIGURE_LEAN_REF_DEG = 40;
-const LEAN_SIN = Math.sin((FIGURE_LEAN_REF_DEG * Math.PI) / 180);
-
-/**
- * How far a figure leans back, away from the camera (horizontal metres per metre of height), given
- * the vector from its feet to the camera. The vertex shader below does the same sums; the IR strobe
- * (agentsView.ts) uses this so it stays on the leaning head.
- */
-export function figureLean(toCamX: number, toCamY: number, toCamZ: number): number {
-  const hz = Math.hypot(toCamX, toCamZ);
-  if (hz <= 1e-3) return 0;
-  const L = Math.hypot(hz, toCamY);
-  return Math.max(0, Math.min(FIGURE_LEAN_MAX, (LEAN_SIN - hz / L) / Math.max(toCamY / L, 0.2)));
-}
-
-/** Lean point (x, y, z), relative to the feet, the way the shader does: away from the camera by y * lean. */
-export function leanPoint(p: [number, number, number], toCamX: number, toCamY: number, toCamZ: number): [number, number, number] {
-  const lean = figureLean(toCamX, toCamY, toCamZ);
-  const hz = Math.hypot(toCamX, toCamZ);
-  if (!lean || hz <= 1e-3) return p;
-  return [p[0] - (toCamX / hz) * p[1] * lean, p[1], p[2] - (toCamZ / hz) * p[1] * lean];
-}
+export { FIGURE_LEAN_MAX, FIGURE_LEAN_REF_DEG, figureLean, leanPoint } from './lean';
 
 const vertexShader = /* glsl */ `
   uniform highp sampler2D uPos;
@@ -63,7 +40,7 @@ const vertexShader = /* glsl */ `
   attribute vec4 iA; // x, z, heading, seed 0-1
   attribute vec4 iB; // clip A: row, next row, fraction; weight of clip B
   attribute vec4 iC; // clip B: row, next row, fraction; 1 when dead
-  attribute vec4 iD; // core heat, limb heat, visible-light scale, unused
+  attribute vec4 iD; // core heat, limb heat, visible-light scale, body sink 0-1 (spec 003 body cap)
   varying vec3 vSig;
 
   mat3 rotY(float a) { float c = cos(a), s = sin(a); return mat3(c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c); }
@@ -93,18 +70,8 @@ const vertexShader = /* glsl */ `
     p = rYaw * p;
     n = rYaw * n;
 
-    // 3.39: the camera rides the line of fire, often steeper than the old 40° slant, where a standing
-    // figure would shrink to a blob. Lean it back, away from the camera (a shear, pivot at the feet, so
-    // a body lying down barely moves), just enough to keep the screen height it had at 40°.
-    vec3 toCam = cameraPosition - vec3(iA.x, uBase, iA.y);
-    float hz = length(toCam.xz);
-    if (hz > 1e-3) {
-      float sv = hz / length(toCam);        // sin of the angle off vertical
-      float cv = toCam.y / length(toCam);   // cos
-      float lean = clamp((${LEAN_SIN.toFixed(6)} - sv) / max(cv, 0.2), 0.0, ${FIGURE_LEAN_MAX.toFixed(2)});   // = figureLean()
-      p.xz -= toCam.xz / hz * p.y * lean;
-    }
-    vec4 world = modelMatrix * vec4(iA.x + p.x, uBase + p.y, iA.y + p.z, 1.0);
+    ${LEAN_GLSL('vec3(iA.x, uBase, iA.y)', 'p')}
+    vec4 world = modelMatrix * vec4(iA.x + p.x, uBase + p.y - iD.w * 1.6, iA.y + p.z, 1.0);
     vec4 mv = viewMatrix * world;
     if (aPanel > 0.5) {
       mv.xy += aCorner * ${(MODEL_PANEL_SIZE / 2).toFixed(4)} * uScale;   // a square facing the camera

@@ -15,6 +15,7 @@ Deciding what is "minor" is itself a risk: a system grading its own work tends t
 1. **The class comes from fixed rules on the diff** (`tools/classify-change.ts`), not from an agent's opinion.
 2. **Agents can raise a class, never lower it.**
 3. **When unsure, escalate.**
+4. **Only a grade against the main version counts for a merge into main.** `--base <branch>` is for grading work inside a phase branch; a merge into `main` is always graded with the default base, `origin/main` (owner, 22 Nov 2026).
 
 ## 2. Decision classes
 

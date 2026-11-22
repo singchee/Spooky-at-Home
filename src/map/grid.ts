@@ -120,15 +120,18 @@ export class WalkGrid {
     return out;
   }
 
-  /** Breadth-first step counts from the source cells to every reachable free cell (-1 = unreachable). */
-  flowField(sources: number[]): Int32Array {
+  /**
+   * Breadth-first step counts from the source cells to every reachable free cell (-1 = unreachable).
+   * `avoid` (optional, spec 003) marks more cells to treat as blocked: a crowd's paths never enter them.
+   */
+  flowField(sources: number[], avoid?: Uint8Array): Int32Array {
     const n = this.n;
     const d = new Int32Array(n * n).fill(-1);
     const q = this.queue;
     let head = 0;
     let tail = 0;
     for (const s of sources) {
-      if (s >= 0 && d[s] === -1 && !this.blocked[s]) {
+      if (s >= 0 && d[s] === -1 && !this.blocked[s] && !avoid?.[s]) {
         d[s] = 0;
         q[tail++] = s;
       }
@@ -146,7 +149,7 @@ export class WalkGrid {
           const ii = i + di;
           if (ii < 0 || ii >= n) continue;
           const v = jj * n + ii;
-          if (d[v] !== -1 || this.blocked[v]) continue;
+          if (d[v] !== -1 || this.blocked[v] || (avoid && avoid[v])) continue;
           // no cutting corners between two blocked cells
           if (di !== 0 && dj !== 0 && (this.blocked[j * n + ii] || this.blocked[jj * n + i])) continue;
           d[v] = du;
@@ -185,6 +188,42 @@ export class WalkGrid {
     const dz = this.cz(bj) - z;
     const len = Math.hypot(dx, dz) || 1;
     return { x: dx / len, z: dz / len };
+  }
+
+  /**
+   * A crowd's heading (spec 003): down the field's slope, from all eight neighbours at once, with walls and
+   * unreachable cells counted as uphill. Unlike downhill() it doesn't steer to a cell centre, so zombies side by
+   * side keep their lanes and a stream fills the street instead of folding into single file. Falls back to
+   * downhill() where the slope is flat or disagrees with it. Null when there's no way.
+   */
+  steer(field: Int32Array, x: number, z: number): V2 | null {
+    const k = this.idx(x, z);
+    if (k < 0 || field[k] < 0) return null;
+    const n = this.n;
+    const i = k % n;
+    const j = (k - i) / n;
+    const f0 = field[k];
+    let gx = 0;
+    let gz = 0;
+    for (let dj = -1; dj <= 1; dj++) {
+      for (let di = -1; di <= 1; di++) {
+        if (di === 0 && dj === 0) continue;
+        const ii = i + di;
+        const jj = j + dj;
+        const v = ii < 0 || jj < 0 || ii >= n || jj >= n ? -1 : field[jj * n + ii];
+        const diff = (v < 0 ? f0 + 1 : v) - f0;
+        const w = di !== 0 && dj !== 0 ? Math.SQRT1_2 : 1;
+        gx += diff * di * w;
+        gz += diff * dj * w;
+      }
+    }
+    const down = this.downhill(field, x, z);
+    const len = Math.hypot(gx, gz);
+    if (len < 1e-6) return down;
+    const sx = -gx / len;
+    const sz = -gz / len;
+    if (down && sx * down.x + sz * down.z < 0.3) return down;
+    return { x: sx, z: sz };
   }
 
   fieldAt(field: Int32Array, x: number, z: number): number {

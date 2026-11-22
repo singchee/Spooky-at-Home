@@ -10,7 +10,7 @@ import {
   COWER_RANGE,
   DUCK_TIME,
   REACT_TIME,
-  bodyHeat,
+  deathHeat,
   gaitAmp,
   gaitRate,
   hash01,
@@ -46,7 +46,29 @@ const POSE_RATE = 9;
 /** Blasts remembered for hit reactions and ducking. */
 const IMPACTS = 16;
 
-const FIELDS = ['phase', 'svx', 'svz', 'yaw', 'speed', 'px', 'pz', 'run', 'atk', 'crouch', 'amp', 'fall', 'reactT', 'reactDir', 'reactAmt', 'duckT', 'clip', 'ctime', 'pclip', 'ptime', 'pblend', 'dyaw'] as const;
+const FIELDS = ['phase', 'svx', 'svz', 'yaw', 'speed', 'px', 'pz', 'run', 'atk', 'crouch', 'amp', 'fall', 'reactT', 'reactDir', 'reactAmt', 'duckT', 'clip', 'ctime', 'pclip', 'ptime', 'pblend', 'dyaw', 'lod', 'batch'] as const;
+
+/**
+ * Render level of detail (spec 003, crowd nights only). A zombie is a full character model while it stands at least
+ * LOD_ENTER_PX tall on screen (and stays one down to LOD_STAY_PX, so one at the threshold doesn't flip every frame);
+ * everyone else is the cheap procedural figure. Thresholds are screen pixels, so they hold for every gun's lens.
+ */
+export const LOD_ENTER_PX = 28;
+export const LOD_STAY_PX = 22;
+/** On-screen height used for the test: the model's standing height (both figures are within 5% of it). */
+export const LOD_HEIGHT_M = 1.75 * MODEL_DISPLAY_SCALE;
+/** Bodies the crowd cap removes sink out of sight over this long (Feel S4: a fade of 1 s or more, never a vanish). */
+export const BODY_SINK_S = 1.2;
+/** Over the body cap (a burst), the oldest sinking bodies finish within this long instead (never cut off half-sunk). */
+export const BODY_SINK_FAST_S = 0.35;
+/** How far a body sinks (metres): well under the ground and the roads. */
+export const BODY_SINK_M = 1.6;
+
+/** What the camera shows, for level of detail: the camera (with its projection up to date) and the canvas height in px. */
+export interface LodView {
+  camera: THREE.Camera & { projectionMatrix: THREE.Matrix4 };
+  height: number;
+}
 type Field = (typeof FIELDS)[number];
 
 /** Per-agent animation memory that the sim doesn't keep: smoothed velocity, heading, gait phase and pose. */
@@ -90,6 +112,25 @@ export class AgentsView {
   private lastTime = -1;
   private blasts: Blast[] = [];
   private pending: Blast[] = [];
+  /**
+   * The draw list (spec 003): every living zombie first, then bodies newest death first, so a body never takes
+   * a living zombie's place. `aliveIdx` holds the indices alive at the last frame (index order), `deadOrder`
+   * the indices in the order they were seen to die (oldest first), and `drawn` this frame's list.
+   */
+  private aliveIdx: number[] = [];
+  private deadOrder: number[] = [];
+  private scanned = 0;
+  private drawn: number[] = [];
+  /** Crowd nights: bodies resting from deadOrder[restFrom] on; older ones sink out over BODY_SINK_S, then go. */
+  private restFrom = 0;
+  private sinking: { i: number; p: number; fast: boolean }[] = [];
+  private sinkClock = -1;
+  /** Level-of-detail candidates (indices and keys), reused every frame. */
+  private candI = new Int32Array(0);
+  private candK = new Float32Array(0);
+  private sinkOf = new Map<number, number>();
+  /** Crowd nights (spec 003): the model cap and the body cap; null for every other mission (single batch). */
+  private readonly lod: { models: number; bodies: number; total?: number } | null;
   /** The character-model batches once the models have loaded (null: the procedural figures draw). */
   private zm: ModelBatch | null = null;
   private sm: ModelBatch | null = null;
@@ -97,21 +138,37 @@ export class AgentsView {
   /** Resolves true when the character models are drawing, false when the procedural figures stay. */
   readonly ready: Promise<boolean>;
 
-  /** `models: false` keeps the procedural figures (the fallback when the models can't load). */
-  constructor(opts: { models?: boolean } = {}) {
+  /**
+   * `models: false` keeps the procedural figures (the fallback when the models can't load). `lod` (crowd nights)
+   * keeps both zombie batches: up to `models` full models near the aim point, figures for the rest, and at most
+   * `bodies` bodies drawn. `modelSet` hands in baked models directly (tests).
+   */
+  constructor(opts: { models?: boolean; lod?: { models: number; bodies: number; total?: number }; modelSet?: CharacterModels } = {}) {
+    this.lod = opts.lod ? { ...opts.lod } : null;
+    // Same size on screen either way (pillar 3): crowd figures stand as tall as the models.
+    if (this.lod) this.zombies.material.uniforms.uScale.value = LOD_HEIGHT_M / HEAD_TOP;
     this.group.add(this.zombies.mesh, this.survivors.mesh, this.strobes.mesh);
-    this.ready = opts.models === false ? Promise.resolve(false) : loadCharacterModels().then((m) => this.useModels(m));
+    if (opts.modelSet) this.ready = Promise.resolve(this.useModels(opts.modelSet));
+    else this.ready = opts.models === false ? Promise.resolve(false) : loadCharacterModels().then((m) => this.useModels(m));
   }
 
-  /** Swap the procedural figures for the character models (same group slots, same draw-call count). */
+  /** Swap the procedural figures for the character models (same group slots, same draw-call count; with LOD, one more). */
   private useModels(m: CharacterModels | null): boolean {
     if (!m || this.disposed) return false;
-    this.zm = new ModelBatch(m.zombie, 'zombie', MAX_Z);
+    this.zm = new ModelBatch(m.zombie, 'zombie', this.lod ? Math.min(MAX_Z, this.lod.models) : MAX_Z);
     this.sm = new ModelBatch(m.survivor, 'survivor', MAX_S);
-    this.group.remove(this.zombies.mesh, this.survivors.mesh);
+    this.group.remove(this.survivors.mesh);
     this.group.add(this.zm.mesh, this.sm.mesh);
-    this.zombies.dispose();
     this.survivors.dispose();
+    if (!this.lod) {
+      this.group.remove(this.zombies.mesh);
+      this.zombies.dispose();
+    } else {
+      // Same mean heat either way (pillar 3): scale the figure's heat weights to the model's area-weighted mean.
+      const f = meanHeatWeight(this.zombies.mesh.geometry, 'aLimbT');
+      const mw = meanHeatWeight(m.zombie.geometry, 'aHeatW');
+      if (f > 0 && mw > 0) this.zombies.material.uniforms.uHeatW.value = mw / f;
+    }
     // Clip choices are made fresh for every agent.
     this.zt.f.clip.fill(-1);
     this.st.f.clip.fill(-1);
@@ -162,8 +219,8 @@ export class AgentsView {
     if (this.blasts.length > IMPACTS) this.blasts.shift();
   }
 
-  /** `cam`: where the camera is (figures lean back on steep views; the strobe follows the head). */
-  update(sim: Sim, time: number, cam?: { x: number; y: number; z: number }): void {
+  /** `view`: the camera (level of detail; figures lean back on steep views and the strobe follows the head). */
+  update(sim: Sim, time: number, view?: LodView): void {
     // Animation timing follows the game clock, so it pauses with the game and is frame-rate independent.
     const dt = this.lastTime < 0 ? 0 : Math.min(0.1, Math.max(0, time - this.lastTime));
     this.lastTime = time;
@@ -173,12 +230,15 @@ export class AgentsView {
     const zs = sim.zombies;
     this.zt.ensure(zs.length);
     const zf = this.zt.f;
-    const start = Math.max(0, zs.length - MAX_Z);
+    const list = this.drawList(sim, time);
     this.applyBlasts(sim);
+    const lod = this.lod !== null && this.zm !== null;
+    if (lod) this.chooseModels(sim, list, view);
 
     const { a, b, c, d } = this.zombies;
     let k = 0;
-    for (let i = start; i < zs.length; i++) {
+    let km = 0;
+    for (const i of list) {
       const z = zs[i];
       const seed = hash01(z.id);
       if (!this.zt.seen[i]) {
@@ -211,16 +271,22 @@ export class AgentsView {
       zf.atk[i] += (w.attack - zf.atk[i]) * pose;
       zf.amp[i] += (gaitAmp(state, v) - zf.amp[i]) * pose;
       const deadFor = z.alive ? -1 : Math.max(0, sim.t - z.diedAt);
-      const [core, limb] = bodyHeat(z.alive, z.cold, deadFor);
+      // Dying eases from live heat over DEATH_EASE (Feel M3: no sharp darkening when a round kills dozens).
+      const [core, limb] = deathHeat(z.alive, z.cold, deadFor);
       const react = z.alive ? reactEnvelope(time - zf.reactT[i]) * zf.reactAmt[i] : 0;
-      if (this.zm) {
+      const sink = z.alive ? 0 : (this.sinkOf.get(i) ?? 0);
+      if (this.zm && (!lod || zf.lod[i] > 0)) {
+        // A zombie that comes over from the figure batch picks its clip fresh.
+        if (lod && zf.batch[i] !== 2) zf.clip[i] = -1;
+        zf.batch[i] = 2;
         const name = !z.alive ? 'death' : state === ANIM.attack ? 'attack' : state === ANIM.run ? (seed < 0.5 ? 'run' : 'runArms') : state === ANIM.lunge ? 'runArms' : 'walk';
         const rate = name === 'attack' ? 0.85 + 0.3 * hash01(z.id + 17) : v;
         const hit = z.alive && zf.reactAmt[i] > 0 ? time - zf.reactT[i] : -1;
-        this.writeModel(this.zm, this.zt, i, k, z.x, z.z, seed, name, rate, deadFor, hit, zf.reactAmt[i], dt, core, limb, z.cold ? VIS_COLD : VIS_WARM);
-        k++;
+        this.writeModel(this.zm, this.zt, i, km, z.x, z.z, seed, name, rate, deadFor, hit, zf.reactAmt[i], dt, core, limb, z.cold ? VIS_COLD : VIS_WARM, sink);
+        km++;
         continue;
       }
+      zf.batch[i] = 1;
       const o = k * 4;
       a[o] = z.x;
       a[o + 1] = z.z;
@@ -233,15 +299,15 @@ export class AgentsView {
       c[o] = core;
       c[o + 1] = limb;
       c[o + 2] = z.cold ? VIS_COLD : VIS_WARM;
-      c[o + 3] = react;
+      c[o + 3] = z.alive ? react : sink; // the shader reads the reaction on the living and the sink on bodies
       d[o] = zf.run[i];
       d[o + 1] = zf.atk[i];
       d[o + 2] = 0;
       d[o + 3] = zf.reactDir[i];
       k++;
     }
-    if (this.zm) this.zm.commit(k);
-    else {
+    if (this.zm) this.zm.commit(km);
+    if (!this.zm || lod) {
       this.zombies.commit(k);
       this.zombies.material.uniforms.uTime.value = time;
     }
@@ -301,7 +367,7 @@ export class AgentsView {
       sf.crouch[i] += (w.crouch - sf.crouch[i]) * pose;
       sf.amp[i] += (gaitAmp(state, sf.speed[i]) - sf.amp[i]) * pose;
       const deadFor = s.alive ? -1 : Math.max(0, sim.t - s.diedAt);
-      const [core, limb] = bodyHeat(s.alive, false, deadFor, true);
+      const [core, limb] = deathHeat(s.alive, false, deadFor, true);
       if (this.sm) {
         const name = !s.alive ? 'death' : state === ANIM.run ? 'run' : state === ANIM.walk ? 'walk' : state === ANIM.crouch ? 'crouch' : 'idle';
         this.writeModel(this.sm, st, i, j, s.x, s.z, seed, name, sf.speed[i], deadFor, -1, 0, dt, core, limb, VIS_SURVIVOR);
@@ -309,7 +375,8 @@ export class AgentsView {
         if (s.alive) {
           // The strobe sits on the baked top of the head, leaning with the body (modelShader.ts).
           const raw = this.modelPoint(this.sm, st, i, 0, seed);
-          const hp = cam ? leanPoint(raw, cam.x - s.x, cam.y - this.sm.material.uniforms.uBase.value, cam.z - s.z) : raw;
+          const cp = view?.camera.position;
+          const hp = cp ? leanPoint(raw, cp.x - s.x, cp.y - this.sm.material.uniforms.uBase.value, cp.z - s.z) : raw;
           const q = n * 3;
           this.strobes.pos[q] = s.x + hp[0];
           this.strobes.pos[q + 1] = STROBE_BASE + hp[1] + 0.05; // just above the top of the head, as the simple figures do
@@ -341,9 +408,12 @@ export class AgentsView {
       if (s.alive) {
         const [up, fwd] = strobeOffset(sf.crouch[i], sf.run[i]);
         const q = n * 3;
-        this.strobes.pos[q] = s.x + Math.sin(sf.yaw[i]) * fwd * FIGURE_SCALE;
-        this.strobes.pos[q + 1] = STROBE_BASE + up * FIGURE_SCALE;
-        this.strobes.pos[q + 2] = s.z + Math.cos(sf.yaw[i]) * fwd * FIGURE_SCALE;
+        const raw: [number, number, number] = [Math.sin(sf.yaw[i]) * fwd * FIGURE_SCALE, up * FIGURE_SCALE, Math.cos(sf.yaw[i]) * fwd * FIGURE_SCALE];
+        const cp = view?.camera.position;
+        const hp = cp ? leanPoint(raw, cp.x - s.x, cp.y - STROBE_BASE, cp.z - s.z) : raw; // leans with the head (lean.ts)
+        this.strobes.pos[q] = s.x + hp[0];
+        this.strobes.pos[q + 1] = STROBE_BASE + hp[1];
+        this.strobes.pos[q + 2] = s.z + hp[2];
         n++;
       }
     }
@@ -364,7 +434,7 @@ export class AgentsView {
    */
   private writeModel(
     batch: ModelBatch, tr: Track, i: number, k: number, x: number, z: number, seed: number, name: string, speed: number,
-    deadFor: number, hitAge: number, hitAmt: number, dt: number, core: number, limb: number, vis: number,
+    deadFor: number, hitAge: number, hitAmt: number, dt: number, core: number, limb: number, vis: number, sink = 0,
   ): void {
     const f = tr.f;
     const model = batch.model;
@@ -420,7 +490,7 @@ export class AgentsView {
     batch.d[o] = core;
     batch.d[o + 1] = limb;
     batch.d[o + 2] = vis;
-    batch.d[o + 3] = 0;
+    batch.d[o + 3] = sink;
   }
 
   /** A tracked point of a model (0 head top, 1 chest) for agent i as last written, rotated and scaled as the shader does. */
@@ -447,6 +517,132 @@ export class AgentsView {
   }
 
   /**
+   * Living zombies first (all of them, up to MAX_Z), then bodies newest death first while there is room.
+   * Read-only on the sim; costs O(living + new entries) a frame, never O(every body ever).
+   */
+  private drawList(sim: Sim, time = 0): number[] {
+    const zs = sim.zombies;
+    if (zs.length < this.scanned) {
+      this.aliveIdx = [];
+      this.deadOrder = [];
+      this.scanned = 0;
+      this.restFrom = 0;
+      this.sinking = [];
+      this.sinkClock = -1;
+    }
+    const alive = this.aliveIdx;
+    let w = 0;
+    for (let r = 0; r < alive.length; r++) {
+      const i = alive[r];
+      if (zs[i].alive) alive[w++] = i;
+      else this.deadOrder.push(i);
+    }
+    alive.length = w;
+    for (let i = this.scanned; i < zs.length; i++) (zs[i].alive ? alive : this.deadOrder).push(i);
+    this.scanned = zs.length;
+    const out = this.drawn;
+    out.length = 0;
+    for (let r = 0; r < alive.length && out.length < MAX_Z; r++) out.push(alive[r]);
+    const dead = this.deadOrder;
+    if (!this.lod) {
+      for (let r = dead.length - 1; r >= 0 && out.length < MAX_Z; r--) out.push(dead[r]);
+      return out;
+    }
+    // Crowd nights: `bodies` bodies, sinking ones included. Resting bodies leave room for the ones sinking out;
+    // past it the oldest start to sink, and go once under. A burst can push the count over the body cap for a
+    // moment: then the oldest sinking bodies speed up (BODY_SINK_FAST_S) rather than vanish half-sunk. The dead
+    // came from the living, so living + bodies stays inside the figure total; only past that total is one cut.
+    const cap = this.lod.bodies;
+    const dt = this.sinkClock < 0 ? 0 : Math.min(0.1, Math.max(0, time - this.sinkClock));
+    this.sinkClock = time;
+    const restMax = Math.max(0, cap - Math.max(60, Math.ceil(cap * 0.3))); // room to sink ~100 bodies a second
+    while (dead.length - this.restFrom > restMax) this.sinking.push({ i: dead[this.restFrom++], p: 0, fast: false });
+    const sink = this.sinking;
+    const resting = dead.length - this.restFrom;
+    let over = resting + sink.length - cap;
+    for (let r = 0; r < sink.length && over > 0; r++, over--) sink[r].fast = true; // oldest first
+    for (const b of sink) b.p = Math.min(1, b.p + dt / (b.fast ? BODY_SINK_FAST_S : BODY_SINK_S));
+    const room = this.lod.total !== undefined ? Math.max(cap, this.lod.total - alive.length) : cap;
+    let drop = 0;
+    while (drop < sink.length && (sink[drop].p >= 1 || resting + sink.length - drop > room)) drop++;
+    if (drop) sink.splice(0, drop);
+    this.sinkOf.clear();
+    for (let r = dead.length - 1; r >= this.restFrom && out.length < MAX_Z; r--) out.push(dead[r]);
+    for (let r = sink.length - 1; r >= 0 && out.length < MAX_Z; r--) {
+      out.push(sink[r].i);
+      this.sinkOf.set(sink[r].i, sink[r].p);
+    }
+    return out;
+  }
+
+  /**
+   * Level of detail: zombies tall enough on screen (with hysteresis) and inside the picture are model candidates;
+   * the nearest the aim point win, up to the model cap. Without a view (tests, first frame) everyone is a figure.
+   */
+  private chooseModels(sim: Sim, list: number[], view?: LodView): void {
+    const zf = this.zt.f;
+    const zs = sim.zombies;
+    if (this.candI.length < list.length) {
+      this.candI = new Int32Array(Math.max(list.length, this.candI.length * 2, 256));
+      this.candK = new Float32Array(this.candI.length);
+    }
+    const ci = this.candI;
+    const ck = this.candK;
+    let nc = 0;
+    if (view && view.height > 0) {
+      const cam = view.camera;
+      cam.updateMatrixWorld();
+      const e = cam.matrixWorld.elements;
+      const p = cam.projectionMatrix.elements;
+      const fy = p[5] * view.height * 0.5;
+      for (const i of list) {
+        const z = zs[i];
+        const vx = z.x - e[12];
+        const vy = 1 - e[13];
+        const vz = z.z - e[14];
+        const depth = -(vx * e[8] + vy * e[9] + vz * e[10]);
+        if (depth <= 1) continue;
+        const px = (LOD_HEIGHT_M * fy) / depth;
+        if (px < (zf.lod[i] > 0 ? LOD_STAY_PX : LOD_ENTER_PX)) continue;
+        const nx = ((vx * e[0] + vy * e[1] + vz * e[2]) * p[0]) / depth;
+        const ny = ((vx * e[4] + vy * e[5] + vz * e[6]) * p[5]) / depth;
+        if (Math.abs(nx) > 1.15 || Math.abs(ny) > 1.15) continue;
+        ci[nc] = i;
+        ck[nc] = nx * nx + ny * ny;
+        nc++;
+      }
+    }
+    for (const i of list) zf.lod[i] = 0;
+    const n = Math.min(nc, this.lod!.models, this.zm!.capacity);
+    if (nc <= n) {
+      for (let r = 0; r < nc; r++) zf.lod[ci[r]] = 1;
+      return;
+    }
+    // Only the nearest n matter: select them in place (quickselect on the key, ties by index), no sort, no objects.
+    const less = (a: number, b: number) => ck[a] < ck[b] || (ck[a] === ck[b] && ci[a] < ci[b]);
+    const swap = (a: number, b: number) => {
+      const ti = ci[a];
+      ci[a] = ci[b];
+      ci[b] = ti;
+      const tk = ck[a];
+      ck[a] = ck[b];
+      ck[b] = tk;
+    };
+    let lo = 0;
+    let hi = nc - 1;
+    while (lo < hi) {
+      swap((lo + hi) >> 1, hi);
+      let store = lo;
+      for (let r = lo; r < hi; r++) if (less(r, hi)) swap(r, store++);
+      swap(store, hi);
+      if (store === n) break;
+      if (store < n) lo = store + 1;
+      else hi = store - 1;
+    }
+    for (let r = 0; r < n; r++) zf.lod[ci[r]] = 1;
+  }
+
+  /**
    * New blasts since the last frame: zombies near one flinch away from it (strongest wins), bodies
    * it killed fall away from it, and survivors near it duck.
    */
@@ -454,10 +650,9 @@ export class AgentsView {
     if (!this.pending.length) return;
     const zs = sim.zombies;
     const zf = this.zt.f;
-    const start = Math.max(0, zs.length - MAX_Z);
     for (const bl of this.pending) {
       const reach = 3.5 * bl.r;
-      for (let i = start; i < zs.length; i++) {
+      for (const i of this.drawn) {
         const z = zs[i];
         const dx = z.x - bl.x;
         const dz = z.z - bl.z;
@@ -494,6 +689,12 @@ export class AgentsView {
     this.pending.length = 0;
   }
 
+  /** Level-of-detail parity (playtest): the figure's and the zombie model's area-weighted mean heat weight. */
+  heatWeights(): { figure: number; model: number | null } {
+    const scale = this.zombies.material.uniforms.uHeatW.value as number;
+    return { figure: meanHeatWeight(this.zombies.mesh.geometry, 'aLimbT') * scale, model: this.zm ? meanHeatWeight(this.zm.model.geometry, 'aHeatW') : null };
+  }
+
   /** For tests and budgets: instances drawn per kind, and draw objects (one per kind). */
   get stats() {
     return {
@@ -502,6 +703,10 @@ export class AgentsView {
       survivors: this.sm ? this.sm.count : this.survivors.count,
       strobes: this.strobes.count,
       models: this.zm !== null,
+      /** With level of detail: instances in each zombie batch. */
+      modelZombies: this.zm ? this.zm.count : 0,
+      figureZombies: this.zm && !this.lod ? 0 : this.zombies.count,
+      drawnZombies: this.drawn.length,
     };
   }
 
@@ -514,6 +719,35 @@ export class AgentsView {
     this.zm?.dispose();
     this.sm?.dispose();
   }
+}
+
+/**
+ * Area-weighted mean of a per-vertex heat weight (0 core ... 1 hands and feet) over a geometry's triangles: the
+ * figure's `aLimbT` and the model's `aHeatW` must match closely, so a zombie reads equally hot as either (spec 003 LOD).
+ */
+export function meanHeatWeight(geo: THREE.BufferGeometry, attr: string): number {
+  const pos = geo.attributes.position;
+  const w = geo.getAttribute(attr);
+  const idx = geo.index;
+  const tris = idx ? idx.count / 3 : pos.count / 3;
+  const v = (k: number) => (idx ? idx.getX(k) : k);
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  let sum = 0;
+  let area = 0;
+  for (let t = 0; t < tris; t++) {
+    const i0 = v(t * 3);
+    const i1 = v(t * 3 + 1);
+    const i2 = v(t * 3 + 2);
+    a.fromBufferAttribute(pos, i0);
+    b.fromBufferAttribute(pos, i1);
+    c.fromBufferAttribute(pos, i2);
+    const ar = b.sub(a).cross(c.sub(a)).length() / 2;
+    sum += ar * ((w.getX(i0) + w.getX(i1) + w.getX(i2)) / 3);
+    area += ar;
+  }
+  return area > 0 ? sum / area : 0;
 }
 
 /**

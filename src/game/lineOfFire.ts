@@ -69,12 +69,13 @@ export class MaskLatch {
 export class NearSet {
   private keys = new Set<string>();
   constructor(readonly IN = 60, readonly OUT = 68) {}
-  update<T extends { label: string; p: V2 }>(items: readonly T[], aim: V2): T[] {
+  /** Items are keyed by `id` when they have one (a label can change, e.g. DOORS: CLOSE), else by label. */
+  update<T extends { label: string; p: V2; id?: string }>(items: readonly T[], aim: V2): T[] {
     const out: T[] = [];
     const seen = new Set<string>();
     for (const it of items) {
       const d = Math.hypot(it.p.x - aim.x, it.p.z - aim.z);
-      const key = it.label;
+      const key = it.id ?? it.label;
       seen.add(key);
       if (d < this.IN || (this.keys.has(key) && d <= this.OUT)) {
         this.keys.add(key);

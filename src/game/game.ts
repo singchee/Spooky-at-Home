@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { MapData, V2 } from '../map/types';
-import { ENDGAME_LEFT, ORBIT, type Sim, type SimEvent } from '../sim/sim';
+import { ENDGAME_LEFT, ORBIT, type Sim, type SimEvent, type SimState } from '../sim/sim';
 import { Bot, SKILL } from '../sim/bot';
 import { WEAPONS, weaponById } from '../sim/weapons';
 import { buildWorld, type World } from '../world/buildWorld';
@@ -26,6 +26,8 @@ import { LINES, captionText, line } from '../sim/campaignText';
 import { effectiveReduceFlicker, mouseAimDelta } from './input';
 import { KEYS_SENTENCE, TOUCH_SENTENCE, keyAction, nextView, viewLabel, type ControlAction } from './controls';
 import { TouchControls } from './touchControls';
+import { CROWD_FIGURE_CAP, CROWD_SIZES } from '../sim/crowd';
+import { CROWD_KILL_LINES, CrowdMode } from './crowdMode';
 import { LandmarkLayer } from '../ui/landmarkLayer';
 import { landmarkList, type Landmark } from '../ui/landmarks';
 import { GunshipOrbit, offVertical, orbitTarget, tallFactor, turnHeading } from './gunshipOrbit';
@@ -77,6 +79,8 @@ interface TestHooks {
   cutaway?: (on: boolean) => void;
   /** Where a ground point appears on screen now, CSS px (the touch stick checks measure which way the aim moved). */
   screenOf?: (x: number, z: number) => [number, number];
+  /** Crowd nights: area-weighted mean heat weight of the figure and the model (LOD parity, spec 003). */
+  lodParity?: () => { figure: number; model: number | null };
   /** The places that may get a landmark marker (3.19), most relevant first. */
   landmarks?: () => { id: string; label: string; x: number; z: number }[];
   /** Jump to the endgame: all but `keep` zombies (cold ones first) fall, and the search help starts. Returns how many are left. */
@@ -142,7 +146,11 @@ export class Game {
   private post: SensorPost;
   private gfx: GfxGovernor;
   private world: World;
-  private agents = new AgentsView();
+  private agents: AgentsView;
+  /** Crowd nights (spec 003): their HUD, end card, kill lines and frame stats; null on every other mission. */
+  private crowd: CrowdMode | null = null;
+  /** This frame's sim state, when render() read one (every frame on crowd nights). */
+  private frameState: SimState | null = null;
   private effects = new Effects();
   private hud: Hud;
   /** In-flight landmark markers (3.19): public places from the recon, never child places. */
@@ -231,6 +239,9 @@ export class Game {
     this.scene.add(sun);
 
     this.world = buildWorld(map, sim.mission.seed);
+    // Crowd nights (spec 003): level of detail and the body cap inside the 1,200-figure total.
+    const crowd = sim.mission.crowd && CROWD_SIZES[sim.mission.crowd.size];
+    this.agents = new AgentsView(crowd ? { lod: { models: crowd.models, bodies: crowd.bodies, total: CROWD_FIGURE_CAP } } : {});
     this.scene.add(this.world.group, this.agents.group, this.effects.group);
 
     // Picture quality: ?gfx=high|low forces a tier; otherwise start high and drop to low if frames
@@ -242,6 +253,7 @@ export class Game {
 
     this.hud = new Hud(container, map.attribution);
     this.hud.setMinimap(map, sim.mission);
+    if (sim.mission.crowd) this.crowd = new CrowdMode(this.hud.root, sim, /[?&]fps=1\b/.test(location.search));
     this.landmarks = new LandmarkLayer(this.hud.root, container);
     this.landmarkPlaces = landmarkList(map, sim.mission);
     this.overlay = el('div', 'overlay', undefined, container);
@@ -304,6 +316,7 @@ export class Game {
       hooks.holdFire = (on) => {
         this.firing = on && this.screen === 'playing';
       };
+      hooks.lodParity = () => this.agents.heatWeights();
       hooks.endgame = (keep) => {
         const live = this.sim.zombies.filter((z) => z.alive).sort((a, b) => Number(b.cold) - Number(a.cold) || a.id - b.id);
         for (const z of live.slice(keep)) {
@@ -333,7 +346,7 @@ export class Game {
     const visuals = briefingVisuals(this.map, m, this.sim.graph, this.sim.grid);
     this.briefingView = visuals;
     card.appendChild(visuals.el);
-    el('div', 'card-kicker', `MISSION · DIFFICULTY ${m.difficulty} · SEED ${m.seed}`, card);
+    el('div', 'card-kicker', m.crowd ? `HORDE NIGHT · ${m.crowd.size.toUpperCase()} · SEED ${m.seed}` : `MISSION · DIFFICULTY ${m.difficulty} · SEED ${m.seed}`, card);
     el('h2', undefined, m.title, card);
     for (const line of m.briefing) el('p', undefined, line, card);
     for (const line of m.intel) el('p', 'intel', line, card);
@@ -426,38 +439,42 @@ export class Game {
     this.overlay.replaceChildren();
     const card = el('div', `card result ${won ? 'won' : 'lost'}`, undefined, this.overlay);
     el('div', 'card-kicker', won ? 'MISSION COMPLETE' : 'MISSION FAILED', card);
-    const practice = this.opts.practice ?? m.briefing.length === 0;
-    if (!practice) {
-      const score = gradeMission(scoreInput(m, s));
-      const head = el('div', 'result-head', undefined, card);
-      const big = el('div', `grade grade-${score.grade}`, score.grade, head);
-      big.setAttribute('aria-label', `Grade ${score.grade}`);
-      const words = el('div', 'result-words', undefined, head);
-      el('h2', undefined, reason, words);
-      el('p', 'grade-reason', score.reason, words);
-      // Personal best: wins only, stored in this browser.
-      const key = bestKey(m.mapName, missionKind(m.template, m.type), m.difficulty);
-      if (won) {
-        const r = bests().record(key, { grade: score.grade, time: s.t });
-        if (r.isNew) el('p', 'best new-best', r.previous ? `NEW BEST · was ${r.previous.grade} ${formatTime(r.previous.time)}` : 'NEW BEST', words);
-        else el('p', 'best', formatBest(r.best), words);
+    // A crowd night's personal best counts only for a person playing (not the bot, autoplay or practice).
+    if (this.crowd) this.crowd.endCard(card, reason, this.map, !this.bot && !this.opts.practice && !/[?&]autostart=1\b/.test(location.search));
+    else {
+      const practice = this.opts.practice ?? m.briefing.length === 0;
+      if (!practice) {
+        const score = gradeMission(scoreInput(m, s));
+        const head = el('div', 'result-head', undefined, card);
+        const big = el('div', `grade grade-${score.grade}`, score.grade, head);
+        big.setAttribute('aria-label', `Grade ${score.grade}`);
+        const words = el('div', 'result-words', undefined, head);
+        el('h2', undefined, reason, words);
+        el('p', 'grade-reason', score.reason, words);
+        // Personal best: wins only, stored in this browser.
+        const key = bestKey(m.mapName, missionKind(m.template, m.type), m.difficulty);
+        if (won) {
+          const r = bests().record(key, { grade: score.grade, time: s.t });
+          if (r.isNew) el('p', 'best new-best', r.previous ? `NEW BEST · was ${r.previous.grade} ${formatTime(r.previous.time)}` : 'NEW BEST', words);
+          else el('p', 'best', formatBest(r.best), words);
+        } else {
+          const b = bests().get(key);
+          el('p', 'best', b ? formatBest(b) : 'No best yet on this mission', words);
+        }
       } else {
-        const b = bests().get(key);
-        el('p', 'best', b ? formatBest(b) : 'No best yet on this mission', words);
+        el('h2', undefined, reason, card);
       }
-    } else {
-      el('h2', undefined, reason, card);
+      const stats = [
+        `Time ${Math.floor(s.t / 60)}:${String(Math.floor(s.t % 60)).padStart(2, '0')}`,
+        `Kills ${s.kills} from ${s.shots} rounds${s.kills ? ` (${(s.shots / s.kills).toFixed(1)} rounds per kill)` : ''}`,
+        `Friendly-fire incidents ${s.friendlyHits}`,
+      ];
+      if (s.survivorsTotal && m.type === 'clear') stats.push(`Friendlies alive ${s.survivorsAlive}/${s.survivorsTotal}`);
+      else if (s.survivorsTotal) stats.push(`Survivors home ${s.survivorsHome}/${s.survivorsTotal}`);
+      if (m.type === 'defend') stats.push(`Safehouse ${Math.round(s.integrity * 100)}% intact`);
+      const list = el('ul', 'result-stats', undefined, card);
+      for (const t of stats) el('li', undefined, t, list);
     }
-    const stats = [
-      `Time ${Math.floor(s.t / 60)}:${String(Math.floor(s.t % 60)).padStart(2, '0')}`,
-      `Kills ${s.kills} from ${s.shots} rounds${s.kills ? ` (${(s.shots / s.kills).toFixed(1)} rounds per kill)` : ''}`,
-      `Friendly-fire incidents ${s.friendlyHits}`,
-    ];
-    if (s.survivorsTotal && m.type === 'clear') stats.push(`Friendlies alive ${s.survivorsAlive}/${s.survivorsTotal}`);
-    else if (s.survivorsTotal) stats.push(`Survivors home ${s.survivorsHome}/${s.survivorsTotal}`);
-    if (m.type === 'defend') stats.push(`Safehouse ${Math.round(s.integrity * 100)}% intact`);
-    const list = el('ul', 'result-stats', undefined, card);
-    for (const t of stats) el('li', undefined, t, list);
     // After a win the way on is the next mission; after a loss, another go.
     const row = el('div', 'row', undefined, card);
     const next = el('button', won ? 'primary' : undefined, 'Next mission', row);
@@ -791,6 +808,7 @@ export class Game {
     }
     this.touch.update(dt);
     this.render(dt);
+    if (this.crowd && this.frameState?.crowd) this.crowd.frame(real * 1000, this.clock, this.calm, (x, z) => this.screenPos({ x, z }, 2), this.frameState.crowd);
     // The score follows the threat, about four times a second.
     this.audioTimer -= dt;
     if (this.audioTimer <= 0) {
@@ -822,7 +840,9 @@ export class Game {
   private handleEvents(events: SimEvent[]): void {
     const now = this.clock;
     const kc = this.killCall;
-    if (kc.next < 0) kc.next = this.sim.mission.seed % KILL_LINES.length;
+    // Crowd nights swap the kill lines (none about people) and keep them text only.
+    const kills = this.crowd ? CROWD_KILL_LINES : KILL_LINES;
+    if (kc.next < 0) kc.next = this.sim.mission.seed % kills.length;
     (this.voice ??= new VoiceDirector((line) => audio.say(line), this.sim.mission.seed)).update(events, this.sim);
     for (const e of events) {
       this.opts.onAction?.({ type: 'sim', event: e });
@@ -836,6 +856,7 @@ export class Game {
         case 'impact':
           this.effects.impact(e.weapon, e.x, e.z, now);
           this.agents.impact(e.x, e.z, weaponById(e.weapon).radius, now); // flinches, falls away from the blast, ducking
+          this.crowd?.impact(e.weapon, e.kills, e.x, e.z, now);
           this.sfx.impact(e.weapon);
           // A big blast opens a call; anything else that lands in the next moment joins its count.
           if (kc.at >= 0) kc.n += e.kills;
@@ -881,9 +902,9 @@ export class Game {
       }
     }
     if (kc.at >= 0 && now - kc.at >= KILL_MERGE) {
-      this.radio(KILL_LINES[kc.next](kc.n));
-      this.voice?.bigKill();
-      kc.next = (kc.next + 1) % KILL_LINES.length;
+      this.radio(kills[kc.next](kc.n));
+      if (!this.crowd) this.voice?.bigKill();
+      kc.next = (kc.next + 1) % kills.length;
       kc.at = -1;
       kc.n = 0;
     }
@@ -913,10 +934,15 @@ export class Game {
     this.camera.lookAt(this.aim.x, 0, this.aim.z);
     this.applyKick(fov);
     this.camera.updateProjectionMatrix();
-    const markerPts = this.markerPoints();
+    this.hudTimer -= dt;
+    // One state() a frame on crowd nights (HUD, doors marker, crowd HUD share it); otherwise only when the HUD redraws.
+    const due = this.hudTimer <= 0;
+    const st = due || this.crowd ? this.sim.state() : null;
+    this.frameState = st;
+    const markerPts = this.markerPoints(st);
     this.updateCutaway(Math.max(0, dt), markerPts);
 
-    this.agents.update(this.sim, this.clock, this.camera.position);
+    this.agents.update(this.sim, this.clock, { camera: this.camera, height: this.renderer.domElement.clientHeight });
     this.effects.update(this.clock, dt);
 
     const u = this.post.uniforms;
@@ -929,10 +955,9 @@ export class Game {
     this.renderer.info.reset();
     this.post.render(this.scene, this.camera);
 
-    this.hudTimer -= dt;
-    if (this.hudTimer <= 0) {
+    if (due) {
       this.hudTimer = 0.1;
-      this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose(), this.touch.active, this.masked);
+      this.hud.update(st!, this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose(), this.touch.active, this.masked);
       this.hud.updateMinimap(this.sim.aircraft(), this.aim, this.sim.survivors.filter((s) => s.alive && !s.home), this.sim.regroupPoints().map((g) => g.p), this.sim.searchAreas());
     }
     const markers = this.markers(markerPts);
@@ -954,7 +979,7 @@ export class Game {
    * near it, fade, and only above the line of sight (cutaway.ts). And the reticle's MASKED state: a
    * building on the line of fire to the aim point, judged on whole buildings, never the cut-away.
    */
-  private updateCutaway(dt: number, markerPts: { label: string; p: V2; r?: number }[]): void {
+  private updateCutaway(dt: number, markerPts: { label: string; p: V2; r?: number; id?: string }[]): void {
     const keep: Keep[] = this.cutawayOn ? [{ p: this.aim, r: AIM_KEEP }] : [];
     // Point markers only: endgame search areas are wide soft circles (several share a label, and their
     // centres drift as stragglers move), so they'd make towers cut and come back for nothing.
@@ -1046,10 +1071,13 @@ export class Game {
   }
 
   /** The mission's markers on the ground (safehouse, home, the escort group, regroup points, endgame search areas with radius `r`). */
-  private markerPoints() {
+  private markerPoints(st: SimState | null = null) {
     const m = this.sim.mission;
-    const out: { label: string; p: V2; r?: number }[] = [];
-    if (m.safehouse) out.push({ label: 'SAFEHOUSE', p: m.safehouse.centre });
+    const out: { label: string; p: V2; r?: number; id?: string }[] = [];
+    // Crowd nights: the doors' marker turns to its alarm before the multiplier drops (Feel M4: words, not only colour).
+    // `id` stays put while the label changes, so the cut-away's marker list doesn't drop and re-add it.
+    const doors = m.crowd && (st ?? this.sim.state()).crowd;
+    if (m.safehouse) out.push({ id: 'safehouse', label: doors ? (doors.atDoors > 0 ? 'DOORS: UNDER ATTACK' : doors.alarm ? 'DOORS: CLOSE' : 'DOORS') : 'SAFEHOUSE', p: m.safehouse.centre });
     if (m.home) out.push({ label: 'HOME', p: m.home.centre });
     const moving = this.sim.survivors.filter((s) => s.alive && !s.home);
     if (moving.length && m.type === 'escort') {
@@ -1088,6 +1116,7 @@ export class Game {
       aim: { ...this.aim },
       touch: this.touch.active,
       reviewing: this.reviewing,
+      ...(this.crowd ? this.crowd.info() : {}),
     };
   }
 
@@ -1096,7 +1125,7 @@ export class Game {
     this.disposed = true;
     // Test hooks must not outlive this game (they'd point at a dead one).
     const hooks = window.__spooky as TestHooks | undefined;
-    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf', 'landmarks', 'sight', 'orbit', 'cutaway', 'endgame', 'searchAreas'] as const) delete hooks[k];
+    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf', 'landmarks', 'sight', 'orbit', 'cutaway', 'endgame', 'searchAreas', 'lodParity'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
     audio.release('mission');
     this.offSettings();
@@ -1112,6 +1141,7 @@ export class Game {
     this.renderer.dispose();
     this.renderer.forceContextLoss();
     this.renderer.domElement.remove();
+    this.crowd?.dispose();
     this.hud.dispose();
     this.overlay.remove();
   }

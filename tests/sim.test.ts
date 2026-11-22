@@ -150,6 +150,37 @@ describe('simulation (gate G6: win and loss both reachable)', () => {
     const ms = (performance.now() - t0) / 60;
     expect(ms).toBeLessThan(4);
   });
+
+  it('Sim.living follows a swapped zombies array, even one of the same length (review nit)', () => {
+    const sim = make('clear', 2, 5);
+    const n = sim.zombies.length;
+    expect(n).toBeGreaterThan(0);
+    expect(sim.syncLiving().length).toBe(n);
+    const other = sim.zombies.map((z, i) => ({ ...z, id: z.id, alive: i % 2 === 0 }));
+    sim.zombies = other;
+    expect(sim.syncLiving().every((z) => other.includes(z))).toBe(true);
+    expect(sim.living.length).toBe(other.filter((z) => z.alive).length);
+  });
+
+  it('budget (spec 003): 1,000 living + 6,000 dead entries under 4 ms a step; the dead cost (almost) nothing', () => {
+    const run = (dead: number) => {
+      const sim = make('defend', 5, 1);
+      for (let i = 0; i < dead; i++) sim.zombies.push({ id: 20000 + i, x: 0, z: 0, vx: 0, vz: 0, speed: 1.5, cold: false, alive: false, diedAt: 0, home: null, goal: null });
+      for (let i = 0; i < 1000; i++) {
+        const p = grid.nearestFree({ x: ((i * 37) % 900) - 450, z: ((i * 53) % 900) - 450 });
+        sim.zombies.push({ id: 10000 + i, x: p.x, z: p.z, vx: 0, vz: 0, speed: 1.5, cold: false, alive: true, diedAt: -1, home: null, goal: null });
+      }
+      for (let i = 0; i < 5; i++) sim.step(1 / 60); // warm up
+      const t0 = performance.now();
+      for (let i = 0; i < 60; i++) sim.step(1 / 60);
+      expect(sim.living.length).toBeGreaterThanOrEqual(1000); // the pushed zombies really are simulated
+      return (performance.now() - t0) / 60;
+    };
+    const withDead = run(6000);
+    expect(withDead).toBeLessThan(4);
+    const none = run(0);
+    expect(withDead).toBeLessThan(none * 1.2 + 0.2);
+  });
 });
 
 describe('committed fingerprint (gate G4 across machines and versions)', () => {

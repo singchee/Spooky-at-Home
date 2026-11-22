@@ -154,6 +154,18 @@ export function bodyHeat(alive: boolean, cold: boolean, deadFor: number, survivo
   return [core, limb];
 }
 
+/** Seconds over which a dying agent's heat eases from live to a fresh body (Feel M3: no sharp darkening in a crowd). */
+export const DEATH_EASE = 0.3;
+
+/** bodyHeat, with the first DEATH_EASE seconds of death blended from the live values. Render only. */
+export function deathHeat(alive: boolean, cold: boolean, deadFor: number, survivor = false): [number, number] {
+  const body = bodyHeat(alive, cold, deadFor, survivor);
+  if (alive || cold || deadFor >= DEATH_EASE) return body;
+  const live = bodyHeat(true, false, 0, survivor);
+  const k = Math.max(0, deadFor) / DEATH_EASE;
+  return [live[0] + (body[0] - live[0]) * k, live[1] + (body[1] - live[1]) * k];
+}
+
 /** Integer hash of an agent id → [0, 1). Gives each zombie a stable height, lean and gait. */
 export function hash01(id: number): number {
   let h = (id | 0) ^ 0x9e3779b9;

@@ -6,7 +6,7 @@ import { makeSampleTown } from './map/sample';
 import { isPresetFile, PRESET_URL, PRESETS, presetToMap } from './map/presets';
 import { TEMPLATE_IDS, type TemplateId } from './map/recon';
 import type { MapData } from './map/types';
-import { createSim } from './sim/setup';
+import { createCrowdSim, createSim } from './sim/setup';
 import type { MissionType } from './sim/missions';
 import { Game } from './game/game';
 import { showMenu, type MenuChoice, type MenuMode } from './ui/menu';
@@ -70,7 +70,9 @@ function play(choice: MenuChoice, opts: { bot?: boolean; skipBriefing?: boolean;
   clear();
   let r: ReturnType<typeof createSim>;
   try {
-    r = createSim(choice.map, { type: choice.type, difficulty: choice.difficulty, seed: choice.seed, template: choice.template, anchor: choice.anchor });
+    r = choice.crowd
+      ? createCrowdSim(choice.map, { seed: choice.seed, size: choice.crowd })
+      : createSim(choice.map, { type: choice.type, difficulty: choice.difficulty, seed: choice.seed, template: choice.template, anchor: choice.anchor });
   } catch (e) {
     r = { ok: false, reason: `Couldn't build a mission on this map (${(e as Error).message}).` };
   }
@@ -120,7 +122,7 @@ function menu(mode: MenuMode, o: { message?: string; sample?: boolean; famous?: 
 }
 
 /** Back from a mission: to recon for a recon mission, otherwise to the manual form it came from. */
-const menuAfter = (c: MenuChoice | null): MenuMode => (c?.template ? 'recon' : 'custom');
+const menuAfter = (c: MenuChoice | null): MenuMode => (c?.template || c?.crowd ? 'recon' : 'custom');
 
 function landing(notice?: string, enter = false): void {
   clear();
@@ -220,7 +222,13 @@ async function autostartMap(): Promise<MapData> {
   return presetToMap(json, pl);
 }
 
-if (params.get('autostart') === '1') {
+// ?mode=crowd&size=big|huge&seed=N&autostart=1&bot=1&fps=1: a crowd night on the sample town (spec 003).
+if (params.get('autostart') === '1' && params.get('mode') === 'crowd') {
+  play(
+    { map: makeSampleTown(), type: 'defend', difficulty: 3, seed: clampInt(params.get('seed'), 1, 1e9, 1), crowd: params.get('size') === 'big' ? 'big' : 'huge' },
+    { bot: params.get('bot') === '1', skipBriefing: params.get('brief') !== '1', sensor: params.get('sensor') === 'night' ? 'night' : undefined },
+  );
+} else if (params.get('autostart') === '1') {
   void autostartMap().then((map) => play(
     {
       map,
