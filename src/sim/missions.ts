@@ -149,6 +149,18 @@ export const SCATTER_BRIEF = "Shell a horde and whatever's left of it scatters, 
  * start spread and the wander), hit by a 105 round there, still leaves CHILD_FIRE_CLEARANCE of clear ground
  * before the grounds: 45 + 24 + 30 = 99 m (was 80 m before spec 002).
  */
+/**
+ * Every horde zombie stays inside this share of the half-width: past it the edge fade (src/world/shading.ts) washes
+ * the picture out, and past the edge itself the camera can't aim. A horde gathers far enough in that its spread and
+ * milling stay inside; scattered runners are held inside by the sim (owner's report: a park horde on Gundagai sat
+ * 20-45 m past the map edge, where nobody could see or aim at it).
+ */
+export const HORDE_EDGE = 0.9;
+/** May a horde gather here? Its spread and milling stay inside HORDE_EDGE of the half-width. */
+export function hordeInPlay(map: MapData, p: V2): boolean {
+  const lim = map.half * HORDE_EDGE - Math.max(HORDE_SPREAD, HORDE_WANDER);
+  return Math.abs(p.x) <= lim && Math.abs(p.z) <= lim;
+}
 export const HORDE_CHILD_GAP = Math.max(HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH) + MAX_KILL_REACH + CHILD_FIRE_CLEARANCE;
 
 /** Road edges a survivor's route may not use: any that passes within CHILD_BUFFER of a child place (PLAN §9). */
@@ -273,6 +285,7 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
       if (centres.length >= nHordes) break;
       const free = grid.nearestFree(c);
       if (grid.isBlocked(free.x, free.z)) continue; // never put a horde inside a building
+      if (!hordeInPlay(map, free)) continue; // never past the edge, where the picture fades out
       if (nearChildPlace(map, free, HORDE_CHILD_GAP)) continue; // guardrail (PLAN §9)
       if (centres.every((o) => dist(o, free) > 130)) centres.push(free);
     }
@@ -639,6 +652,7 @@ function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'c
   const add = (p: V2, gap: number) => {
     const free = grid.nearestFree(p, 40);
     if (grid.isBlocked(free.x, free.z)) return false; // never put a horde inside a building
+    if (!hordeInPlay(map, free)) return false; // never past the edge, where the picture fades out (owner's report)
     if (nearChildPlace(map, free, HORDE_CHILD_GAP)) return false; // guardrail (PLAN §9)
     if (!centres.every((o) => dist(o, free) > gap)) return false;
     centres.push(free);

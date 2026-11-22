@@ -13,7 +13,10 @@ licence, with the attribution above. Anyone may copy, adapt and share them under
 
 **Outstanding:** Sydney (Circular Quay & The Rocks), London (Tower of London & Tower Bridge), Tokyo (Shibuya Crossing)
 and Rome (Colosseum) are planned (`ALL_PRESETS` in `src/map/presets.ts`) but not yet bundled: their core
-query timed out or was refused (HTTP 502/504, empty reply) on every allowed attempt on 2026-11-22.
+query timed out or was refused (HTTP 502/504, empty reply) on every allowed attempt on 2026-11-22. A second
+round on 2026-11-22 (overpass.kumi.systems, one request at a time, 61 s apart, 15 failures in total, including two
+south/north half-core splits for Sydney and London) also failed for Sydney, London and Rome; Tokyo was not reached.
+Retry from a machine with a working Overpass route.
 
 Each file was downloaded once with the game's own core and extras queries (`src/map/overpass.ts`), a
 1.2 km by 1.2 km area around the centre in its `spooky_preset` header. It was then reduced by

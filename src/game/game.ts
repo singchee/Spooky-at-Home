@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { MapData, V2 } from '../map/types';
-import { ORBIT, type Sim, type SimEvent } from '../sim/sim';
+import { ENDGAME_LEFT, ORBIT, type Sim, type SimEvent } from '../sim/sim';
 import { Bot, SKILL } from '../sim/bot';
 import { WEAPONS, weaponById } from '../sim/weapons';
 import { buildWorld, type World } from '../world/buildWorld';
@@ -79,6 +79,10 @@ interface TestHooks {
   screenOf?: (x: number, z: number) => [number, number];
   /** The places that may get a landmark marker (3.19), most relevant first. */
   landmarks?: () => { id: string; label: string; x: number; z: number }[];
+  /** Jump to the endgame: all but `keep` zombies (cold ones first) fall, and the search help starts. Returns how many are left. */
+  endgame?: (keep: number) => number;
+  /** The endgame search circles on show. */
+  searchAreas?: () => { p: V2; r: number }[];
 }
 
 
@@ -300,6 +304,16 @@ export class Game {
       hooks.holdFire = (on) => {
         this.firing = on && this.screen === 'playing';
       };
+      hooks.endgame = (keep) => {
+        const live = this.sim.zombies.filter((z) => z.alive).sort((a, b) => Number(b.cold) - Number(a.cold) || a.id - b.id);
+        for (const z of live.slice(keep)) {
+          z.alive = false;
+          z.diedAt = this.sim.t;
+        }
+        this.sim.startSearch((z) => z.alive);
+        return Math.min(keep, live.length);
+      };
+      hooks.searchAreas = () => this.sim.searchAreas();
     }
   }
 
@@ -631,6 +645,8 @@ export class Game {
     if (manual) this.manualSensor = true;
     if (s === this.sensor) return;
     this.sensor = s;
+    // Flicking between cameras without a hit is a sign of searching: the sim's endgame help listens for it.
+    if (manual) this.sim.noteSensorSwitch();
     this.switchLeft = SWITCH_TIME;
     this.opts.onAction?.({ type: 'sensor', sensor: s });
   }
@@ -850,6 +866,14 @@ export class Game {
           this.radio(captionText(line(e.id, e.id === 'few-left' ? `Nearly there: ${e.left} left.` : `${e.left} left, all cold-blooded.`)));
           if (LINES[e.id].recorded) audio.say(e.id);
           break;
+        case 'search': {
+          // Endgame search help: Ground names where the stragglers are (map text: textContent in the HUD), and the
+          // recorded few-left / cold-leftovers line plays where it fits.
+          this.radio(e.text);
+          const id = e.cold ? 'cold-leftovers' : e.left <= ENDGAME_LEFT ? 'few-left' : null;
+          if (id && LINES[id].recorded) audio.say(id);
+          break;
+        }
         case 'result':
           audio.sting(e.won);
           this.showResult(e.won, e.reason);
@@ -909,7 +933,7 @@ export class Game {
     if (this.hudTimer <= 0) {
       this.hudTimer = 0.1;
       this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose(), this.touch.active, this.masked);
-      this.hud.updateMinimap(this.sim.aircraft(), this.aim, this.sim.survivors.filter((s) => s.alive && !s.home), this.sim.regroupPoints().map((g) => g.p));
+      this.hud.updateMinimap(this.sim.aircraft(), this.aim, this.sim.survivors.filter((s) => s.alive && !s.home), this.sim.regroupPoints().map((g) => g.p), this.sim.searchAreas());
     }
     const markers = this.markers(markerPts);
     this.hud.setMarkers(markers);
@@ -930,9 +954,11 @@ export class Game {
    * near it, fade, and only above the line of sight (cutaway.ts). And the reticle's MASKED state: a
    * building on the line of fire to the aim point, judged on whole buildings, never the cut-away.
    */
-  private updateCutaway(dt: number, markerPts: { label: string; p: V2 }[]): void {
+  private updateCutaway(dt: number, markerPts: { label: string; p: V2; r?: number }[]): void {
     const keep: Keep[] = this.cutawayOn ? [{ p: this.aim, r: AIM_KEEP }] : [];
-    const near = this.nearMarkers.update(markerPts, this.aim);
+    // Point markers only: endgame search areas are wide soft circles (several share a label, and their
+    // centres drift as stragglers move), so they'd make towers cut and come back for nothing.
+    const near = this.nearMarkers.update(markerPts.filter((m) => m.r === undefined), this.aim);
     if (this.cutawayOn) for (const mk of near) keep.push({ p: mk.p, r: 6 });
     const c = this.world.cutaway;
     c.update(this.gunship, keep, dt);
@@ -997,21 +1023,32 @@ export class Game {
     return dangerCloseAt(this.landing, this.sim.survivors, weaponById(this.weapon).radius);
   }
 
-  private markers(out: { label: string; p: V2 }[]) {
+  /** Mission markers on screen (from markerPoints()); search areas (with `r`) pin to the screen edge when off screen. */
+  private markers(out: { label: string; p: V2; r?: number }[]) {
     const wpx = this.renderer.domElement.clientWidth;
     const hpx = this.renderer.domElement.clientHeight;
     const v = new THREE.Vector3();
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0).setY(0).normalize();
     return out.map((o) => {
       v.set(o.p.x, 4, o.p.z).project(this.camera);
-      const visible = v.z < 1 && Math.abs(v.x) < 1 && Math.abs(v.y) < 1;
-      return { label: o.label, x: ((v.x + 1) / 2) * wpx, y: ((1 - v.y) / 2) * hpx, visible };
+      const behind = v.z >= 1;
+      const visible = !behind && Math.abs(v.x) < 1 && Math.abs(v.y) < 1;
+      const x = ((v.x + 1) / 2) * wpx;
+      const y = ((1 - v.y) / 2) * hpx;
+      if (o.r === undefined) return { label: o.label, x, y, visible };
+      // The circle's size on screen: a point r metres to the camera's right, projected.
+      const e = new THREE.Vector3(o.p.x + right.x * o.r, 0, o.p.z + right.z * o.r).project(this.camera);
+      const rpx = behind ? 0 : Math.hypot(((e.x - v.x) / 2) * wpx, ((e.y - v.y) / 2) * hpx);
+      // Off screen (or behind): the direction to pin along, from the screen centre (flipped when behind the camera).
+      const s = behind ? -1 : 1;
+      return { label: o.label, x, y, visible, edge: true, rpx, dir: Math.atan2(-v.y * s * hpx, v.x * s * wpx) };
     });
   }
 
-  /** The mission's markers on the ground (safehouse, home, the escort group, regroup points). */
+  /** The mission's markers on the ground (safehouse, home, the escort group, regroup points, endgame search areas with radius `r`). */
   private markerPoints() {
     const m = this.sim.mission;
-    const out: { label: string; p: V2 }[] = [];
+    const out: { label: string; p: V2; r?: number }[] = [];
     if (m.safehouse) out.push({ label: 'SAFEHOUSE', p: m.safehouse.centre });
     if (m.home) out.push({ label: 'HOME', p: m.home.centre });
     const moving = this.sim.survivors.filter((s) => s.alive && !s.home);
@@ -1020,6 +1057,8 @@ export class Game {
     }
     // Spec 002 feel M1: a scattered horde's regroup point while its runners are out (map text: textContent in the HUD).
     for (const g of this.sim.regroupPoints()) out.push({ label: g.label, p: g.p });
+    // Endgame search help: a soft circle round each group of stragglers, pinned to the screen edge when off screen.
+    for (const a of this.sim.searchAreas()) out.push({ label: a.cold === a.n ? 'SEARCH (COLD)' : 'SEARCH', p: a.p, r: a.r });
     return out;
   }
 
@@ -1057,7 +1096,7 @@ export class Game {
     this.disposed = true;
     // Test hooks must not outlive this game (they'd point at a dead one).
     const hooks = window.__spooky as TestHooks | undefined;
-    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf', 'landmarks', 'sight', 'orbit', 'cutaway'] as const) delete hooks[k];
+    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf', 'landmarks', 'sight', 'orbit', 'cutaway', 'endgame', 'searchAreas'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
     audio.release('mission');
     this.offSettings();
