@@ -271,3 +271,60 @@ describe('campaign store (this device only)', () => {
     expect(new CampaignStore(store, clock()).get(place, 2).nights[1]).toMatchObject({ best: { grade: 'B' } });
   });
 });
+
+// BACKLOG 3.25: three store nits.
+describe('campaign store: edge cases (3.25)', () => {
+  const rec = () => {
+    const r = emptyRecord();
+    r.nights[0] = { fp: 'abcdef01', tries: 1 };
+    return r;
+  };
+  const key = (i: number) => `${i.toString(16).padStart(8, '0')}:00000001`;
+
+  it('a first read that throws never overwrites storage with only this session', () => {
+    const data = new Map<string, string>([[CAMPAIGN_KEY, '{"v":1,"places":{}}']]);
+    let readsFail = true;
+    const store: KeyValueStore = {
+      getItem: (k) => {
+        if (readsFail) throw new Error('SecurityError');
+        return data.get(k) ?? null;
+      },
+      setItem: (k, v) => void data.set(k, v),
+    };
+    const s = new CampaignStore(store, clock());
+    s.put(place, 1, rec());
+    readsFail = false;
+    expect(data.get(CAMPAIGN_KEY)).toBe('{"v":1,"places":{}}');
+    expect(s.get(place, 1).nights[0]).toEqual({ fp: 'abcdef01', tries: 1 }); // still kept in memory
+    expect(s.warning).toBe(NOT_KEPT);
+  });
+
+  it('trimming never removes the place just written, even when the clock goes backwards', () => {
+    const store = fakeStore();
+    let t = 1_000_000;
+    const s = new CampaignStore(store, () => t);
+    for (let i = 0; i < MAX_PLACES; i++) {
+      t += 10;
+      s.put(key(i), 1, rec());
+    }
+    t = 5; // the clock jumps back: the new place looks the oldest
+    s.put(key(99), 1, rec());
+    const saved = JSON.parse(store.data.get(CAMPAIGN_KEY)!).places;
+    expect(Object.keys(saved)).toHaveLength(MAX_PLACES);
+    expect(saved[key(99)]).toBeDefined();
+    expect(new CampaignStore(store, clock()).get(key(99), 1).nights[0]).toEqual({ fp: 'abcdef01', tries: 1 });
+  });
+
+  it('an older build meeting newer (v2) data leaves it alone, keeps progress in memory and warns', () => {
+    const store = fakeStore();
+    const v2 = JSON.stringify({ v: 2, places: { [place]: { shape: 'new' } } });
+    store.data.set(CAMPAIGN_KEY, v2);
+    const s = new CampaignStore(store, clock());
+    s.put(place, 1, rec());
+    s.put(key(3), 2, rec());
+    expect(store.data.get(CAMPAIGN_KEY)).toBe(v2);
+    expect(store.writes).toBe(0);
+    expect(s.get(place, 1).nights[0]).toEqual({ fp: 'abcdef01', tries: 1 });
+    expect(s.warning).toBe(NOT_KEPT);
+  });
+});
