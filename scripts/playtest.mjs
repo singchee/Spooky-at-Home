@@ -251,7 +251,8 @@ async function endgameShots(browser) {
   ]) {
     const { page, errs } = await gamePage(browser, 'autostart=1&type=clear&template=clear-park&difficulty=3&seed=5', { viewport: { width: 1280, height: 720 } });
     const shots = {};
-    await fixedStep(page, 1 / 60);
+    // Coarse game steps: only the picture is judged here, and a loaded machine renders few frames a second.
+    await fixedStep(page, 1 / 15);
     await setup(page);
     await untilGameTime(page, (await gameTime(page)) + 1.5);
     const left = await page.evaluate(() => window.__spooky.endgame(2));
@@ -267,7 +268,7 @@ async function endgameShots(browser) {
       shots[`t${dt}`] = `${out}/endgame-${view}-t${dt}.png`;
       await page.screenshot({ path: shots[`t${dt}`] });
       if ((await page.locator('.hud-search').count()) < 1) errs.push(`t+${dt}: no search circle on screen`);
-      await fixedStep(page, 1 / 60);
+      await fixedStep(page, 1 / 15);
     }
     // Look away: the circle is off screen, so its marker pins to the edge with an arrow.
     await page.evaluate(([x, z]) => window.__spooky.aimAt(-x, -z), [c.x, c.z]);
