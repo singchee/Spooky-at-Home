@@ -61,6 +61,14 @@ button:disabled { opacity: 0.5; }
 .hud-marker { position: absolute; left: 0; top: 0; font-size: 14px; margin: -48px 0 0 -50px; width: 100px; text-align: center; font-weight: 700; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
 .hud-marker::after { content: ''; display: block; width: 8px; height: 8px; border: 1px solid currentColor; transform: rotate(45deg); margin: 4px auto 0; }
 .hud-attrib { position: absolute; right: 16px; bottom: 16px; font-size: 14px; }
+/* Landmark markers (3.19): outlined text, smaller and quieter than the mission's own markers; under every HUD panel. */
+.hud-landmarks { position: absolute; inset: 0; overflow: hidden; }
+.hud-landmark[hidden] { display: none; }
+.hud-landmark .lm-pin, .hud-landmark .lm-label { position: absolute; left: 0; top: 0; }
+.hud-landmark .lm-pin { width: 6px; height: 6px; margin: -4px 0 0 -4px; border: 1px solid currentColor; border-radius: 50%; box-shadow: 0 0 0 1px #000; }
+.hud-landmark .lm-label { box-sizing: border-box; height: 20px; padding: 0 6px; font-size: 14px; line-height: 20px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink);
+  -webkit-text-stroke: 3px #000; paint-order: stroke fill; text-shadow: 0 0 3px #000, 0 0 2px #000; }
+.hud[data-sensor=night] .hud-landmark .lm-label { color: #c8ffd0; }
 .hud-keys { position: absolute; left: 16px; bottom: 16px; font-size: 14px; max-width: calc(100% - 420px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 900px) {
   .hud-keys { display: none; }
