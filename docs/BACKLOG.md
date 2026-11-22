@@ -51,6 +51,10 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 | 3.18 | Rounds arrive from the gunship off-screen, not from mid-screen (owner playtest; with 3.9) | playtest, feel | in-progress |
 | 3.19 | HUD markers on landmarks from the map analysis (tennis club, park…); never schools or other child places (decision #11) | review, playtest, feel | todo |
 
+| 3.20 | Per-server time limit (45–60 s) for the map download: today a slow fallback server can hold the readout for 4+ minutes before saying "busy" (measured by 3.12) | review, playtest | todo |
+| 3.21 | "Load a saved map file" guesses the map centre from all coordinates in a raw export and can lose most of a town (Gundagai fixture: 377 → 24 buildings); read the fixture's stored centre | review, map-check | todo |
+| 3.22 | Load timing on the owner's own connection (cloud timings are unrepresentative: the main Overpass server reset every request from the cloud) | owner | todo |
+
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game
