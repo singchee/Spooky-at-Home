@@ -104,3 +104,10 @@ idea ──/pitch──► spec (docs/specs/NNN-name.md)
 - **No roles cut yet.** Idle roles cost nothing (they only run when invoked). `/debrief` applies the rule above: a role that finds nothing real for 4 weeks gets cut.
 - **Human playtest kit**: real players outrank every bot here. See `docs/PLAYTEST-KIT.md`.
 
+## Which model runs which job (owner, 22 Nov: "Sonnet for simpler routine jobs")
+The owner's usage limit is shared by every agent, and a typical builder uses 200-400k tokens. So:
+- **Sonnet:** routine, rule-following jobs where the procedure is written down: the Balance Analyst, Map Checker, QA Playtester and Scout (set with `model: sonnet` in their agent files), and any general-purpose task the Chief hands out that is mechanical: re-running checks, merging a branch with simple conflicts, small one-file fixes with a failing test already written, backlog and doc updates, re-recording audio from an existing script.
+- **The strongest model (default):** anything that needs judgement or catches subtle problems: the Code Reviewer, Tech Lead, Feel & Access Designer, Game Director, Critic and Experience Playtester; builders of new features or anything touching the sim, guardrails or determinism; the creative roles (Art Director, Audio Director, Story Writer).
+- **When unsure, use the strongest model for checking and Sonnet for doing,** never the reverse: a weak check is worse than no check.
+- **Run at most two builder teams at once** unless the owner asks for more.
+
