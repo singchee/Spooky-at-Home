@@ -92,7 +92,7 @@ function play(choice: MenuChoice, opts: { bot?: boolean; skipBriefing?: boolean;
  * "recon" (missions that suit the map) and "custom" (the manual form). `sample` puts the sample
  * town on the recon screen.
  */
-function menu(mode: MenuMode, o: { message?: string; sample?: boolean } = {}): void {
+function menu(mode: MenuMode, o: { message?: string; sample?: boolean; famous?: boolean } = {}): void {
   clear();
   window.__spooky!.screen = 'menu';
   // A recon mission's template and anchor belong to the map it was built on, not the sample town.
@@ -101,7 +101,7 @@ function menu(mode: MenuMode, o: { message?: string; sample?: boolean } = {}): v
     const { template: _template, anchor: _anchor, ...rest } = last ?? {};
     preset = { ...rest, map: makeSampleTown() };
   }
-  const close = showMenu(app, (c) => play(c), { mode, preset, onFrontPage: () => landing() });
+  const close = showMenu(app, (c) => play(c), { mode, preset, famous: o.famous, onFrontPage: () => landing() });
   const settings = settingsButton('on-menu');
   let toast: HTMLDivElement | null = null;
   if (o.message) {
@@ -128,6 +128,7 @@ function landing(notice?: string, enter = false): void {
   const close = showLanding(app, (c: LandingChoice) => {
     if (c === 'scout') menu('scout');
     else if (c === 'sample') menu('recon', { sample: true });
+    else if (c === 'famous') menu('scout', { famous: true });
     else if (c === 'intro') intro();
     else training();
   }, { notice, trained: trainingDone(), intro: offer ? 'offer' : 'link', enter });

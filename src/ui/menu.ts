@@ -3,6 +3,7 @@ import { FEATURE_CATEGORIES } from '../map/types';
 import { makeSampleTown } from '../map/sample';
 import { addExtras, checkEnoughMap, classifyMapError, fetchOverpassTimed, geocode, joinParts, mapErrorMessage, parseOverpass, type DownloadProgress, type DownloadStats, type OverpassJson } from '../map/overpass';
 import { centroid } from '../map/geom';
+import { isPresetFile, PRESET_URL, presetSeed, presetsByCountry, presetToMap, type PresetInfo } from '../map/presets';
 import type { MissionType } from '../sim/missions';
 import type { TemplateId } from '../map/recon';
 import { el } from './dom';
@@ -36,6 +37,8 @@ export interface MenuOptions {
   /** The last mission's choices: its map, difficulty and seed carry over. */
   preset?: Partial<MenuChoice>;
   onFrontPage(): void;
+  /** Open on the scout screen with the Famous places picker in view (from the front page). */
+  famous?: boolean;
 }
 
 const HALF = 600;
@@ -107,6 +110,32 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   msg.hidden = true;
   const msgText = el('p', undefined, undefined, msg);
 
+  // ---------- Famous places (3.27): six bundled landmark areas, grouped by country ----------
+  const famous = el('section', 'famous', undefined, scout);
+  famous.setAttribute('aria-labelledby', 'famous-title');
+  const famousTitle = el('h2', 'famous-title', 'Famous places', famous);
+  famousTitle.id = 'famous-title';
+  el('p', 'small famous-lede', 'Ready-made maps that open instantly, with no search. Missions on them are the same every time.', famous);
+  const famousButtons = new Map<string, HTMLButtonElement>();
+  for (const g of presetsByCountry()) {
+    const group = el('div', 'famous-group', undefined, famous);
+    group.setAttribute('role', 'group');
+    const head = el('h3', 'famous-country', undefined, group);
+    head.id = `famous-${g.country.toLowerCase().replace(/[^a-z]+/g, '-')}`;
+    group.setAttribute('aria-labelledby', head.id);
+    el('span', 'famous-flag', g.flag, head).setAttribute('aria-hidden', 'true');
+    el('span', undefined, g.country, head);
+    for (const pl of g.places) {
+      const b = el('button', 'famous-place', undefined, group);
+      b.type = 'button';
+      b.dataset.preset = pl.slug;
+      el('span', 'famous-city', pl.city, b);
+      el('span', 'famous-area', pl.area, b);
+      famousButtons.set(pl.slug, b);
+      b.addEventListener('click', () => void openPreset(pl));
+    }
+  }
+
   const alt = el('div', 'row scout-alt', undefined, scout);
   const sampleBtn = el('button', 'scout-sample', 'Try the sample town', alt);
   const customBtn = el('button', 'scout-custom', 'Custom mission', alt);
@@ -116,7 +145,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   file.accept = '.json,application/json';
   el('p', 'small', 'Your search goes straight from your browser to OpenStreetMap. This game has no server. Places you scout are kept in this browser for 30 days so they open instantly next time, with how long each download took (to estimate the next wait); none of it is ever sent anywhere. Saved map files stay on your computer.', scout);
   el('p', 'small', 'Plays with a mouse and keyboard, or with on-screen touch controls.', scout);
-  el('p', 'attrib', 'Map data © OpenStreetMap contributors (ODbL) when a real place is used.', scout);
+  el('p', 'attrib', 'Map data © OpenStreetMap contributors (ODbL) when a real place is used. Famous places: map data © OpenStreetMap contributors, ODbL 1.0.', scout);
 
   // ---------- custom mission (the manual form) ----------
   const custom = el('section', 'card wide custom', undefined, root);
@@ -456,6 +485,30 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
     toRecon(makeSampleTown());
   };
   sampleBtn.addEventListener('click', sample);
+  /** A bundled place: one file from this game's own origin (never OpenStreetMap), then recon as for a scouted place. */
+  let presetRun = 0;
+  const openPreset = async (pl: PresetInfo) => {
+    stop();
+    dropExtras();
+    const id = ++presetRun;
+    famousButtons.forEach((b) => (b.disabled = true));
+    say(`Opening ${pl.area}, ${pl.city}…`, 'note');
+    try {
+      const res = await fetch(new URL(PRESET_URL(pl.slug), document.baseURI).href);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json: unknown = await res.json();
+      if (!isPresetFile(json)) throw new Error('not a map');
+      const m = presetToMap(json, pl);
+      if (id !== presetRun || !alive) return;
+      seed.value = String(presetSeed(pl));
+      msg.hidden = true;
+      toRecon(m);
+    } catch (e) {
+      if (id === presetRun) say(`That famous place didn't open (${(e as Error).message}). Try again, or scout a place of your own.`, 'error');
+    } finally {
+      famousButtons.forEach((b) => (b.disabled = false));
+    }
+  };
   customBtn.addEventListener('click', () => {
     stop();
     show('custom');
@@ -503,6 +556,10 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   });
 
   show(opts.mode);
+  if (opts.famous && opts.mode === 'scout') {
+    famous.scrollIntoView?.({ block: 'start' });
+    famousButtons.values().next().value?.focus({ preventScroll: true });
+  }
   return () => {
     // The extras keep coming in the background, for the copy on this device only:
     // the map a mission is flying is never changed under it.

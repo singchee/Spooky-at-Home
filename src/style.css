@@ -303,7 +303,9 @@ button:disabled { opacity: 0.5; }
 .landing-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; max-width: 560px; }
 .landing-actions button { min-height: 48px; font-size: 16px; padding: 10px 14px; border-radius: 8px; text-align: center; }
 .landing-actions .la-scout { grid-column: 1 / -1; font-size: 18px; min-height: 56px; letter-spacing: 0.02em; box-shadow: 0 0 24px rgba(184, 255, 138, 0.25); }
-.landing-actions .la-sample, .landing-actions .la-training { background: rgba(14, 20, 16, 0.85); }
+.landing-actions .la-sample, .landing-actions .la-training, .landing-actions .la-famous { background: rgba(14, 20, 16, 0.85); }
+.landing-actions .la-famous { grid-column: 1 / -1; }
+.la-famous { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
 .la-training { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
 .la-sub { font-size: 14px; color: var(--muted); }
 .landing-actions button:focus-visible, .coach button:focus-visible, .menu-back:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
@@ -395,6 +397,17 @@ button:disabled { opacity: 0.5; }
 .scout-msg.error { border-color: var(--danger); background: rgba(255, 107, 94, 0.08); }
 .scout-msg p { margin: 0; }
 .scout-alt { margin-top: 14px; }
+.famous { margin: 22px 0 6px; padding-top: 14px; border-top: 1px solid var(--line); }
+.famous h2.famous-title { margin: 0 0 4px; font-size: 20px; letter-spacing: 0.04em; }
+.famous-lede { margin: 0 0 10px; color: var(--muted); }
+.famous-group { margin: 12px 0 0; display: grid; gap: 8px; }
+.famous-country { margin: 0; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.famous-flag { font-size: 22px; line-height: 1; }
+.famous-place { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 56px; padding: 8px 14px; text-align: left; border-radius: 8px; }
+.famous-place:disabled { opacity: 0.6; }
+.famous-city { font-weight: 700; }
+.famous-area { font-size: 14px; color: var(--muted); }
+.famous-place:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
   .scout-sweep:not([data-mode='determinate']):not([data-mode='estimate']) span { animation: none; width: 100%; opacity: 0.6; }
   .scout-sweep span { transition: none; }
