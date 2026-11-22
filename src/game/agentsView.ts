@@ -90,6 +90,15 @@ export class AgentsView {
   private lastTime = -1;
   private blasts: Blast[] = [];
   private pending: Blast[] = [];
+  /**
+   * The draw list (spec 003): every living zombie first, then bodies newest death first, so a body never takes
+   * a living zombie's place. `aliveIdx` holds the indices alive at the last frame (index order), `deadOrder`
+   * the indices in the order they were seen to die (oldest first), and `drawn` this frame's list.
+   */
+  private aliveIdx: number[] = [];
+  private deadOrder: number[] = [];
+  private scanned = 0;
+  private drawn: number[] = [];
   /** The character-model batches once the models have loaded (null: the procedural figures draw). */
   private zm: ModelBatch | null = null;
   private sm: ModelBatch | null = null;
@@ -172,12 +181,12 @@ export class AgentsView {
     const zs = sim.zombies;
     this.zt.ensure(zs.length);
     const zf = this.zt.f;
-    const start = Math.max(0, zs.length - MAX_Z);
+    const list = this.drawList(sim);
     this.applyBlasts(sim);
 
     const { a, b, c, d } = this.zombies;
     let k = 0;
-    for (let i = start; i < zs.length; i++) {
+    for (const i of list) {
       const z = zs[i];
       const seed = hash01(z.id);
       if (!this.zt.seen[i]) {
@@ -445,6 +454,35 @@ export class AgentsView {
   }
 
   /**
+   * Living zombies first (all of them, up to MAX_Z), then bodies newest death first while there is room.
+   * Read-only on the sim; costs O(living + new entries) a frame, never O(every body ever).
+   */
+  private drawList(sim: Sim): number[] {
+    const zs = sim.zombies;
+    if (zs.length < this.scanned) {
+      this.aliveIdx = [];
+      this.deadOrder = [];
+      this.scanned = 0;
+    }
+    const alive = this.aliveIdx;
+    let w = 0;
+    for (let r = 0; r < alive.length; r++) {
+      const i = alive[r];
+      if (zs[i].alive) alive[w++] = i;
+      else this.deadOrder.push(i);
+    }
+    alive.length = w;
+    for (let i = this.scanned; i < zs.length; i++) (zs[i].alive ? alive : this.deadOrder).push(i);
+    this.scanned = zs.length;
+    const out = this.drawn;
+    out.length = 0;
+    for (let r = 0; r < alive.length && out.length < MAX_Z; r++) out.push(alive[r]);
+    const dead = this.deadOrder;
+    for (let r = dead.length - 1; r >= 0 && out.length < MAX_Z; r--) out.push(dead[r]);
+    return out;
+  }
+
+  /**
    * New blasts since the last frame: zombies near one flinch away from it (strongest wins), bodies
    * it killed fall away from it, and survivors near it duck.
    */
@@ -452,10 +490,9 @@ export class AgentsView {
     if (!this.pending.length) return;
     const zs = sim.zombies;
     const zf = this.zt.f;
-    const start = Math.max(0, zs.length - MAX_Z);
     for (const bl of this.pending) {
       const reach = 3.5 * bl.r;
-      for (let i = start; i < zs.length; i++) {
+      for (const i of this.drawn) {
         const z = zs[i];
         const dx = z.x - bl.x;
         const dz = z.z - bl.z;

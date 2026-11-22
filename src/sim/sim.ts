@@ -144,7 +144,16 @@ export class Sim {
   t = 0;
   phase: SimState['phase'] = 'running';
   reason = '';
+  /** Every zombie ever spawned, dead or alive, append-only (ids = indices for the renderer and tests). */
   zombies: Zombie[] = [];
+  /**
+   * The live zombies in id order (spec 003): every per-zombie loop walks this, so the dead cost the sim nothing.
+   * Entries pushed onto `zombies` are picked up at the next sync (tests and Training push directly); dead ones
+   * are removed by stable compaction at the end of a step, so the rng is drawn in exactly the old order.
+   */
+  readonly living: Zombie[] = [];
+  private livingSeen = 0;
+  private livingDirty = false;
   survivors: Survivor[] = [];
   shells: Shell[] = [];
   weapons: WeaponState[];
@@ -257,6 +266,29 @@ export class Sim {
       id: this.nextId++, x: p.x, z: p.z, vx: 0, vz: 0, cold, alive: true, diedAt: -1, home, goal: null,
       speed: ((cold ? 1.1 : 1.3) + this.rng() * 0.6 + 0.08 * d) * speedMul,
     });
+    this.syncLiving();
+  }
+
+  /** Pick up zombies appended to `zombies` since the last sync (in order), live ones only. */
+  syncLiving(): Zombie[] {
+    const zs = this.zombies;
+    if (zs.length < this.livingSeen) {
+      // The list was replaced or cut (tests): start over.
+      this.living.length = 0;
+      this.livingSeen = 0;
+    }
+    for (let i = this.livingSeen; i < zs.length; i++) if (zs[i].alive) this.living.push(zs[i]);
+    this.livingSeen = zs.length;
+    return this.living;
+  }
+
+  /** Drop the dead from `living`, keeping the order (never swap-remove: the rng order depends on it). */
+  private compactLiving(): void {
+    const l = this.living;
+    let w = 0;
+    for (let i = 0; i < l.length; i++) if (l[i].alive) l[w++] = l[i];
+    l.length = w;
+    this.livingDirty = false;
   }
 
   /** The kind of the next wave to arrive. */
@@ -310,6 +342,7 @@ export class Sim {
   step(dt: number): void {
     if (this.phase !== 'running') return;
     this.t += dt;
+    this.syncLiving();
     for (const s of this.weapons) {
       // Keep the remainder (can go slightly negative) so rate of fire is exact at any step size.
       s.cooldown = Math.max(-dt, s.cooldown - dt);
@@ -327,6 +360,7 @@ export class Sim {
     this.updateZombies(dt);
     this.updateLines();
     this.checkResult();
+    if (this.livingDirty) this.compactLiving();
   }
 
   private updateShells(): void {
@@ -338,7 +372,7 @@ export class Sim {
       }
       const r = sh.weapon.radius;
       let kills = 0;
-      for (const z of this.zombies) {
+      for (const z of this.living) {
         if (!z.alive) continue;
         const d = Math.hypot(z.x - sh.to.x, z.z - sh.to.z);
         if (d < r || (d < r * KILL_REACH && this.rng() < 0.5)) {
@@ -347,6 +381,7 @@ export class Sim {
           kills++;
         }
       }
+      if (kills) this.livingDirty = true;
       this.kills += kills;
       if (this.scatterOn && sh.weapon.id === '105') this.scatter(sh.to, r);
       for (const s of this.survivors) {
@@ -370,7 +405,7 @@ export class Sim {
   /** Spec 002: every horde zombie a 105 left standing within SCATTER_REACH x its lethal radius runs (scatter stream only). */
   private scatter(at: V2, r: number): void {
     const count = new Map<number, number>();
-    for (const z of this.zombies) {
+    for (const z of this.living) {
       if (!z.alive || !z.home) continue;
       const k = this.hordeOf.get(z.home);
       if (k === undefined) continue;
@@ -411,7 +446,7 @@ export class Sim {
   /** Where scattered hordes will regroup, while any of their runners are out (feel M1: the in-flight marker). */
   regroupPoints(): { label: string; p: V2 }[] {
     const out = new Set<number>();
-    for (const z of this.zombies) if (z.alive && z.scatter && z.home) out.add(this.hordeOf.get(z.home)!);
+    for (const z of this.syncLiving()) if (z.alive && z.scatter && z.home) out.add(this.hordeOf.get(z.home)!);
     return [...out].sort((a, b) => a - b).map((k) => ({ label: this.hordes[k].regroup, p: { ...this.hordes[k].anchor } }));
   }
 
@@ -420,7 +455,7 @@ export class Sim {
       if (!s.alive || s.home) continue;
       let attackers = 0;
       let nearest = Infinity;
-      for (const z of this.zombies) {
+      for (const z of this.living) {
         if (!z.alive) continue;
         const d = Math.hypot(z.x - s.x, z.z - s.z);
         if (d < nearest) nearest = d;
@@ -477,7 +512,7 @@ export class Sim {
     if (this.waveTimer > 0) return;
     // A wave that can't arrive (too many alive, nowhere to spawn) keeps its kind for the next try.
     this.waveTimer = w.every * WAVE_KINDS[this.nextWaveKind()].gap;
-    const alive = this.zombies.reduce((n, z) => n + (z.alive ? 1 : 0), 0);
+    const alive = this.living.reduce((n, z) => n + (z.alive ? 1 : 0), 0);
     if (alive >= w.maxAlive) return;
     const active = this.activeSurvivors();
     const g = this.graph;
@@ -549,8 +584,11 @@ export class Sim {
         this.field = grid.flowField(active.map((s) => grid.idx(s.x, s.z)).filter((k) => k >= 0).flatMap((k) => this.freeAround(k)));
       }
     }
-    for (const z of this.zombies) {
-      if (!z.alive) continue;
+    for (const z of this.living) {
+      if (!z.alive) {
+        this.livingDirty = true;
+        continue;
+      }
       let dir: V2 | null = null;
       // Chase any survivor within 25 m directly.
       let near: Survivor | null = null;
@@ -686,7 +724,7 @@ export class Sim {
     if (!this.scatterOn) return;
     let left = 0;
     let cold = 0;
-    for (const z of this.zombies) {
+    for (const z of this.living) {
       if (!z.alive) continue;
       left++;
       if (z.cold) cold++;
@@ -721,7 +759,7 @@ export class Sim {
     const alive = this.survivors.filter((s) => s.alive);
     const home = this.survivors.filter((s) => s.home).length;
     if (m.type === 'clear') {
-      if (this.zombies.every((z) => !z.alive)) return end(true, 'Every horde cleared.');
+      if (this.living.every((z) => !z.alive)) return end(true, 'Every horde cleared.');
       if (this.survivors.length && !alive.length) return end(false, 'The sheltering friendlies were overrun.');
       if (this.t >= m.timeLimit) return end(false, 'Out of time. The hordes are still out there.');
     } else if (m.type === 'escort') {
@@ -736,7 +774,7 @@ export class Sim {
   }
 
   state(): SimState {
-    const zAlive = this.zombies.filter((z) => z.alive);
+    const zAlive = this.syncLiving().filter((z) => z.alive);
     return {
       t: this.t,
       phase: this.phase,

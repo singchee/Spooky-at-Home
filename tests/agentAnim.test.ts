@@ -108,6 +108,27 @@ describe('AgentsView', () => {
     expect(s.survivors).toBe(32);
     view.dispose();
   });
+
+  it('living first (spec 003): every living zombie is drawn however many bodies there are, bodies newest death first', () => {
+    const view = new AgentsView({ models: false });
+    // 3,000 bodies spawned AFTER 1,200 living ones: the old "newest 2,500 entries" rule would hide 1,700 of the living.
+    const mk = (i: number, alive: boolean) => ({ id: i, x: i % 100, z: Math.floor(i / 100), vx: 0, vz: 0, speed: 1.4, cold: false, alive, diedAt: alive ? -1 : 1, home: null, goal: null });
+    const zombies = [...Array.from({ length: 1200 }, (_, i) => mk(i, true)), ...Array.from({ length: 3000 }, (_, i) => mk(1200 + i, false))];
+    const sim = { zombies, survivors: [], t: 10 };
+    view.update(sim as never, 0);
+    const drawn = () => (view as unknown as { drawn: number[] }).drawn;
+    expect(drawn().length).toBe(2500);
+    for (let i = 0; i < 1200; i++) expect(drawn()[i]).toBe(i);
+    // Now living zombies die, in a known order: they are the newest bodies, so they're drawn ahead of the old ones.
+    for (const i of [5, 900, 17]) Object.assign(zombies[i], { alive: false, diedAt: 11 });
+    view.update(sim as never, 0.1);
+    const d = drawn();
+    expect(d.slice(0, 1197)).not.toContain(5);
+    expect(d.slice(1197, 1200)).toEqual([900, 17, 5]); // newest death first (seen in index order within a frame, then reversed)
+    expect(d.length).toBe(2500);
+    expect(d).not.toContain(1200); // the oldest bodies are the ones left out
+    view.dispose();
+  });
 });
 
 describe('figure geometry', () => {

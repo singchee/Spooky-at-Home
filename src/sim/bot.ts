@@ -54,7 +54,7 @@ export class Bot {
     if (this.timer > 0) return;
     this.timer = this.skill.thinkEvery;
     const sim = this.sim;
-    const all = sim.zombies.filter((z) => z.alive);
+    const all = sim.syncLiving().filter((z) => z.alive);
     const canSee = (z: { cold: boolean }) => this.skill.seesCold || this.sensor === 'night' || !z.cold;
     const visible = all.filter(canSee);
     if (!this.skill.seesCold) {
