@@ -1,5 +1,5 @@
 import { el } from '../ui/dom';
-import { TAP_MAX_MS, TAP_MAX_PX, pinchStep, stickDeflection, stickNudge } from './controls';
+import { TAP_MAX_FRAMES, TAP_MAX_MS, TAP_MAX_PX, pinchStep, stickDeflection, stickNudge } from './controls';
 
 /**
  * On-screen controls for phones and tablets (3.11, owner: "When accessed via mobile I can't control").
@@ -56,7 +56,9 @@ export class TouchControls {
   private stickVec: [number, number] = [0, 0];
   private fireId: number | null = null;
   /** Touches on the picture itself: for tap-to-aim and pinch. */
-  private surfaceTouches = new Map<number, { x: number; y: number; x0: number; y0: number; t0: number }>();
+  private surfaceTouches = new Map<number, { x: number; y: number; x0: number; y0: number; t0: number; f0: number }>();
+  /** Frames drawn so far (a tap lifted within TAP_MAX_FRAMES counts even when frames are slow). */
+  private frames = 0;
   private pinchFrom = 0;
   private multi = false;
   private listeners: [EventTarget, string, EventListener, AddEventListenerOptions | undefined][] = [];
@@ -120,7 +122,8 @@ export class TouchControls {
       const p = e as PointerEvent;
       if (p.pointerType !== 'touch' || !this.active) return;
       p.preventDefault(); // no emulated mouse events: they would try to capture the pointer
-      this.surfaceTouches.set(p.pointerId, { x: p.clientX, y: p.clientY, x0: p.clientX, y0: p.clientY, t0: performance.now() });
+      // Event times, not now(): on a slow frame the lift can be handled late, and a quick tap must still count.
+      this.surfaceTouches.set(p.pointerId, { x: p.clientX, y: p.clientY, x0: p.clientX, y0: p.clientY, t0: p.timeStamp, f0: this.frames });
       if (this.surfaceTouches.size >= 2) {
         this.multi = true;
         this.pinchFrom = this.pinchDistance();
@@ -146,7 +149,7 @@ export class TouchControls {
       const t = this.surfaceTouches.get(p.pointerId);
       if (!t) return;
       this.surfaceTouches.delete(p.pointerId);
-      const tap = e.type === 'pointerup' && !this.multi && performance.now() - t.t0 <= TAP_MAX_MS && Math.hypot(p.clientX - t.x0, p.clientY - t.y0) <= TAP_MAX_PX;
+      const tap = e.type === 'pointerup' && !this.multi && (p.timeStamp - t.t0 <= TAP_MAX_MS || this.frames - t.f0 <= TAP_MAX_FRAMES) && Math.hypot(p.clientX - t.x0, p.clientY - t.y0) <= TAP_MAX_PX;
       if (tap && this.act.playing()) this.act.aimAt(p.clientX, p.clientY);
       if (!this.surfaceTouches.size) this.multi = false;
     };
@@ -173,6 +176,7 @@ export class TouchControls {
 
   /** Per frame: move the aim by the stick (scaled by dt), refresh labels, show or hide. */
   update(dt: number): void {
+    this.frames++;
     const show = this.active && this.act.playing();
     if (this.root.hidden === show) this.root.hidden = !show;
     if (!show) {

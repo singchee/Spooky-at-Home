@@ -133,8 +133,10 @@ export function stickNudge(d: [number, number], dt: number): [number, number] {
 }
 
 /** A short touch that barely moved is a tap (aim there), not a drag. */
-export const TAP_MAX_MS = 280;
+export const TAP_MAX_MS = 450; // a long-press starts around 500 ms
 export const TAP_MAX_PX = 12;
+/** ...or lifted within this many drawn frames: on a struggling device, input waits for frames, so a quick tap looks slow. */
+export const TAP_MAX_FRAMES = 2;
 /** Pinch: fingers spread or closed by this ratio zooms one step. */
 export const PINCH_STEP = 1.25;
 
