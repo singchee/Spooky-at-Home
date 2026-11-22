@@ -1,5 +1,5 @@
 // Headless browser playtest (gates G7, G8 and visual evidence).
-// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin]
+// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls]
 // Starts `vite preview`, loads each mission type with the bot playing, switches cameras,
 // takes screenshots, and records console errors and draw calls. Chromium is preinstalled.
 // It also runs the photosensitivity flash checks and survivor-kit screenshots (`--only safety`
@@ -129,6 +129,18 @@ try {
   }
   if (!only || only === 'wayin') {
     for (const r of await wayInChecks(browser)) {
+      results.push(r);
+      if (r.errors.length) exitCode = 1;
+    }
+  }
+  if (!only || only === 'tour') {
+    for (const r of await tourChecks(browser)) {
+      results.push(r);
+      if (r.errors.length) exitCode = 1;
+    }
+  }
+  if (!only || only === 'controls') {
+    for (const r of await controlsChecks(browser)) {
       results.push(r);
       if (r.errors.length) exitCode = 1;
     }
@@ -281,8 +293,9 @@ async function restOfPlaytest(browser) {
     }
     const afterFire = await p.evaluate(() => window.__spooky.tutorialStep());
     if (afterFire !== 'switch') errs.push(`after firing the 25 mm the step is ${afterFire}, expected switch`);
-    await p.keyboard.press('q');
-    await p.keyboard.press('q');
+    // R cycles the guns (3.11; it was Q): 25 → 40 → 105.
+    await p.keyboard.press('r');
+    await p.keyboard.press('r');
     await p.waitForTimeout(1500);
     const afterSwitch = await p.evaluate(() => window.__spooky.tutorialStep());
     if (afterSwitch !== 'fire105') errs.push(`after switching guns the step is ${afterSwitch}, expected fire105`);
@@ -510,8 +523,8 @@ function gameTime(page) {
   return page.evaluate(() => window.__spooky.state().t);
 }
 /** Wait (in real time, however long it takes) until the game clock reaches `t` seconds. */
-function untilGameTime(page, t) {
-  return page.waitForFunction((tt) => window.__spooky.state().t >= tt, t, { timeout: 240000, polling: 50 });
+function untilGameTime(page, t, timeout = 240000) {
+  return page.waitForFunction((tt) => window.__spooky.state().t >= tt, t, { timeout, polling: 50 });
 }
 /** Game seconds per rendered frame (null: real time). A test hook: only present under automation. */
 function fixedStep(page, dt) {
@@ -540,6 +553,70 @@ async function safetyChecks(browser) {
     const shots = (await page.evaluate(() => window.__spooky.state())).shots - shots0;
     const r = judge(`25 mm sustained fire 2 s, zoomed, ${sensor === 'night' ? 'night vision' : 'white-hot'}`, frames, { rounds: shots });
     if (shots < 15) r.errors.push(`only ${shots} rounds fired (the gun didn't fire continuously)`);
+    r.errors.push(...errs);
+    res.push(r);
+    await page.close();
+  }
+  // 1b. Ten seconds of 25 mm trigger, through its 60-round magazine, the 3 s reload and on again, zoomed
+  //     in, in each view (white-hot, black-hot, night vision), at the usual small window and again at a
+  //     tablet size (800 x 1280, portrait). Aimed at zombies well clear of the friendlies, so the mission
+  //     can't end in friendly fire part-way.
+  for (const viewport of [null, { width: 800, height: 1280 }]) {
+    for (const [label, setup] of [
+      ['white-hot', async () => {}],
+      ['black-hot', async (p) => { await p.keyboard.press('h'); }],
+      ['night vision', async (p) => { await p.evaluate(() => window.__spooky.setSensor('night')); }],
+    ]) {
+      const { page, errs } = await gamePage(browser, 'autostart=1&type=clear&difficulty=1&seed=3', viewport ? { viewport } : {});
+      await page.keyboard.press('1');
+      await page.keyboard.press('z');
+      await setup(page);
+      await aimAway(page);
+      await fixedStep(page, 1 / 60);
+      await untilGameTime(page, (await gameTime(page)) + 1.2); // camera switch / polarity ease settles
+      const shots0 = (await page.evaluate(() => window.__spooky.state())).shots;
+      await startMeter(page, 'canvas.game-canvas');
+      const t0 = await gameTime(page);
+      await page.evaluate(() => window.__spooky.holdFire(true));
+      await untilGameTime(page, t0 + 10, 1200000); // every frame is metered: slow on a busy machine
+      await page.evaluate(() => window.__spooky.holdFire(false));
+      await untilGameTime(page, t0 + 12, 600000); // the last rounds land
+      const frames = await stopMeter(page);
+      const shots = (await page.evaluate(() => window.__spooky.state())).shots - shots0;
+      const size = viewport ? `${viewport.width}x${viewport.height}` : '640x360';
+      const r = judge(`25 mm held 10 s (magazine, reload, fire again), zoomed, ${label}, ${size}`, frames, { rounds: shots });
+      // 60 rounds in 5 s, a 3 s reload, then ~2 s more: about 84.
+      if (shots < 75) r.errors.push(`only ${shots} rounds in 10 s (expected ~84: the 25 mm didn't fire through the reload)`);
+      r.errors.push(...errs);
+      res.push(r);
+      await page.close();
+    }
+  }
+  // 1c. Ten seconds of mixed guns in night vision (the view blasts wash out), zoomed in: 25 mm, then the
+  //     40 mm, a 105, then the 25 mm again, trigger held throughout, metered until the 105 has landed.
+  {
+    const { page, errs } = await gamePage(browser, 'autostart=1&type=clear&difficulty=1&seed=3');
+    await page.keyboard.press('1');
+    await page.keyboard.press('z');
+    await page.evaluate(() => window.__spooky.setSensor('night'));
+    await aimAway(page);
+    await fixedStep(page, 1 / 60);
+    await untilGameTime(page, (await gameTime(page)) + 1.2);
+    const shots0 = (await page.evaluate(() => window.__spooky.state())).shots;
+    await startMeter(page, 'canvas.game-canvas');
+    const t0 = await gameTime(page);
+    await page.evaluate(() => window.__spooky.holdFire(true));
+    for (const [at, key] of [[3, '2'], [6, '3'], [7, '1']]) {
+      await untilGameTime(page, t0 + at, 600000);
+      await page.keyboard.press(key);
+    }
+    await untilGameTime(page, t0 + 10, 600000);
+    await page.evaluate(() => window.__spooky.holdFire(false));
+    await untilGameTime(page, t0 + 15, 600000); // the 105 shell takes ~4.5 s to land
+    const frames = await stopMeter(page);
+    const shots = (await page.evaluate(() => window.__spooky.state())).shots - shots0;
+    const r = judge('mixed guns held 10 s (25, 40, 105, 25), zoomed, night vision', frames, { rounds: shots });
+    if (shots < 40) r.errors.push(`only ${shots} rounds in the mixed burst`);
     r.errors.push(...errs);
     res.push(r);
     await page.close();
@@ -786,12 +863,13 @@ async function audioChecks(browser) {
     if (!(muted?.gains?.master < 0.001)) errors.push(`muted, but master gain is ${muted?.gains?.master}`);
     if (!(unmuted?.gains?.master > 0.1)) errors.push(`unmuted, but master gain is ${unmuted?.gains?.master}`);
 
-    // Ten restarts (Esc, R): still one context, and the number of live sources stays bounded.
+    // Ten restarts (Esc, then the pause menu's Restart; R is the gun key since 3.11): still one context,
+    // and the number of live sources stays bounded.
     const voices = [first?.voices];
     for (let i = 0; i < 10; i++) {
       await page.keyboard.press('Escape');
       await page.waitForFunction(() => window.__spooky.info()?.screen === 'paused', null, { timeout: 10000 });
-      await page.keyboard.press('r');
+      await page.click('.overlay .pause-restart');
       await playing();
       await page.waitForTimeout(500);
       voices.push((await read())?.voices);
@@ -916,7 +994,7 @@ async function wayInChecks(browser) {
       errs.push(`request to a host that isn't allowed: ${url}`);
       return route.abort('blockedbyclient');
     });
-    await page.goto(`http://localhost:${PORT}${path}`);
+    if (path) await page.goto(`http://localhost:${PORT}${path}`); // null: the caller navigates
     return { page, errs, osmCalls };
   }
 
@@ -1107,6 +1185,755 @@ async function wayInChecks(browser) {
     const shot = `${out}/wayin-recon-header-${width}.png`;
     await page.screenshot({ path: shot });
     res.push({ type: `way in: front-page button clear of the recon heading (${width} px)`, errors: errs, shots: { recon: shot } });
+    await page.close();
+  }
+
+  // 6. Places remembered on this device (BACKLOG 3.12): the second scout of the same place makes no
+  //    OpenStreetMap request and says it came from this device; Refresh downloads it again (map only);
+  //    Forget this place and Forget all saved places (Settings) remove it. Still the stubbed OSM.
+  {
+    const { page, errs, osmCalls } = await wayInPage(browser, desktop, OSM.ok(300));
+    const toRecon = async (text) => {
+      await scoutFor(page, text);
+      await page.waitForSelector('.menu .recon .recon-cards > *', { timeout: 20000 });
+      return scoutState(page);
+    };
+    const note = () => page.evaluate(() => document.querySelector('.recon .recon-saved')?.innerText.replace(/\s+/g, ' ').trim() ?? null);
+    const backToScout = async () => {
+      await page.click('.recon-change');
+      await page.waitForSelector('.menu .scout h1');
+    };
+    const shots = {};
+
+    await toRecon('Test Reef');
+    const first = await note();
+    const afterFirst = osmCalls.length;
+    if (!/^Saved on this device, so next time it opens instantly/.test(first ?? '')) errs.push(`no "saved on this device" note after a download: ${first}`);
+    if (!/never sent anywhere/.test(first ?? '')) errs.push(`no privacy note by the saved place: ${first}`);
+    if (afterFirst < 2) errs.push(`first scout didn't search and download: ${osmCalls.join(', ')}`);
+
+    await backToScout();
+    const second = await toRecon('  test reef '); // the same search, typed differently
+    const again = await note();
+    if (osmCalls.length !== afterFirst) errs.push(`the second scout asked OpenStreetMap again: ${osmCalls.slice(afterFirst).join(', ')}`);
+    if (!second.stages.some((s) => /^Loaded from this device · downloaded just now$/.test(s))) errs.push(`the readout doesn't say it loaded from this device: ${JSON.stringify(second.stages)}`);
+    if (!/^Loaded from this device · downloaded just now Refresh Forget this place/.test(again ?? '')) errs.push(`recon note for a saved place: ${again}`);
+    const map2 = await page.textContent('.recon h2');
+    if (map2 !== PLACE) errs.push(`saved place opened as "${map2}"`);
+    shots.saved = `${out}/wayin-saved-place-desktop.png`;
+    await page.screenshot({ path: shots.saved });
+
+    // Refresh: downloads the map again (no new place search), and keeps it.
+    await page.click('.recon-refresh');
+    await page.waitForSelector('.menu .recon .recon-cards > *', { timeout: 20000 });
+    const refreshed = osmCalls.slice(afterFirst);
+    if (refreshed.length !== 1 || isGeocode(refreshed[0])) errs.push(`Refresh should download the map once and not search again: ${refreshed.join(', ')}`);
+    if (!/^Saved on this device/.test((await note()) ?? '')) errs.push(`after Refresh: ${await note()}`);
+
+    // Forget this place: gone, and the next scout downloads afresh.
+    await page.click('.recon-forget');
+    await page.waitForFunction(() => /^Forgotten\./.test(document.querySelector('.recon-saved-text')?.textContent ?? ''), null, { timeout: 5000 }).catch(() => errs.push('Forget this place did not confirm'));
+    if (await page.$('.recon-forget, .recon-refresh')) errs.push('Forget/Refresh still offered after forgetting');
+    await backToScout();
+    const beforeThird = osmCalls.length;
+    await toRecon('Test Reef');
+    if (osmCalls.length - beforeThird < 2) errs.push(`a forgotten place still loaded from the device: ${osmCalls.slice(beforeThird).join(', ')}`);
+
+    // Settings → Forget all saved places.
+    await page.click('.screen-settings');
+    await page.waitForFunction(() => /^1 place saved on this device/.test(document.querySelector('.settings-places p')?.textContent ?? ''), null, { timeout: 5000 })
+      .catch(async () => errs.push(`settings count: ${await page.textContent('.settings-places p')}`));
+    shots.settings = `${out}/wayin-saved-places-settings.png`;
+    await page.screenshot({ path: shots.settings });
+    await page.click('.settings-forget-places');
+    await page.waitForFunction(() => /^No places saved on this device\.$/.test(document.querySelector('.settings-places p')?.textContent ?? ''), null, { timeout: 5000 })
+      .catch(async () => errs.push(`after Forget all: ${await page.textContent('.settings-places p')}`));
+    await page.keyboard.press('Escape');
+    await backToScout();
+    const beforeFourth = osmCalls.length;
+    await toRecon('Test Reef');
+    if (osmCalls.length - beforeFourth < 2) errs.push(`"Forget all" left the place on the device: ${osmCalls.slice(beforeFourth).join(', ')}`);
+    // Nothing about saved places leaves the browser: every outside request was to OSM (wayInPage fails any other).
+    res.push({ type: 'way in: places remembered on this device', errors: errs, shots });
+    await page.close();
+  }
+
+  // 7. A browser that refuses storage (private window, blocked site data) still scouts, just without saving.
+  {
+    const { page, errs, osmCalls } = await wayInPage(browser, desktop, OSM.ok(200), null);
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'indexedDB', { get() { throw new DOMException('blocked', 'SecurityError'); } });
+    });
+    await page.goto(`http://localhost:${PORT}/?screen=scout`);
+    for (let i = 0; i < 2; i++) {
+      await scoutFor(page, 'Test Reef');
+      await waitOutcome(page);
+      const st = await scoutState(page);
+      if (!st.recon) errs.push(`no storage: scouting failed: ${st.msg}`);
+      if (await page.$('.recon-saved')) errs.push('claims the place is saved when storage is blocked');
+      if (i === 0) await page.click('.recon-change');
+    }
+    if (osmCalls.length !== 4) errs.push(`expected two searches and two downloads without storage: ${osmCalls.length}`);
+    res.push({ type: 'way in: storage blocked (private window)', errors: errs });
+    await page.close();
+  }
+  return res;
+}
+
+// ---------- Briefing walk-through ("Hello, home", 3.7) ----------
+// For clear, escort, defend and a recon mission, at 1280x720 and 390x844: the tour visits every stop
+// in order (area first, orbit last), each stop is screenshotted held still at mid-hold, the diorama's
+// labels never overlap (checked at each stop and sampled through a real run), Skip works (button, Space,
+// Enter), dragging the model hands it to the player, Start mission stays available, controls are at
+// least 48 px. Reduced motion: a stepped list with Back / Next that cuts (no animation). Then 20
+// briefing → mission → retry cycles must not leak WebGL contexts or dioramas.
+// (Function declarations, not consts: the checks run from the top-level code above, before this line.)
+function tourRank(id) {
+  return { area: 0, safehouse: 1, home: 1, survivors: 2, friendlies: 2, stragglers: 2, horde: 3, wave: 3, route: 3, orbit: 4 }[id.replace(/\d+$/, '')];
+}
+
+async function tourPage(browser, viewport, extra = {}) {
+  const page = await browser.newPage({ viewport, deviceScaleFactor: scale, ...extra });
+  const errs = [];
+  page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+  page.on('pageerror', (e) => errs.push(String(e)));
+  // Pointer lock collapses the headless frame rate; Start mission asks for it.
+  await page.addInitScript(() => {
+    Element.prototype.requestPointerLock = () => Promise.resolve();
+  });
+  return { page, errs };
+}
+
+/** Opens a mission's briefing: a URL mission, or 'recon' (the first suggested mission on the sample town's recon screen). */
+async function openBriefing(page, which) {
+  if (which === 'recon') {
+    await page.goto(`http://localhost:${PORT}/?screen=recon`);
+    await page.waitForSelector('.menu .recon .mission-card');
+    await page.click('.recon .mission-card button.primary');
+  } else {
+    await page.goto(`http://localhost:${PORT}/?autostart=1&type=${which}&difficulty=3&seed=7&brief=1`);
+  }
+  await page.waitForSelector('.card.briefing .tour', { timeout: 30000 });
+  return page.textContent('.card.briefing h2');
+}
+
+/** Pairs of diorama labels that overlap on screen (should be none). */
+function labelOverlaps(page) {
+  return page.evaluate(() => {
+    const rs = [...document.querySelectorAll('.dio-label.on')].map((e) => ({ t: e.textContent, r: e.getBoundingClientRect() }));
+    const bad = [];
+    for (let i = 0; i < rs.length; i++)
+      for (let j = i + 1; j < rs.length; j++) {
+        const a = rs[i].r;
+        const b = rs[j].r;
+        if (a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5) bad.push(`${rs[i].t} / ${rs[j].t}`);
+      }
+    return bad;
+  });
+}
+
+function tourState(page) {
+  return page.evaluate(() => {
+    const t = document.querySelector('.tour');
+    return t ? { ...t.dataset, caption: t.querySelector('.tour-cap')?.textContent ?? '', step: t.querySelector('.tour-step')?.textContent ?? '' } : null;
+  });
+}
+
+async function tourChecks(browser) {
+  const res = [];
+  try {
+    await tourCheckRuns(browser, res);
+  } catch (e) {
+    // Keep what already ran; report the failure as a check, not a crash.
+    res.push({ type: 'briefing walk-through: checks stopped', errors: [String(e).split('\n')[0]], shots: {} });
+  }
+  return res;
+}
+
+async function tourCheckRuns(browser, res) {
+  for (const which of ['clear', 'escort', 'defend', 'recon']) {
+    for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+      const { page, errs } = await tourPage(browser, viewport);
+      const shots = {};
+      const tag = `${which}-${viewport.width}`;
+      const title = await openBriefing(page, which);
+      await page.waitForSelector('.tour[data-state="playing"]', { timeout: 15000 }).catch(() => errs.push('the tour did not start on its own'));
+      const st0 = await tourState(page);
+      const stops = (st0?.stops ?? '').split(',');
+      if (stops[0] !== 'area' || stops[stops.length - 1] !== 'orbit') errs.push(`stops should run area … orbit: ${stops}`);
+      for (let i = 1; i < stops.length; i++) if (tourRank(stops[i]) < tourRank(stops[i - 1])) errs.push(`stop ${stops[i]} out of order: ${stops}`);
+      const total = Number(st0?.total);
+      if (!(total >= 15 && total <= 20)) errs.push(`tour is ${total} s (15–20 s wanted)`);
+      const startBtn = await page.$('.card.briefing > button.primary');
+      if (!startBtn || !(await startBtn.isVisible()) || !(await startBtn.isEnabled())) errs.push('Start mission is not available during the tour');
+      const small = await page.$$eval('.tour-btn', (bs) => bs.filter((b) => b.getBoundingClientRect().height < 48 || b.getBoundingClientRect().width < 48).map((b) => b.textContent));
+      if (small.length) errs.push(`tour buttons under 48 px: ${small}`);
+
+      // 1. Each stop, held still at mid-hold: right caption, a highlight, no overlapping labels. Screenshot.
+      const times = await page.evaluate(() => document.querySelector('.tour').tourHook.times());
+      await page.evaluate(() => document.querySelector('.tour').tourHook.freeze(true));
+      const captions = [];
+      for (let i = 0; i < stops.length; i++) {
+        const s = times[i];
+        await page.evaluate((t) => document.querySelector('.tour').tourHook.seek(t), s.t0 + s.move + s.hold * 0.6);
+        await page.waitForTimeout(700);
+        const st = await tourState(page);
+        if (Number(st.index) !== i || st.stop !== stops[i]) errs.push(`seek to stop ${i} shows ${st.stop}`);
+        if (!st.caption.trim()) errs.push(`stop ${stops[i]} has no caption`);
+        captions.push(st.caption);
+        const hl = await page.evaluate(() => document.querySelectorAll('.tmap-tour > *').length);
+        if (!hl) errs.push(`stop ${stops[i]}: nothing highlighted on the tactical map`);
+        const ov = await labelOverlaps(page);
+        if (ov.length) errs.push(`stop ${stops[i]}: labels overlap: ${ov.join('; ')}`);
+        await (await page.$('.briefing-visuals')).scrollIntoViewIfNeeded();
+        shots[stops[i]] = `${out}/tour-${tag}-${i + 1}-${stops[i]}.png`;
+        await page.screenshot({ path: shots[stops[i]] });
+      }
+
+      // 2. A real run (clock x3: the headless machine draws slowly), labels sampled as it flies.
+      await page.evaluate(() => {
+        const h = document.querySelector('.tour').tourHook;
+        h.freeze(false);
+        h.rate(3);
+        h.seek(0);
+      });
+      const t0 = Date.now();
+      let samples = 0;
+      while (Date.now() - t0 < 90000) {
+        const st = await tourState(page);
+        if (st.state !== 'playing') break;
+        const ov = await labelOverlaps(page);
+        samples++;
+        if (ov.length) errs.push(`labels overlap mid-flight at ${st.stop}: ${ov.join('; ')}`);
+        await page.waitForTimeout(200);
+      }
+      const done = await tourState(page);
+      if (done.ended !== 'end') errs.push(`the tour didn't end on its own (ended: ${done.ended}, state ${done.state})`);
+      if (done.visited !== stops.join(',')) errs.push(`visited ${done.visited}, expected ${stops.join(',')}`);
+      if (!(await page.$('.tour-replay'))) errs.push('no Replay after the tour');
+
+      // 3. Skip: Space and Enter (focus on the page), then the button. 4. Dragging the model hands over.
+      const replay = async () => {
+        await page.click('.tour-replay');
+        await page.waitForSelector('.tour[data-state="playing"]');
+        await page.evaluate(() => document.activeElement?.blur());
+      };
+      for (const key of ['Space', 'Enter']) {
+        await replay();
+        await page.keyboard.press(key);
+        const st = await tourState(page);
+        if (st.ended !== 'skip' || st.state !== 'done') errs.push(`${key} didn't skip (${st.state}, ${st.ended})`);
+        if (!(await page.$('.card.briefing'))) errs.push(`${key} left the briefing`);
+      }
+      await replay();
+      await page.click('.tour-skip');
+      if ((await tourState(page)).ended !== 'skip') errs.push('the Skip button did not skip');
+      if (await page.isVisible('.dio-canvas')) {
+        await replay();
+        const box = await (await page.$('.dio-canvas')).boundingBox();
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 4 });
+        await page.mouse.up();
+        const st = await tourState(page);
+        if (st.ended !== 'interrupt' || st.state !== 'done') errs.push(`dragging didn't hand over (${st.state}, ${st.ended})`);
+      }
+      const info = await page.evaluate(() => ({ buildMs: Number(document.querySelector('.dio')?.dataset.buildMs), drawCalls: Number(document.querySelector('.dio')?.dataset.drawCalls) }));
+      res.push({ type: `briefing walk-through: ${which} (${viewport.width}x${viewport.height})`, title, stops: stops.join(' → '), total, captions, labelSamples: samples, ...info, errors: errs, shots });
+      await page.close();
+    }
+  }
+
+  // 5. Reduced motion: no flight. A stepped list, Back / Next cut between framings, nothing moves on its own.
+  {
+    const { page, errs } = await tourPage(browser, { width: 1280, height: 720 }, { reducedMotion: 'reduce' });
+    await openBriefing(page, 'defend');
+    await page.waitForSelector('.tour[data-state="steps"]', { timeout: 15000 }).catch(() => errs.push('no stepped list under reduced motion'));
+    const st = await tourState(page);
+    const n = (st?.stops ?? '').split(',').length;
+    const list = await page.evaluate(() => ({ shown: getComputedStyle(document.querySelector('.tour-list')).display !== 'none', items: document.querySelectorAll('.tour-item').length }));
+    if (!list.shown || list.items !== n) errs.push(`stepped list: ${JSON.stringify(list)}`);
+    if (!(await page.isDisabled('.tour-back'))) errs.push('Back should be disabled on the first stop');
+    const stage = await page.$('.dio-stage');
+    const shots = { first: `${out}/tour-reduced-1.png` };
+    await page.screenshot({ path: shots.first });
+    const still = async (label) => {
+      await page.waitForTimeout(400);
+      const a = await stage.screenshot();
+      await page.waitForTimeout(700);
+      const b = await stage.screenshot();
+      if (!a.equals(b)) errs.push(`the picture moved on its own (${label})`);
+    };
+    await still('stop 1');
+    for (let i = 1; i <= n; i++) {
+      await page.click('.tour-next');
+      const s = await tourState(page);
+      if (i < n && Number(s.index) !== i) errs.push(`Next went to ${s.index}, not ${i}`);
+      if (i === 2) {
+        await still(`stop ${i + 1}`);
+        shots.step = `${out}/tour-reduced-${i + 1}.png`;
+        await page.screenshot({ path: shots.step });
+      }
+      const ov = await labelOverlaps(page);
+      if (ov.length) errs.push(`labels overlap at step ${i}: ${ov.join('; ')}`);
+    }
+    if ((await tourState(page)).step !== 'Whole area') errs.push('Next past the last stop should show the whole area');
+    await page.click('.tour-back');
+    if (Number((await tourState(page)).index) !== n - 1) errs.push('Back from the whole area should return to the last stop');
+    res.push({ type: 'briefing walk-through: reduced motion (stepped list)', errors: errs, shots });
+    await page.close();
+  }
+
+  // 6. Leaks: 20 × (briefing with the tour → Start mission → Esc → R retry). One diorama context at a time.
+  {
+    const { page, errs } = await tourPage(browser, { width: 1280, height: 720 });
+    await page.addInitScript(() => {
+      window.__ctx = { made: 0, lost: 0 };
+      const orig = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+        const c = orig.call(this, type, attrs);
+        if (c && /webgl/.test(type) && !this.__counted) {
+          this.__counted = true;
+          window.__ctx.made++;
+          this.addEventListener('webglcontextlost', () => window.__ctx.lost++);
+        }
+        return c;
+      };
+    });
+    await openBriefing(page, 'defend');
+    const snap = () =>
+      page.evaluate(() => ({ ...window.__ctx, dioramas: document.querySelectorAll('.dio-canvas').length, tours: document.querySelectorAll('.tour').length, tourLayers: document.querySelectorAll('.tmap-tour').length, nodes: document.getElementsByTagName('*').length, heapMB: Math.round((performance.memory?.usedJSHeapSize ?? 0) / 1e5) / 10 }));
+    const before = await snap();
+    const t0 = Date.now();
+    let cycles = 0;
+    try {
+      for (let i = 0; i < 20; i++) {
+        await page.waitForSelector('.tour');
+        // A retried mission's briefing starts with the tour done (seen already): replay it, fly a little, start.
+        if (i > 0 && (await tourState(page)).state !== 'done') errs.push(`retry ${i}: the tour should start done (seen), not ${(await tourState(page)).state}`);
+        if (await page.$('.tour-replay')) await page.click('.tour-replay');
+        await page.waitForTimeout(300);
+        await page.click('.card.briefing > button.primary');
+        // Start mission disposes the walk-through and the diorama (the card itself is only hidden).
+        await page.waitForFunction(() => !document.querySelector('.tour') && !document.querySelector('.dio-canvas'), null, { timeout: 15000 });
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.overlay .card h2:has-text("Paused")', { timeout: 10000 });
+        await page.keyboard.press('r');
+        await page.waitForSelector('.card.briefing .tour', { timeout: 30000 });
+        cycles++;
+      }
+    } catch (e) {
+      errs.push(`cycle ${cycles + 1}: ${String(e).split('\n')[0]}`);
+    }
+    const after = await snap();
+    const alive = (s) => s.made - s.lost;
+    if (alive(after) > alive(before)) errs.push(`WebGL contexts alive grew from ${alive(before)} to ${alive(after)}`);
+    if (after.dioramas !== 1 || after.tours !== 1 || after.tourLayers !== 1) errs.push(`after 20 cycles: ${after.dioramas} dioramas, ${after.tours} tours, ${after.tourLayers} map layers`);
+    if (after.nodes > before.nodes * 1.2 + 50) errs.push(`DOM grew from ${before.nodes} to ${after.nodes} nodes`);
+    res.push({ type: 'briefing walk-through: 20 briefing → mission → retry cycles', cycles, before, after, seconds: Math.round((Date.now() - t0) / 1000), errors: errs, shots: {} });
+    await page.close();
+  }
+  return res;
+}
+
+// ---------- Controls (3.11): key map, pause menu, hotkey strip, touch controls ----------
+// Desktop: the key-hints strip is on screen, readable and clear of the HUD panels and the OSM credit; R cycles
+// the gun, Q the view; Esc opens the pause menu, whose Briefing re-opens the briefing and comes back; the
+// strip can be hidden in Settings. Touch (phone and tablet, portrait
+// and landscape, emulated with hasTouch/isMobile and driven with real touch events): the stick moves the aim,
+// FIRE fires (together with the stick), GUN and VIEW cycle, tap aims, pinch and ZOOM zoom, the pause button
+// pauses; controls are 48 px or more and clear of the HUD panels; the page never scrolls; menus have 44 px+
+// tap targets.
+// (Functions, not consts: the checks run from top-level await above, before any const down here exists.)
+function hudPanels() {
+  return ['.hud-weapons', '.hud-minimap', '.hud-mission', '.hud-radio', '.hud-attrib', '.hud-sensor'];
+}
+
+/** Boxes of `sel` (all matches) that overlap any visible box of `others`. */
+function overlaps(page, sel, others) {
+  return page.evaluate(([sel, others]) => {
+    const vis = (e) => {
+      const r = e.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden' ? r : null;
+    };
+    const found = [];
+    for (const a of document.querySelectorAll(sel)) {
+      const ra = vis(a);
+      if (!ra) continue;
+      for (const o of others) {
+        for (const b of document.querySelectorAll(o)) {
+          if (b === a || a.contains(b) || b.contains(a)) continue;
+          const rb = vis(b);
+          if (!rb) continue;
+          if (ra.left < rb.right && ra.right > rb.left && ra.top < rb.bottom && ra.bottom > rb.top) {
+            found.push(`${a.className || sel} overlaps ${o} (${[ra, rb].map((r) => `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`).join(' / ')})`);
+          }
+        }
+      }
+    }
+    return found;
+  }, [sel, others]);
+}
+
+function info(page) {
+  return page.evaluate(() => window.__spooky.info());
+}
+function waitInfo(page, fn, arg, timeout = 30000) {
+  return page.waitForFunction(fn, arg, { timeout, polling: 50 });
+}
+/** Point the aim at the live zombie farthest from any friendly, so test fire never ends the mission in friendly fire. */
+function aimAway(page) {
+  return page.evaluate(() => {
+    const fs = window.__spooky.survivors();
+    const far = (z) => Math.min(1e9, ...fs.map((f) => Math.hypot(f.x - z.x, f.z - z.z)));
+    const z = window.__spooky.zombies().sort((a, b) => far(b) - far(a))[0];
+    if (z) window.__spooky.aimAt(z.x, z.z);
+  });
+}
+/** Wait `s` seconds of game time (a busy, software-rendered machine can run far slower than real time). */
+async function waitGame(page, s) {
+  await untilGameTime(page, (await gameTime(page)) + s);
+}
+
+async function controlsChecks(browser) {
+  const res = [];
+  // ----- Desktop -----
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
+    const name = `${viewport.width}x${viewport.height}`;
+    const { page, errs } = await gamePage(browser, 'autostart=1&type=escort&difficulty=1&seed=3', { viewport });
+    page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+    const out_ = { type: `controls: desktop keys and hotkey strip (${name})`, errors: errs, shots: {} };
+    try {
+      // The radio's "cleared hot" line is up, so the caption box is in the overlap check.
+      await page.waitForSelector('.hud-radio div');
+      const strip = await page.evaluate(() => {
+        const k = document.querySelector('.hud-keys');
+        const r = k.getBoundingClientRect();
+        const cs = getComputedStyle(k);
+        return { text: k.textContent, visible: r.width > 0 && cs.display !== 'none', font: parseFloat(cs.fontSize), color: cs.color, bg: cs.backgroundColor, inView: r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, clipped: k.scrollWidth > k.clientWidth + 1 };
+      });
+      out_.strip = strip.text;
+      if (!strip.visible) errs.push('hotkey strip not visible on desktop');
+      for (const want of ['R weapon', 'Q view', 'Esc menu', 'Z zoom']) if (!strip.text.includes(want)) errs.push(`hotkey strip lacks "${want}": ${strip.text}`);
+      if (strip.font < 12) errs.push(`hotkey strip text ${strip.font}px (min 12)`);
+      if (!strip.inView || strip.clipped) errs.push('hotkey strip is cut off');
+      // Contrast, worst case: the strip's dark backing over a pure white-hot picture.
+      const rgb = (s) => (s.match(/[\d.]+/g) ?? []).map(Number);
+      const lin = (v) => ((v /= 255) <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+      const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+      const [br, bg_, bb, ba = 1] = rgb(strip.bg);
+      const back = [br, bg_, bb].map((c) => c * ba + 255 * (1 - ba));
+      const contrast = (lum(rgb(strip.color)) + 0.05) / (lum(back) + 0.05);
+      out_.contrast = Number(contrast.toFixed(2));
+      if (contrast < 4.5) errs.push(`hotkey strip contrast ${contrast.toFixed(2)}:1 over a white picture (min 4.5)`);
+      errs.push(...(await overlaps(page, '.hud-keys', hudPanels())));
+      const touchOn = (await info(page)).touch;
+      if (touchOn) errs.push('touch controls are on with a mouse and keyboard');
+      out_.shots.hud = `${out}/controls-desktop-${name}.png`;
+      await page.screenshot({ path: out_.shots.hud });
+
+      if (viewport.width === 1280) {
+        // R cycles the gun (25 → 40 → 105 → 25); 1/2/3 still pick directly.
+        await page.keyboard.press('1');
+        const guns = [(await info(page)).weapon];
+        for (let i = 0; i < 3; i++) {
+          await page.keyboard.press('r');
+          guns.push((await info(page)).weapon);
+        }
+        out_.rCycle = guns.join(' → ');
+        if (guns.join() !== '25,40,105,25') errs.push(`R cycled the guns ${out_.rCycle}`);
+        // Q cycles the view: white-hot → black-hot → night vision → white-hot.
+        const views = [];
+        const view = async () => {
+          const i = await info(page);
+          return i.sensor === 'night' ? 'NV' : i.polarity ? 'BH' : 'WH';
+        };
+        views.push(await view());
+        for (let i = 0; i < 3; i++) {
+          await page.keyboard.press('q');
+          await waitGame(page, 0.9); // past the 0.7 s camera switch and the 0.35 s flip limit
+          views.push(await view());
+        }
+        out_.qCycle = views.join(' → ');
+        if (views.join() !== 'WH,BH,NV,WH') errs.push(`Q cycled the views ${out_.qCycle}`);
+        // Esc: the pause menu, with Briefing (read-only) and back.
+        await page.keyboard.press('Escape');
+        await waitInfo(page, () => window.__spooky.info().screen === 'paused');
+        const buttons = await page.$$eval('.overlay .card button', (bs) => bs.map((b) => b.textContent));
+        out_.pauseMenu = buttons;
+        for (const b of ['Resume', 'Briefing', 'Restart mission', 'Settings', 'Quit to menu']) if (!buttons.includes(b)) errs.push(`pause menu lacks ${b}: ${buttons.join(', ')}`);
+        await page.click('.overlay .pause-briefing');
+        await page.waitForSelector('.overlay .card.briefing .briefing-back');
+        const brief = await page.evaluate(() => ({ title: document.querySelector('.overlay .card.briefing h2')?.textContent, start: !![...document.querySelectorAll('.overlay button')].find((b) => b.textContent === 'Start mission'), keys: document.querySelector('.overlay .card.briefing p.small')?.textContent ?? '' }));
+        if (!brief.title) errs.push('the pause menu briefing has no title');
+        if (brief.start) errs.push('the re-opened briefing offers "Start mission" (should be read-only)');
+        if (!/R or 1\/2\/3/.test(brief.keys) || !/Q cycle view/.test(brief.keys)) errs.push(`briefing keys line not updated: ${brief.keys}`);
+        out_.shots.briefing = `${out}/controls-pause-briefing.png`;
+        await page.screenshot({ path: out_.shots.briefing });
+        await page.waitForTimeout(400);
+        await page.keyboard.press('Escape'); // back to the pause card
+        await page.waitForFunction(() => document.querySelector('.overlay .card.pause h2')?.textContent === 'Paused', null, { timeout: 5000 });
+        if ((await info(page)).screen !== 'paused') errs.push('Esc from the briefing left the pause screen');
+        await page.click('.overlay .pause-briefing');
+        await page.click('.overlay .briefing-back');
+        await page.waitForSelector('.overlay .card.pause');
+        out_.shots.pause = `${out}/controls-pause.png`;
+        await page.screenshot({ path: out_.shots.pause });
+        // R on the pause screen no longer restarts (R is the gun key).
+        const tBefore = await gameTime(page);
+        await page.keyboard.press('r');
+        await page.waitForTimeout(400);
+        if ((await info(page)).screen !== 'paused' || (await gameTime(page)) < tBefore) errs.push('R on the pause screen did something');
+        // Settings: turn the key hints off; the strip hides.
+        await page.click('.overlay button:has-text("Settings")');
+        await page.click('.settings-panel label:has-text("Show key hints")');
+        await page.click('.settings-panel button:has-text("Done")');
+        await page.waitForTimeout(400);
+        await page.keyboard.press('Escape'); // resume
+        await waitInfo(page, () => window.__spooky.info().screen === 'playing');
+        const hidden = await page.evaluate(() => getComputedStyle(document.querySelector('.hud-keys')).display === 'none');
+        if (!hidden) errs.push('hotkey strip still showing after turning key hints off');
+        await page.evaluate(() => localStorage.removeItem('spooky.settings'));
+      }
+    } catch (e) {
+      errs.push(String(e));
+    }
+    res.push(out_);
+    await page.close();
+  }
+
+  // ----- Touch: phones and tablets, both ways up -----
+  const touchViews = [
+    ['phone-portrait', { width: 390, height: 844 }, true],
+    ['phone-landscape', { width: 844, height: 390 }, true],
+    ['tablet-landscape', { width: 1024, height: 768 }, false],
+    ['tablet-portrait', { width: 768, height: 1024 }, false],
+  ];
+  for (const [name, viewport, full] of touchViews) {
+    const { page, errs } = await gamePage(browser, 'autostart=1&type=escort&difficulty=1&seed=3', { viewport, hasTouch: true, isMobile: true });
+    page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+    const out_ = { type: `controls: touch (${name})`, errors: errs, shots: {} };
+    try {
+      const cdp = await page.context().newCDPSession(page);
+      const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y], id) => ({ x, y, id: id + 1, radiusX: 4, radiusY: 4, force: 1 })) });
+      const centre = (sel) => page.evaluate((s) => {
+        const r = document.querySelector(s)?.getBoundingClientRect();
+        return r && r.width ? [r.left + r.width / 2, r.top + r.height / 2] : null;
+      }, sel);
+      const tapAt = async ([x, y]) => {
+        await touch('touchStart', [[x, y]]);
+        await touch('touchEnd', []); // straight away: a busy machine already stretches the gap
+        await page.waitForTimeout(150);
+      };
+      out_.coarse = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
+      if (!(await info(page)).touch) {
+        // Not detected up front: the first touch must switch the controls on.
+        await tapAt([viewport.width / 2, viewport.height * 0.3]);
+      }
+      if (!(await info(page)).touch) errs.push('touch controls did not come on');
+      await page.waitForSelector('.touch-controls:not([hidden]) .tc-fire');
+      await page.waitForSelector('.hud-radio div');
+      await page.waitForTimeout(300);
+      out_.shots.controls = `${out}/controls-touch-${name}.png`;
+      await page.screenshot({ path: out_.shots.controls });
+      // Layout: targets 48 px+, nothing over the HUD panels or the OSM credit, credit on screen, no scrolling.
+      const layout = await page.evaluate(() => {
+        const boxes = [...document.querySelectorAll('.tc-btn, .tc-stick')].map((b) => [b.className, b.getBoundingClientRect()]);
+        const small = boxes.filter(([, r]) => r.width < 48 || r.height < 48).map(([c, r]) => `${c} ${Math.round(r.width)}x${Math.round(r.height)}`);
+        const off = boxes.filter(([, r]) => r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight).map(([c]) => c);
+        const a = document.querySelector('.hud-attrib').getBoundingClientRect();
+        const keys = document.querySelector('.hud-keys');
+        return {
+          small,
+          off,
+          attrib: a.width > 0 && a.left >= 0 && a.right <= innerWidth && a.bottom <= innerHeight,
+          keysShown: getComputedStyle(keys).display !== 'none',
+          scroll: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight || scrollX !== 0 || scrollY !== 0,
+          touchAction: getComputedStyle(document.querySelector('.game-canvas')).touchAction,
+        };
+      });
+      if (layout.small.length) errs.push(`touch targets under 48 px: ${layout.small.join(', ')}`);
+      if (layout.off.length) errs.push(`touch controls off screen: ${layout.off.join(', ')}`);
+      if (!layout.attrib) errs.push('OpenStreetMap credit not fully on screen');
+      if (layout.keysShown) errs.push('hotkey strip showing with touch controls');
+      if (layout.scroll) errs.push('page scrolls');
+      if (layout.touchAction !== 'none') errs.push(`game surface touch-action is ${layout.touchAction}`);
+      errs.push(...(await overlaps(page, '.tc-stick, .tc-btn', hudPanels())));
+
+      // GUN cycles the gun.
+      const gunAt = await centre('.tc-gun');
+      const guns = [(await info(page)).weapon];
+      for (let i = 0; i < 3; i++) {
+        await tapAt(gunAt);
+        guns.push((await info(page)).weapon);
+      }
+      out_.gunCycle = guns.join(' → ');
+      if (guns.join() !== '40,105,25,40') errs.push(`GUN cycled ${out_.gunCycle}`);
+      await page.waitForTimeout(100);
+      const gunLabel = await page.evaluate(() => document.querySelector('.tc-gun .tc-sub')?.textContent);
+      if (gunLabel !== '40') errs.push(`GUN button label ${gunLabel}, gun is 40`);
+      if (full) {
+        // VIEW cycles white-hot → black-hot → night vision → white-hot.
+        const viewAt = await centre('.tc-view');
+        const view = async () => {
+          const i = await info(page);
+          return i.sensor === 'night' ? 'NV' : i.polarity ? 'BH' : 'WH';
+        };
+        const views = [await view()];
+        for (let i = 0; i < 3; i++) {
+          await tapAt(viewAt);
+          await waitGame(page, 0.9);
+          views.push(await view());
+        }
+        out_.viewCycle = views.join(' → ');
+        if (views.join() !== 'WH,BH,NV,WH') errs.push(`VIEW cycled ${out_.viewCycle}`);
+        // ZOOM toggles; pinch spreads in and closes out.
+        const zoomAt = await centre('.tc-zoom');
+        await tapAt(zoomAt);
+        const z1 = (await info(page)).zoom;
+        await tapAt(zoomAt);
+        const z2 = (await info(page)).zoom;
+        if (z1 !== true || z2 !== false) errs.push(`ZOOM button: ${z1}, ${z2} (expected on, then off)`);
+        const cx = viewport.width / 2;
+        const cy = viewport.height * 0.4;
+        const pinch = async (from, to) => {
+          await touch('touchStart', [[cx - from, cy]]);
+          await touch('touchStart', [[cx - from, cy], [cx + from, cy]]);
+          for (let k = 1; k <= 8; k++) {
+            const d = from + ((to - from) * k) / 8;
+            await touch('touchMove', [[cx - d, cy], [cx + d, cy]]);
+            await page.waitForTimeout(30);
+          }
+          await touch('touchEnd', []);
+          await page.waitForTimeout(150);
+        };
+        const aimBeforePinch = (await info(page)).aim;
+        await pinch(40, 110);
+        const zin = (await info(page)).zoom;
+        await pinch(110, 40);
+        const zout = (await info(page)).zoom;
+        if (zin !== true || zout !== false) errs.push(`pinch: spread gave zoom ${zin}, close gave ${zout}`);
+        const aimAfterPinch = (await info(page)).aim;
+        if (Math.hypot(aimAfterPinch.x - aimBeforePinch.x, aimAfterPinch.z - aimBeforePinch.z) > 1) errs.push('a pinch moved the aim (it should only zoom)');
+      }
+      // Stick and FIRE together (multi-touch): the aim moves and the gun fires (from a spot clear of friendlies).
+      await aimAway(page);
+      const stickAt = await centre('.tc-stick');
+      const fireAt = await centre('.tc-fire');
+      const before = await info(page);
+      const shots0 = await page.evaluate(() => window.__spooky.state().shots);
+      const t0 = await gameTime(page);
+      await touch('touchStart', [stickAt]);
+      await touch('touchStart', [stickAt, fireAt]);
+      // Half deflection for under a second: enough to see the aim move, not enough to wander onto friendlies.
+      for (let k = 1; k <= 6; k++) {
+        await touch('touchMove', [[stickAt[0] + 5 * k, stickAt[1] - 3 * k], fireAt]);
+        await page.waitForTimeout(40);
+      }
+      await untilGameTime(page, t0 + 0.9);
+      const firingMid = await page.evaluate(() => document.querySelector('.tc-fire').classList.contains('down'));
+      await touch('touchEnd', []);
+      await page.waitForTimeout(200);
+      const after = await info(page);
+      const shots1 = await page.evaluate(() => window.__spooky.state().shots);
+      out_.stickMovedMetres = Math.round(Math.hypot(after.aim.x - before.aim.x, after.aim.z - before.aim.z));
+      out_.shotsWhileHeld = shots1 - shots0;
+      if (out_.stickMovedMetres < 5) errs.push(`stick moved the aim ${out_.stickMovedMetres} m`);
+      if (out_.shotsWhileHeld < 1) errs.push('holding FIRE (with the stick held) fired nothing');
+      if (!firingMid) errs.push('FIRE button not shown as held');
+      // After letting go, no more shots and the aim stays put.
+      const s2 = await page.evaluate(() => window.__spooky.state().shots);
+      await waitGame(page, 0.8);
+      const s3 = await page.evaluate(() => window.__spooky.state().shots);
+      const still = await info(page);
+      if ((await info(page)).screen !== 'playing') errs.push(`mission no longer playing after the stick and fire test: ${JSON.stringify(await page.evaluate(() => window.__spooky.state().reason))}`);
+      if (s3 - s2 > 1) errs.push(`still firing after FIRE was released (${s3 - s2} rounds)`);
+      if (Math.hypot(still.aim.x - after.aim.x, still.aim.z - after.aim.z) > 0.5) errs.push('aim still drifting after the stick was released');
+      // Tap the picture to aim there (from the middle of the map, so the tapped spot is never past its edge,
+      // where the aim is clamped).
+      await page.evaluate(() => window.__spooky.aimAt(0, 0));
+      await waitGame(page, 0.2);
+      const tapPoint = [viewport.width * 0.5 + Math.min(120, viewport.width * 0.2), viewport.height * 0.4];
+      const aimT0 = (await info(page)).aim;
+      await tapAt(tapPoint);
+      const aimT1 = (await info(page)).aim;
+      out_.tapMovedMetres = Math.round(Math.hypot(aimT1.x - aimT0.x, aimT1.z - aimT0.z));
+      if (out_.tapMovedMetres < 5) errs.push(`tap to aim moved the aim ${out_.tapMovedMetres} m`);
+      if (full) {
+        out_.shots.firing = `${out}/controls-touch-${name}-firing.png`;
+        await touch('touchStart', [fireAt]);
+        await page.waitForTimeout(400);
+        await page.screenshot({ path: out_.shots.firing });
+        await touch('touchEnd', []);
+      }
+      // The pause button pauses; the pause menu's buttons are big enough; Resume plays on.
+      await tapAt(await centre('.tc-pause'));
+      await waitInfo(page, () => window.__spooky.info().screen === 'paused');
+      const pauseSmall = await page.$$eval('.overlay .card button', (bs) => bs.filter((b) => b.getBoundingClientRect().height < 44).map((b) => b.textContent));
+      if (pauseSmall.length) errs.push(`pause menu buttons under 44 px: ${pauseSmall.join(', ')}`);
+      const hiddenWhilePaused = await page.evaluate(() => document.querySelector('.touch-controls').hidden);
+      if (!hiddenWhilePaused) errs.push('touch controls still showing while paused');
+      out_.shots.pause = `${out}/controls-touch-${name}-pause.png`;
+      await page.screenshot({ path: out_.shots.pause });
+      await page.tap('.overlay button:has-text("Resume")');
+      await waitInfo(page, () => window.__spooky.info().screen === 'playing');
+      if (!(await info(page)).touch) errs.push('touch controls switched off by tapping Resume');
+    } catch (e) {
+      errs.push(String(e));
+    }
+    res.push(out_);
+    await page.close();
+  }
+
+  // ----- Touch: the way in (landing, recon, briefing) has 44 px+ tap targets and starts a playable mission -----
+  {
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: scale, hasTouch: true, isMobile: true });
+    const errs = [];
+    page.on('pageerror', (e) => errs.push(String(e)));
+    page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+    const out_ = { type: 'controls: touch way in (phone)', errors: errs, shots: {} };
+    const smallTargets = (scope) =>
+      page.evaluate(
+        (scope) =>
+          [...document.querySelectorAll(`${scope} button, ${scope} select, ${scope} input:not([type=range]):not([type=hidden]), ${scope} a[href]`)]
+            .filter((b) => {
+              const r = b.getBoundingClientRect();
+              return r.width > 0 && getComputedStyle(b).visibility !== 'hidden' && (r.height < 44 || r.width < 44);
+            })
+            .map((b) => `${(b.textContent || b.getAttribute('aria-label') || b.tagName).trim().slice(0, 30)} ${Math.round(b.getBoundingClientRect().width)}x${Math.round(b.getBoundingClientRect().height)}`),
+        scope,
+      );
+    try {
+      await page.goto(`http://localhost:${PORT}/`);
+      await page.waitForSelector('.landing h1');
+      const landing = await smallTargets('.landing');
+      if (landing.length) errs.push(`landing tap targets under 44 px: ${landing.join(' | ')}`);
+      out_.landingTouchLine = await page.evaluate(() => {
+        const e = document.querySelector('.landing-touch');
+        return e && getComputedStyle(e).display !== 'none' ? e.textContent : null;
+      });
+      await page.tap('.la-sample');
+      await page.waitForSelector('.menu .recon .mission-card');
+      const recon = await smallTargets('.menu');
+      if (recon.length) errs.push(`recon tap targets under 44 px: ${recon.join(' | ')}`);
+      out_.shots.recon = `${out}/controls-touch-recon.png`;
+      await page.screenshot({ path: out_.shots.recon });
+      await page.tap('.recon .mission-card button');
+      await page.waitForSelector('.overlay .card.briefing');
+      await page.waitForTimeout(600);
+      const brief = await smallTargets('.overlay');
+      if (brief.length) errs.push(`briefing tap targets under 44 px: ${brief.join(' | ')}`);
+      const keys = await page.evaluate(() => document.querySelector('.overlay .card.briefing p.small')?.textContent ?? '');
+      if (!/stick/.test(keys)) errs.push(`touch briefing shows keyboard controls: ${keys}`);
+      out_.shots.briefing = `${out}/controls-touch-briefing.png`;
+      await page.screenshot({ path: out_.shots.briefing });
+      await page.tap('.overlay button:has-text("Start mission")');
+      await waitInfo(page, () => window.__spooky.info()?.screen === 'playing', undefined, 30000);
+      await page.waitForSelector('.touch-controls:not([hidden]) .tc-fire');
+    } catch (e) {
+      errs.push(String(e));
+    }
+    res.push(out_);
     await page.close();
   }
   return res;

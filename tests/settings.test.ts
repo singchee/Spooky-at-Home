@@ -10,6 +10,11 @@ describe('settings contract', () => {
     expect(s.invertY).toBe(false);
     expect(sanitize(null)).toEqual(defaultSettings());
   });
+  it('key hints show by default and the stored choice survives sanitizing', () => {
+    expect(defaultSettings().showHotkeys).toBe(true);
+    expect(sanitize({ showHotkeys: false }).showHotkeys).toBe(false);
+    expect(sanitize({ showHotkeys: 'no' }).showHotkeys).toBe(true);
+  });
   it('updates notify subscribers and survive without localStorage', () => {
     _resetSettingsForTests();
     let seen = -1;

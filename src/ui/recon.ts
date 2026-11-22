@@ -7,6 +7,7 @@ import { generateMission } from '../sim/missions';
 import { TacticalMap } from './tacticalMap';
 import { el } from './dom';
 import { bestKey, bests, formatBest, missionKind } from './bests';
+import { timeAgo } from './placeCache';
 
 /**
  * "Recon complete": what's in the area, a tactical map, and three missions that suit it.
@@ -18,14 +19,26 @@ export interface ReconHandlers {
   onBack(): void;
 }
 
+/** A place kept on this device (BACKLOG 3.12): say so, and offer Refresh and Forget. */
+export interface SavedNote {
+  /** True when this visit loaded it from the device; false when it was just downloaded and kept. */
+  fromDevice: boolean;
+  /** When it was downloaded (ms since 1970). */
+  savedAt: number;
+  onRefresh(): void;
+  /** Resolves false if the browser refused. */
+  onForget(): Promise<boolean>;
+}
+
 const BASE_LABEL = { clear: 'CLEAR', escort: 'ESCORT', defend: 'HOLD' } as const;
 
-export function showRecon(parent: HTMLElement, map: MapData, start: { seed: number; difficulty: number }, h: ReconHandlers): () => void {
+export function showRecon(parent: HTMLElement, map: MapData, start: { seed: number; difficulty: number }, h: ReconHandlers, saved?: SavedNote): () => void {
   const root = el('div', 'card wide recon', undefined, parent);
   const report = reconMap(map);
   el('div', 'card-kicker', report.empty ? 'RECON · NOTHING NOTABLE' : 'RECON COMPLETE', root);
   el('h2', undefined, map.name, root);
   el('p', 'status', report.message, root);
+  if (saved) savedLine(root, saved);
 
   const grid = el('div', 'recon-grid', undefined, root);
   const mapBox = el('div', 'tmap-wrap recon-map', undefined, grid);
@@ -134,6 +147,39 @@ export function showRecon(parent: HTMLElement, map: MapData, start: { seed: numb
   el('button', 'recon-change', 'Scout another place', foot).addEventListener('click', () => h.onBack());
   el('p', 'attrib', map.attribution, root);
   return () => root.remove();
+}
+
+/** "Loaded from this device · downloaded 3 days ago · Refresh · Forget this place", and a plain privacy note. */
+function savedLine(parent: HTMLElement, s: SavedNote): void {
+  const box = el('div', 'recon-saved', undefined, parent);
+  const line = el('p', 'small', undefined, box);
+  line.setAttribute('aria-live', 'polite');
+  const text = el('span', 'recon-saved-text', s.fromDevice ? `Loaded from this device · downloaded ${timeAgo(Date.now() - s.savedAt)}` : 'Saved on this device, so next time it opens instantly', line);
+  const buttons: HTMLButtonElement[] = [];
+  if (s.fromDevice) {
+    const refresh = el('button', 'recon-refresh', 'Refresh', line);
+    refresh.type = 'button';
+    refresh.title = 'Download this place again from OpenStreetMap';
+    refresh.addEventListener('click', () => s.onRefresh());
+    buttons.push(refresh);
+  }
+  const forget = el('button', 'recon-forget', 'Forget this place', line);
+  forget.type = 'button';
+  buttons.push(forget);
+  el('p', 'small recon-saved-privacy', 'Saved places stay in this browser for 30 days and are never sent anywhere.', box);
+  forget.addEventListener('click', async () => {
+    forget.disabled = true;
+    const ok = await s.onForget();
+    if (ok) {
+      buttons.forEach((b) => b.remove());
+      text.textContent = 'Forgotten. Next time this place downloads fresh from OpenStreetMap.';
+      text.tabIndex = -1;
+      text.focus({ preventScroll: true }); // the button that had focus is gone
+    } else {
+      forget.disabled = false;
+      text.textContent = "This browser wouldn't let the game forget it. Try Settings, Forget all saved places.";
+    }
+  });
 }
 
 function familyOf(c: string): string {

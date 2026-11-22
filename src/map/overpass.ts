@@ -461,10 +461,10 @@ export async function geocode(query: string, signal?: AbortSignal): Promise<LatL
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   signal?.throwIfAborted(); // cancelled while waiting: don't send the request at all
   lastGeocode = Date.now();
-  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`;
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&q=${encodeURIComponent(query)}`;
   const res = await fetchOrOffline(url, { signal, headers: { Accept: 'application/json' } }, 'the place search');
   if (!res.ok) throw new MapLoadError(BUSY_STATUS.has(res.status) ? 'busy' : 'other', `Place search failed (${res.status})`);
-  let arr: { lat: string; lon: string; display_name?: string }[];
+  let arr: NominatimResult[];
   try {
     arr = (await res.json()) as typeof arr;
   } catch (e) {
@@ -474,8 +474,38 @@ export async function geocode(query: string, signal?: AbortSignal): Promise<LatL
   const lat = Array.isArray(arr) ? parseFloat(arr[0]?.lat) : NaN;
   const lon = Array.isArray(arr) ? parseFloat(arr[0]?.lon) : NaN;
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new MapLoadError('not-found', `No place found for "${query}"`);
-  const label = String(arr[0].display_name ?? '').split(',').slice(0, 2).join(',').trim();
-  return { lat, lon, label: label || `${lat.toFixed(4)}, ${lon.toFixed(4)}` };
+  return { lat, lon, label: placeLabel(arr[0]) || `${lat.toFixed(4)}, ${lon.toFixed(4)}` };
+}
+
+export interface NominatimResult {
+  lat: string;
+  lon: string;
+  display_name?: string;
+  /** With `addressdetails=1`: the parts of the address, by kind. */
+  address?: Record<string, string>;
+}
+
+/** Address parts that name an area, smallest first. Never a house number or a building. */
+const AREA_PARTS = ['suburb', 'neighbourhood', 'quarter', 'city_district', 'village', 'hamlet', 'town', 'city', 'municipality'];
+const REGION_PARTS = ['town', 'city', 'municipality', 'county', 'state', 'country'];
+
+/**
+ * The map's name: the neighbourhood, never the address typed (privacy). The name shows on screen,
+ * in briefings and in personal-best keys, so "12 Example Street, Suburb" becomes "Suburb, State".
+ * Falls back to the street (without its number), then to parts of Nominatim's display name that
+ * hold no digits at all. Empty if nothing safe is left (the caller then uses coordinates).
+ */
+export function placeLabel(r: NominatimResult): string {
+  const a = r.address && typeof r.address === 'object' ? r.address : {};
+  const clean = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const area = AREA_PARTS.map((k) => clean(a[k])).find(Boolean);
+  const region = (first: string | undefined) => REGION_PARTS.map((k) => clean(a[k])).find((v) => v && v !== first);
+  if (area) return [area, region(area)].filter(Boolean).join(', ');
+  const road = clean(a.road);
+  if (road) return [road, region(road)].filter(Boolean).join(', ');
+  // No structured address: keep only parts without digits (a house number, unit or postcode has some).
+  const parts = String(r.display_name ?? '').split(',').map((x) => x.trim()).filter((x) => x && !/\d/.test(x));
+  return parts.slice(0, 2).join(', ');
 }
 
 /** Stable seed for a real location so revisiting it gives the same missions. */
