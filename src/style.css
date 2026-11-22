@@ -60,6 +60,14 @@ button:disabled { opacity: 0.5; }
 .hud-switching { position: absolute; left: 50%; top: 32%; transform: translateX(-50%); letter-spacing: 0.2em; display: none; }
 .hud-marker { position: absolute; left: 0; top: 0; font-size: 14px; margin: -48px 0 0 -50px; width: 100px; text-align: center; font-weight: 700; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
 .hud-marker::after { content: ''; display: block; width: 8px; height: 8px; border: 1px solid currentColor; transform: rotate(45deg); margin: 4px auto 0; }
+/* Endgame search help: a soft ring on screen, an edge arrow when off screen (the HUD's own text). */
+.hud-search { position: absolute; left: 0; top: 0; border: 2px dashed rgba(255, 214, 102, 0.75); border-radius: 50%; background: radial-gradient(closest-side, rgba(255, 214, 102, 0) 70%, rgba(255, 214, 102, 0.14)); pointer-events: none; }
+.hud-search-label { position: absolute; left: 50%; top: -22px; transform: translateX(-50%); white-space: nowrap; font-size: 13px; font-weight: 700; color: #ffd666; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; }
+.hud-search-edge { position: absolute; left: 0; top: 0; margin: -10px 0 0 -60px; width: 120px; text-align: center; font-size: 13px; font-weight: 700; color: #ffd666; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; pointer-events: none; }
+.hud-search-edge::before { content: ''; display: block; width: 0; height: 0; margin: 0 auto 4px; border-left: 9px solid transparent; border-right: 9px solid transparent; border-bottom: 14px solid #ffd666; transform: rotate(calc(var(--a) + 90deg)); }
+.hud-cold-only { color: #ffd666; font-weight: 800; font-size: 1.15em; animation: hud-cold-pulse 1.6s ease-in-out 3; }
+@keyframes hud-cold-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .hud-cold-only { animation: none; } }
 .hud-attrib { position: absolute; right: 16px; bottom: 16px; font-size: 14px; }
 .hud-keys { position: absolute; left: 16px; bottom: 16px; font-size: 14px; max-width: calc(100% - 420px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 900px) {
@@ -147,6 +155,7 @@ button:disabled { opacity: 0.5; }
 .tm-route-casing { fill: none; stroke: #0b0d0c; stroke-linecap: round; stroke-linejoin: round; opacity: 0.9; }
 .tm-ambush { fill: none; stroke: rgba(255, 107, 94, 0.09); stroke-linecap: round; stroke-linejoin: round; }
 .tm-horde { fill: rgba(255, 107, 94, 0.2); stroke: var(--danger); }
+.tm-search { fill: rgba(255, 214, 102, 0.12); stroke: #ffd666; stroke-dasharray: 6 4; }
 .tm-coldring { fill: none; stroke: var(--tm-cold); }
 .tm-hostile { fill: var(--danger); stroke: #0b0d0c; }
 .tm-friendly { fill: var(--tm-friendly); stroke: #0b0d0c; }

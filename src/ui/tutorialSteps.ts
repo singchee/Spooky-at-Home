@@ -3,6 +3,7 @@ import type { RoadGraph } from '../map/roadGraph';
 import type { WalkGrid } from '../map/grid';
 import { dist } from '../map/geom';
 import type { TrainingMission } from './hud';
+import { TRAINING_QUIET_S, type Sim } from '../sim/sim';
 
 /**
  * "Training night": the tutorial's step logic, as a pure state machine with no DOM or three.js,
@@ -367,4 +368,36 @@ export function trainingMission(map: MapData, l: TrainingLayout): TrainingMissio
     // The HUD hides the clock and friendly-fire count, and leaves out the two reserves above.
     training: { reserveHostiles: 1, reserveFriendlies: 1 },
   };
+}
+
+/** How Training night's sim runs: no scatter, no drifting horde, and the search help only from nightHelp. */
+export const TRAINING_SIM = { scatter: false, drift: false, search: false } as const;
+
+/** Night step: seconds before the search help shows where the cold one is (Clear's endgame help, sooner). */
+export const NIGHT_HELP_S = TRAINING_QUIET_S;
+
+const nightClock = new WeakMap<TutorialSteps, number>();
+/**
+ * Training night's search help (owner's report). On the night step, once NIGHT_HELP_S pass without the crosshair
+ * settling on the cold one, the sim's search help starts for it: Ground names the street, a soft circle marks the
+ * area, and it gets restless, so night vision shows it moving. It stops when the step is done.
+ */
+export function nightHelp(sim: Sim, steps: TutorialSteps, layout: TrainingLayout, dt: number): void {
+  if (steps.step !== 'night') {
+    if (nightClock.has(steps)) {
+      nightClock.delete(steps);
+      sim.stopSearch();
+    }
+    return;
+  }
+  const t = (nightClock.get(steps) ?? 0) + dt;
+  nightClock.set(steps, t);
+  if (t === Infinity) return;
+  // Already on it (dwelling): no help needed, and a restless target would walk out from under the crosshair.
+  if (steps.progress > 2 / 3 + 1e-9) {
+    sim.stopSearch();
+    nightClock.set(steps, Infinity);
+    return;
+  }
+  if (t >= NIGHT_HELP_S && !sim.searching().length) sim.startSearch((z) => z.cold && dist(z, layout.cold) < 60);
 }

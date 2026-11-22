@@ -526,12 +526,14 @@ export class TacticalMap {
 
   // ---------- live layer (HUD minimap) ----------
   /** Moves the aircraft, aim point and survivors. Cheap: only the live layer is rebuilt. */
-  update(s: { aircraft?: V2; aim?: V2; survivors?: V2[]; regroup?: V2[] }): void {
+  update(s: { aircraft?: V2; aim?: V2; survivors?: V2[]; regroup?: V2[]; search?: { p: V2; r: number }[] }): void {
     const u = this.u;
     const lim = this.half * 0.97;
     this.dyn.replaceChildren();
     // Spec 002 feel M1: where a scattered horde will regroup, while its runners are out (the horde's wander circle).
     for (const p of s.regroup ?? []) svg('circle', { cx: r1(p.x), cy: r1(p.z), r: HORDE_WANDER, class: 'tm-horde live', 'stroke-width': 2 * u, 'stroke-dasharray': `${r1(4 * u)} ${r1(3 * u)}` }, this.dyn);
+    // Endgame search help: a soft circle round each group of stragglers (never the exact spot).
+    for (const a of s.search ?? []) svg('circle', { cx: r1(a.p.x), cy: r1(a.p.z), r: r1(Math.max(a.r, 10 * u)), class: 'tm-search live', 'stroke-width': 2.5 * u }, this.dyn);
     for (const p of s.survivors ?? []) svg('circle', { cx: r1(p.x), cy: r1(p.z), r: 4 * u, class: 'tm-friendly live', 'stroke-width': u }, this.dyn);
     if (s.aim) {
       const k = 9 * u;

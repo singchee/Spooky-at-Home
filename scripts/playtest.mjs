@@ -1,5 +1,5 @@
 // Headless browser playtest (gates G7, G8 and visual evidence).
-// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls|scatter|intro]
+// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls|scatter|endgame|intro|missions]
 // Starts `vite preview`, loads each mission type with the bot playing, switches cameras,
 // takes screenshots, and records console errors and draw calls. Chromium is preinstalled.
 // It also runs the photosensitivity flash checks and survivor-kit screenshots (`--only safety`
@@ -35,7 +35,8 @@ let exitCode = 0;
 try {
   await ready;
   const browser = await chromium.launch();
-  for (const type of only ? [] : ['clear', 'escort', 'defend']) {
+  // `--only missions`: just this short run of each mission type with the bot.
+  for (const type of only && only !== 'missions' ? [] : ['clear', 'escort', 'defend']) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: scale });
     const errors = [];
     page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
@@ -153,6 +154,13 @@ try {
     }
   }
   // The intro ("The Late Bulletin"): plays through on a controlled clock, captions, skip, flashes, reduced motion, leaks.
+  // Endgame search help (owner's report): the soft circle on screen in thermal and night vision, and the edge arrow.
+  if (!only || only === 'endgame') {
+    for (const r of await endgameShots(browser)) {
+      results.push(r);
+      if (!r.ok) exitCode = 1;
+    }
+  }
   if (!only || only === 'intro') {
     for (const r of await introChecks(browser)) {
       results.push(r);
@@ -226,6 +234,51 @@ async function scatterShots(browser) {
       res.push({ type: `scatter: ${template} d3, ${view}`, ok: !errs.length, errors: errs, shots });
       await page.close();
     }
+  }
+  return res;
+}
+
+/**
+ * Endgame search help: a clear-park d3 mission jumped to its last 2 cold-blooded stragglers (test hook), the help
+ * started, and the camera on the search circle in white-hot thermal and night vision, at t + 1 and 8 s (they walk),
+ * plus the camera turned away so the circle's edge arrow shows. Judged by eye; fails if no circle or marker shows.
+ */
+async function endgameShots(browser) {
+  const res = [];
+  for (const [view, setup] of [
+    ['thermal', async () => {}],
+    ['night', async (p) => { await p.evaluate(() => window.__spooky.setSensor('night')); }],
+  ]) {
+    const { page, errs } = await gamePage(browser, 'autostart=1&type=clear&template=clear-park&difficulty=3&seed=5', { viewport: { width: 1280, height: 720 } });
+    const shots = {};
+    await fixedStep(page, 1 / 60);
+    await setup(page);
+    await untilGameTime(page, (await gameTime(page)) + 1.5);
+    const left = await page.evaluate(() => window.__spooky.endgame(2));
+    const areas = await page.evaluate(() => window.__spooky.searchAreas());
+    if (!left || !areas.length) errs.push('no stragglers or no search circle');
+    const c = areas[0]?.p ?? { x: 0, z: 0 };
+    await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [c.x, c.z]);
+    const t0 = await gameTime(page);
+    for (const dt of [1, 8]) {
+      await untilGameTime(page, t0 + dt);
+      await fixedStep(page, 0);
+      await page.waitForTimeout(400);
+      shots[`t${dt}`] = `${out}/endgame-${view}-t${dt}.png`;
+      await page.screenshot({ path: shots[`t${dt}`] });
+      if ((await page.locator('.hud-search').count()) < 1) errs.push(`t+${dt}: no search circle on screen`);
+      await fixedStep(page, 1 / 60);
+    }
+    // Look away: the circle is off screen, so its marker pins to the edge with an arrow.
+    await page.evaluate(([x, z]) => window.__spooky.aimAt(-x, -z), [c.x, c.z]);
+    await untilGameTime(page, (await gameTime(page)) + 0.5);
+    await fixedStep(page, 0);
+    await page.waitForTimeout(400);
+    shots.edge = `${out}/endgame-${view}-edge.png`;
+    await page.screenshot({ path: shots.edge });
+    if ((await page.locator('.hud-search-edge').count()) < 1) errs.push('no edge arrow with the circle off screen');
+    res.push({ type: `endgame search help: clear-park d3, ${view}`, ok: !errs.length, errors: errs, shots });
+    await page.close();
   }
   return res;
 }
