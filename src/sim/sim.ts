@@ -224,6 +224,8 @@ export class Sim {
    */
   readonly living: Zombie[] = [];
   private livingSeen = 0;
+  /** The `zombies` array `living` was built from: a different one (a test or caller swapped it) starts over. */
+  private livingOf: Zombie[] | null = null;
   private livingDirty = false;
   survivors: Survivor[] = [];
   shells: Shell[] = [];
@@ -400,10 +402,11 @@ export class Sim {
   /** Pick up zombies appended to `zombies` since the last sync (in order), live ones only. */
   syncLiving(): Zombie[] {
     const zs = this.zombies;
-    if (zs.length < this.livingSeen) {
-      // The list was replaced or cut (tests): start over.
+    if (zs !== this.livingOf || zs.length < this.livingSeen) {
+      // The list was swapped for another or cut (tests): start over.
       this.living.length = 0;
       this.livingSeen = 0;
+      this.livingOf = zs;
     }
     for (let i = this.livingSeen; i < zs.length; i++) if (zs[i].alive) this.living.push(zs[i]);
     this.livingSeen = zs.length;

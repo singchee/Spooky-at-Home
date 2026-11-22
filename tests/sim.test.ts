@@ -151,6 +151,17 @@ describe('simulation (gate G6: win and loss both reachable)', () => {
     expect(ms).toBeLessThan(4);
   });
 
+  it('Sim.living follows a swapped zombies array, even one of the same length (review nit)', () => {
+    const sim = make('clear', 2, 5);
+    const n = sim.zombies.length;
+    expect(n).toBeGreaterThan(0);
+    expect(sim.syncLiving().length).toBe(n);
+    const other = sim.zombies.map((z, i) => ({ ...z, id: z.id, alive: i % 2 === 0 }));
+    sim.zombies = other;
+    expect(sim.syncLiving().every((z) => other.includes(z))).toBe(true);
+    expect(sim.living.length).toBe(other.filter((z) => z.alive).length);
+  });
+
   it('budget (spec 003): 1,000 living + 6,000 dead entries under 4 ms a step; the dead cost (almost) nothing', () => {
     const run = (dead: number) => {
       const sim = make('defend', 5, 1);
