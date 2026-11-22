@@ -9,6 +9,7 @@ import { SensorPost } from '../render/sensorPost';
 import { AgentsView } from '../game/agentsView';
 import { Effects } from '../game/effects';
 import { el } from './dom';
+import { reducedMotion } from './motion';
 import { audio } from '../audio/engine';
 
 /**
@@ -154,7 +155,6 @@ class Backdrop {
   private boot = 1;
   private raf = 0;
   private disposed = false;
-  private reduced: MediaQueryList | null;
   private onResize = () => this.resize();
 
   constructor(private container: HTMLElement) {
@@ -177,7 +177,7 @@ class Backdrop {
     // The same sensor picture as the game, at up to 1.5x resolution (it's a background).
     this.post = new SensorPost(this.renderer, 'high', 1.5);
 
-    this.reduced = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+
     window.addEventListener('resize', this.onResize);
     this.resize();
     // Let the zombies spread out a little before the first frame, so the picture opens mid-scene.
@@ -187,7 +187,7 @@ class Backdrop {
   }
 
   private get still(): boolean {
-    return !!this.reduced?.matches;
+    return reducedMotion();
   }
 
   private newSim(): Sim {

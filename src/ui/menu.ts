@@ -11,7 +11,7 @@ import { showRecon, type ReconView, type SavedNote } from './recon';
 import { placeCache, placeId, timeAgo } from './placeCache';
 import { formatClock, formatDuration, readout, SpeakThrottle, timingLine, type BarMode } from './loadProgress';
 import { estimateFor, estimateLine, loadHistory, recordWait, type Estimate } from './loadEstimate';
-import { getSettings } from './settings';
+import { wantsStill as stillNow } from './motion';
 
 /**
  * Everything between the front page and a briefing:
@@ -228,7 +228,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   let clock: ReturnType<typeof setInterval> | null = null;
   let lastProgress: DownloadProgress | null = null;
   const speak = new SpeakThrottle(20_000);
-  const reduced = () => (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) || getSettings().reduceFlicker;
+  const reduced = () => stillNow();
   const setBar = (mode: BarMode, fraction: number | null) => {
     sweep.dataset.mode = mode;
     sweepFill.style.width = (mode === 'determinate' || mode === 'estimate') && fraction !== null ? `${(fraction * 100).toFixed(1)}%` : '';

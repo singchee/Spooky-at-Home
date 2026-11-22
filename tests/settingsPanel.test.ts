@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSettings, sanitize, type Settings } from '../src/ui/settings';
-import { SLIDERS, TOGGLES } from '../src/ui/settingsPanel';
+import { CHOICES, SLIDERS, TOGGLES } from '../src/ui/settingsPanel';
 import { effectiveReduceFlicker, mouseAimDelta } from '../src/game/input';
 
 describe('settings panel controls', () => {
   it('has one labelled control for every setting', () => {
-    const keys = [...SLIDERS.map((s) => s.key), ...TOGGLES.map((t) => t.key)].sort();
+    const keys = [...SLIDERS.map((s) => s.key), ...TOGGLES.map((t) => t.key), ...CHOICES.map((c) => c.key)].sort(); // CHOICES (radio groups) added with the Motion setting, 3.30
     expect(keys).toEqual((Object.keys(defaultSettings()) as (keyof Settings)[]).sort());
     for (const c of [...SLIDERS, ...TOGGLES]) expect(c.label.length).toBeGreaterThan(3);
   });

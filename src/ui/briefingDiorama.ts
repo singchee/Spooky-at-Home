@@ -6,7 +6,8 @@ import { likelyWaveDirections, type Mission, type WaveDirection } from '../sim/m
 import { ORBIT } from '../sim/sim';
 import type { RoadGraph } from '../map/roadGraph';
 import { briefingMap, focusView } from './tacticalMap';
-import { getSettings, onSettingsChange } from './settings';
+import { onSettingsChange } from './settings';
+import { wantsStill as stillNow, onMotionChange } from './motion';
 import { el } from './dom';
 import type { WalkGrid } from '../map/grid';
 import { blendPose, easeInOut, framingDist, tourSeen, tourStops, type Pose, type TourMark, type TourStop } from './briefingTour';
@@ -780,7 +781,6 @@ const SPIN = (Math.PI * 2) / 100;
 const IDLE_MS = 3500;
 const FOV = 30;
 
-const reducedMotionQuery: MediaQueryList | null = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 
 export interface DioramaInfo {
   drawCalls: number;
@@ -891,7 +891,7 @@ export class BriefingDiorama {
   }
 
   private wantsStill(): boolean {
-    return !!reducedMotionQuery?.matches || getSettings().reduceFlicker;
+    return stillNow();
   }
 
   private updateHint(): void {
@@ -947,10 +947,7 @@ export class BriefingDiorama {
       this.updateHint();
       this.requestRender();
     };
-    if (reducedMotionQuery) {
-      reducedMotionQuery.addEventListener('change', motion);
-      this.cleanups.push(() => reducedMotionQuery.removeEventListener('change', motion));
-    }
+    this.cleanups.push(onMotionChange(motion));
     this.cleanups.push(onSettingsChange(motion));
     if (typeof ResizeObserver !== 'undefined') {
       this.resize = new ResizeObserver(() => this.requestRender());

@@ -8,7 +8,7 @@ import { SensorShader } from '../render/sensors';
 import { AgentsView } from '../game/agentsView';
 import { audio, type ClipHandle } from '../audio/engine';
 import { INTRO_VOICE, SFX } from '../audio/assets';
-import { getSettings } from './settings';
+import { wantsStill as stillNow, buildMotionNote } from './motion';
 import { el } from './dom';
 import { rememberIntro } from './introSeen';
 import {
@@ -847,7 +847,6 @@ function slidePose(s: SlideId): Pose {
 // The player
 // ---------------------------------------------------------------------------------------------
 
-const reducedMotion: MediaQueryList | null = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 /** Wait this long at most for the first line's file before starting (it plays muted if late). */
 const PREP_MAX = 2;
 
@@ -916,8 +915,9 @@ class IntroPlayer {
   constructor(
     parent: HTMLElement,
     private onEnd: (how: IntroEnd) => void,
+    private onRestart?: () => void,
   ) {
-    this.still = !!reducedMotion?.matches || getSettings().reduceFlicker;
+    this.still = stillNow();
     this.root = el('div', 'intro', undefined, parent);
     this.root.setAttribute('role', 'region');
     this.root.setAttribute('aria-label', 'Intro: The Late Bulletin');
@@ -986,7 +986,15 @@ class IntroPlayer {
       e.stopPropagation();
       this.finish('skipped');
     });
+    // Why the pictures are still, when only the device asks: a note with "Play animated" / "Always".
+    const note = this.still && this.onRestart ? buildMotionNote(() => this.onRestart?.()) : null;
+    if (note) {
+      note.classList.add('intro-motion-note');
+      this.root.appendChild(note);
+      note.addEventListener('pointerup', (e) => e.stopPropagation());
+    }
     const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof Element && e.target.closest('.motion-note')) return; // its buttons keep Enter and Space
       if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
         e.preventDefault();
         if (!e.repeat) this.finish('skipped');
@@ -1367,7 +1375,18 @@ class IntroPlayer {
  */
 export function playIntro(parent: HTMLElement, onEnd: (how: IntroEnd) => void): { dispose(): void } {
   try {
-    const p = new IntroPlayer(parent, onEnd);
+    // "Play animated" (the still-frames note) swaps in a fresh, animated player.
+    let p: IntroPlayer;
+    const make = (): IntroPlayer => new IntroPlayer(parent, onEnd, () => {
+      p.dispose();
+      try {
+        p = make();
+      } catch {
+        rememberIntro('seen');
+        onEnd('skipped');
+      }
+    });
+    p = make();
     return { dispose: () => p.dispose() };
   } catch (e) {
     console.warn(`Spooky: intro unavailable (${(e as Error).message})`);

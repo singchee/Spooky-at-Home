@@ -2841,6 +2841,46 @@ async function introCheckRuns(browser, res) {
     await page.close();
   }
 
+  // 3b. Motion override (BACKLOG 3.30): the device note, "Play animated", and the Settings choice beating the device.
+  {
+    const cases = [
+      { name: 'device asks, setting follows device', media: 'reduce', stored: null, still: true, note: true },
+      { name: 'device asks, Settings = Full motion', media: 'reduce', stored: { motion: 'full' }, still: false, note: false },
+      { name: 'device does not ask, Settings = Reduced', media: 'no-preference', stored: { motion: 'reduced' }, still: true, note: false },
+    ];
+    for (const c of cases) {
+      const { page, errs } = await introPage(browser, { width: 1280, height: 720 }, { reducedMotion: c.media });
+      const shots = {};
+      if (c.stored) await page.addInitScript((v) => localStorage.setItem('spooky.settings', JSON.stringify(v)), c.stored);
+      await page.goto(`http://localhost:${PORT}/`);
+      await page.click('.landing-intro-offer .la-intro');
+      await page.waitForFunction(() => window.__spooky.intro?.state().started, null, { timeout: 15000 });
+      await page.evaluate(() => window.__spooky.intro.fixedStep(0));
+      if ((await introState(page)).still !== c.still) errs.push(`${c.name}: still should be ${c.still}`);
+      const hasNote = !!(await page.$('.intro .motion-note'));
+      if (hasNote !== c.note) errs.push(`${c.name}: note present = ${hasNote}, expected ${c.note}`);
+      if (c.note) {
+        shots.note = `${out}/intro-motion-note.png`;
+        await page.screenshot({ path: shots.note });
+        const box = await page.$eval('.intro .motion-play', (b) => { const r = b.getBoundingClientRect(); return { w: r.width, h: r.height }; });
+        if (box.h < 47.5 || box.w < 47.5) errs.push(`"Play animated" is ${box.w}x${box.h} px (need 48)`);
+        if (await page.evaluate(() => document.documentElement.classList.contains('motion-full'))) errs.push('motion-full class set before any choice (motion must never switch on by itself)');
+        await page.focus('.intro .motion-play');
+        await page.keyboard.press('Enter'); // keyboard reachable, and must not skip the intro
+        await page.waitForFunction(() => window.__spooky.intro?.state().started && !window.__spooky.intro.state().still, null, { timeout: 15000 }).catch(() => errs.push('"Play animated" did not restart the intro animated'));
+        await page.evaluate(() => window.__spooky.intro?.fixedStep(0));
+        if (!(await page.$('.intro')) || (await page.$('.intro.still')) || (await page.$('.intro .motion-note'))) errs.push('after "Play animated": expected one animated intro without the note');
+        const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('spooky.settings') ?? '{}').motion ?? 'device');
+        if (saved !== 'device') errs.push(`"Play animated" saved the setting (${saved}); only "Always" may`);
+        shots.animated = `${out}/intro-motion-animated.png`;
+        await introRunTo(page, 14, 1 / 15);
+        await page.screenshot({ path: shots.animated });
+      }
+      res.push({ type: `intro: motion override, ${c.name}`, errors: errs, shots });
+      await page.close();
+    }
+  }
+
   // 4. Leaks: 10 × (Watch intro → 2 s → Skip). One WebGL context at a time, nothing left behind.
   {
     const { page, errs } = await introPage(browser, { width: 1280, height: 720 });

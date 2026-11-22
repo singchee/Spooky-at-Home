@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import './style.css';
+import { initMotion } from './ui/motion';
+initMotion();
 import { makeSampleTown } from './map/sample';
 import { TEMPLATE_IDS, type TemplateId } from './map/recon';
 import type { MapData } from './map/types';
