@@ -125,6 +125,9 @@ export class AgentsView {
   private restFrom = 0;
   private sinking: { i: number; p: number; fast: boolean }[] = [];
   private sinkClock = -1;
+  /** Level-of-detail candidates (indices and keys), reused every frame. */
+  private candI = new Int32Array(0);
+  private candK = new Float32Array(0);
   private sinkOf = new Map<number, number>();
   /** Crowd nights (spec 003): the model cap and the body cap; null for every other mission (single batch). */
   private readonly lod: { models: number; bodies: number; total?: number } | null;
@@ -573,7 +576,13 @@ export class AgentsView {
   private chooseModels(sim: Sim, list: number[], view?: LodView): void {
     const zf = this.zt.f;
     const zs = sim.zombies;
-    const cands: { i: number; key: number }[] = [];
+    if (this.candI.length < list.length) {
+      this.candI = new Int32Array(Math.max(list.length, this.candI.length * 2, 256));
+      this.candK = new Float32Array(this.candI.length);
+    }
+    const ci = this.candI;
+    const ck = this.candK;
+    let nc = 0;
     if (view && view.height > 0) {
       const cam = view.camera;
       cam.updateMatrixWorld();
@@ -592,13 +601,39 @@ export class AgentsView {
         const nx = ((vx * e[0] + vy * e[1] + vz * e[2]) * p[0]) / depth;
         const ny = ((vx * e[4] + vy * e[5] + vz * e[6]) * p[5]) / depth;
         if (Math.abs(nx) > 1.15 || Math.abs(ny) > 1.15) continue;
-        cands.push({ i, key: nx * nx + ny * ny });
+        ci[nc] = i;
+        ck[nc] = nx * nx + ny * ny;
+        nc++;
       }
     }
     for (const i of list) zf.lod[i] = 0;
-    cands.sort((x, y) => x.key - y.key || x.i - y.i);
-    const n = Math.min(cands.length, this.lod!.models, this.zm!.capacity);
-    for (let r = 0; r < n; r++) zf.lod[cands[r].i] = 1;
+    const n = Math.min(nc, this.lod!.models, this.zm!.capacity);
+    if (nc <= n) {
+      for (let r = 0; r < nc; r++) zf.lod[ci[r]] = 1;
+      return;
+    }
+    // Only the nearest n matter: select them in place (quickselect on the key, ties by index), no sort, no objects.
+    const less = (a: number, b: number) => ck[a] < ck[b] || (ck[a] === ck[b] && ci[a] < ci[b]);
+    const swap = (a: number, b: number) => {
+      const ti = ci[a];
+      ci[a] = ci[b];
+      ci[b] = ti;
+      const tk = ck[a];
+      ck[a] = ck[b];
+      ck[b] = tk;
+    };
+    let lo = 0;
+    let hi = nc - 1;
+    while (lo < hi) {
+      swap((lo + hi) >> 1, hi);
+      let store = lo;
+      for (let r = lo; r < hi; r++) if (less(r, hi)) swap(r, store++);
+      swap(store, hi);
+      if (store === n) break;
+      if (store < n) lo = store + 1;
+      else hi = store - 1;
+    }
+    for (let r = 0; r < n; r++) zf.lod[ci[r]] = 1;
   }
 
   /**

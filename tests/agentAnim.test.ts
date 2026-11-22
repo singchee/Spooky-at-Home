@@ -394,6 +394,9 @@ describe('crowd nights (spec 003): draw list caps, level of detail, death heat',
     expect(px(1800)).toBeGreaterThan(LOD_ENTER_PX);
     for (let f = 0; f < 3; f++) view.update(sim as never, f * 0.05, { camera: cam, height: 800 });
     expect(view.stats.modelZombies).toBe(3);
+    // The three nearest the aim point (the screen centre) are the models.
+    const lodF = (view as unknown as { zt: { f: { lod: Float32Array } } }).zt.f.lod;
+    expect([...lodF.slice(0, 10)].map((v, i) => (v > 0 ? i : -1)).filter((i) => i >= 0)).toEqual([0, 1, 2]);
     // Back off until a zombie is between the thresholds: the models stay models, nobody new becomes one.
     const mid = (LOD_HEIGHT_M * cam.projectionMatrix.elements[5] * 400) / ((LOD_ENTER_PX + LOD_STAY_PX) / 2);
     place(mid);

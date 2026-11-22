@@ -73,9 +73,8 @@ export class CrowdMode {
   }
 
   /** Every frame: the real frame time (ms) for the stats, and the HUD. */
-  frame(realMs: number, now: number, calm: boolean, screenOf: (x: number, z: number) => { x: number; y: number; visible: boolean }): void {
+  frame(realMs: number, now: number, calm: boolean, screenOf: (x: number, z: number) => { x: number; y: number; visible: boolean }, s: CrowdStats): void {
     this.frames.add(realMs);
-    const s = this.sim.state().crowd as CrowdStats;
     this.hud.update(s, now, calm, screenOf);
     if (this.fpsEl && (this.fpsT -= realMs / 1000) <= 0) {
       this.fpsT = 0.5;

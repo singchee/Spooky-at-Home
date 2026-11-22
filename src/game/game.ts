@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { MapData, V2 } from '../map/types';
-import { ENDGAME_LEFT, type Sim, type SimEvent } from '../sim/sim';
+import { ENDGAME_LEFT, type Sim, type SimEvent, type SimState } from '../sim/sim';
 import { Bot, SKILL } from '../sim/bot';
 import { WEAPONS, weaponById } from '../sim/weapons';
 import { buildWorld, type World } from '../world/buildWorld';
@@ -134,6 +134,8 @@ export class Game {
   private agents: AgentsView;
   /** Crowd nights (spec 003): their HUD, end card, kill lines and frame stats; null on every other mission. */
   private crowd: CrowdMode | null = null;
+  /** This frame's sim state, when render() read one (every frame on crowd nights). */
+  private frameState: SimState | null = null;
   private effects = new Effects();
   private hud: Hud;
   /** In-flight landmark markers (3.19): public places from the recon, never child places. */
@@ -737,7 +739,7 @@ export class Game {
     }
     this.touch.update(dt);
     this.render(dt);
-    this.crowd?.frame(real * 1000, this.clock, this.calm, (x, z) => this.screenPos({ x, z }, 2));
+    if (this.crowd && this.frameState?.crowd) this.crowd.frame(real * 1000, this.clock, this.calm, (x, z) => this.screenPos({ x, z }, 2), this.frameState.crowd);
     // The score follows the threat, about four times a second.
     this.audioTimer -= dt;
     if (this.audioTimer <= 0) {
@@ -874,12 +876,16 @@ export class Game {
     this.post.render(this.scene, this.camera);
 
     this.hudTimer -= dt;
-    if (this.hudTimer <= 0) {
+    // One state() a frame on crowd nights (HUD, doors marker, crowd HUD share it); otherwise only when the HUD redraws.
+    const due = this.hudTimer <= 0;
+    const st = due || this.crowd ? this.sim.state() : null;
+    this.frameState = st;
+    if (due) {
       this.hudTimer = 0.1;
-      this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose(), this.touch.active);
+      this.hud.update(st!, this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose(), this.touch.active);
       this.hud.updateMinimap(ac, this.aim, this.sim.survivors.filter((s) => s.alive && !s.home), this.sim.regroupPoints().map((g) => g.p), this.sim.searchAreas());
     }
-    const markers = this.markers();
+    const markers = this.markers(st);
     this.hud.setMarkers(markers);
     this.updateLandmarks(fov, markers);
   }
@@ -942,11 +948,11 @@ export class Game {
     return this.sim.survivors.some((s) => s.alive && !s.home && Math.hypot(s.x - this.aim.x, s.z - this.aim.z) < r);
   }
 
-  private markers() {
+  private markers(st: SimState | null = null) {
     const m = this.sim.mission;
     const out: { label: string; p: V2; r?: number }[] = [];
     // Crowd nights: the doors' marker turns to its alarm before the multiplier drops (Feel M4: words, not only colour).
-    const doors = m.crowd && this.sim.state().crowd;
+    const doors = m.crowd && (st ?? this.sim.state()).crowd;
     if (m.safehouse) out.push({ label: doors ? (doors.atDoors > 0 ? 'DOORS: UNDER ATTACK' : doors.alarm ? 'DOORS: CLOSE' : 'DOORS') : 'SAFEHOUSE', p: m.safehouse.centre });
     if (m.home) out.push({ label: 'HOME', p: m.home.centre });
     const moving = this.sim.survivors.filter((s) => s.alive && !s.home);
