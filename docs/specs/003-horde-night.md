@@ -196,3 +196,41 @@ A dev-only frame-time readout (or `window.__spooky` stats) shows median and wors
 
 ## Owner decision (22 Nov 2026)
 Approved, with **a maximum of 1,200 zombies on screen** ("max 1200 size"). The sizes become Big (600 at once, tablet default) and Huge (1,200 at once, desktop default); Insane (2,000) is dropped. Fixed-length runs, normal ammo, the performance budget and the menu placement below Three Nights are approved as recommended. The Story Writer proposes the name.
+
+---
+## Feel & access review  *(feel-designer, /plan, 22 Nov 2026)*
+Reviewed against the owner's cap (Big 600 on the tablet, Huge 1,200 on desktop, no Insane), today's HUD (`src/ui/hud.ts`), heat values (`HEAT` in `src/game/agentAnim.ts`), blast effects (`src/game/effects.ts`) and gun rates (25 mm 12/s, 40 mm 2.5/s, 105 one round per 4.5 s).
+
+**Must fix**
+- **M1. Tallies and counters must be readable on top of a white-hot crowd.** Pale text over a kerb-to-kerb white-hot stream disappears, and so does dark text over a black-hot one. Every number in the satisfaction kit (kill counter, multiplier, `×N` tallies, best shot) gets a solid dark outline or backing plate that holds in white-hot, black-hot and night vision. Size: at least 14 px everywhere, and at least 18 px for tallies and the multiplier at the 1280×800 tablet viewport. The `/playtest` surge screenshots must show a tally sitting on the densest part of the crowd in all three views.
+- **M2. Cap how often tallies appear.** In a packed street the 25 mm (radius 3 m, 12 rounds a second) can kill 5 or more per round. With the spec's "any round that kills 5 or more", that means up to 12 tallies a second: unreadable noise, and a flicker risk. Rules:
+  - Only the **105 and 40** make tallies.
+  - A **25 mm burst** adds up into one tally, shown when the player lets go of fire (or when the magazine runs dry), at the burst's last impact.
+  - **No more than 3 tallies on screen.** A new one fades out the oldest (0.3 s or longer), never pops it.
+  - With Reduce flicker on, tallies appear and disappear at once. That's already in the spec; keep it.
+- **M3. The flash meter must count darkening too.** WCAG 2.3.1 counts a pair of opposite brightness changes, not only flashes of light. When a 105 or 40 round kills dozens in one frame, every live zombie in the blast drops from heat 0.98 to 0.5 instantly (`HEAT.bodyStart`). In the zoomed 25 mm view at ×2, a packed stream can fill a large part of the screen, so that's a sharp darkening over a big area right after the blast's flash. Add to the `/playtest` flash meter: **zoomed 25 mm at ×2 into the densest stream, in white-hot and black-hot**, measuring both directions. If it fails, ease the heat drop at death over 0.3 s or more in this mode. That's a rendering change only, so the sim and determinism are untouched.
+- **M4. The multiplier drop needs a tell before it happens and a visible one when it does (pillar 3, and nothing by sound alone).** The doors marker turns to an alarm state when zombies get within a set distance of the doors, **before** the multiplier drops. When it drops, the multiplier number changes with a fade and a radio text line appears. The tell is never only a sound or only a colour: the text changes too.
+
+**Should fix**
+- **S1. Keep the kill counter calm.** At 50 kills a second, a big number changing every frame is a blur. Update it no more than about 4 times a second, or let it roll up smoothly. With Reduce flicker or reduced motion on, it doesn't roll; it steps at most 4 times a second.
+- **S2. Show only words this mode needs.** The HUD shows **DAWN m:ss**, **DOORS %**, **KILLS**, the **×N** multiplier and the score. Remove `FRIENDLY FIRE 0/N` and `FRIENDLIES` (there's nobody to hit, and "0/N" reads like a bug in a weapons-free mode). Remove `CONTACTS`: a count of 1,100 alive tells the player nothing. Put the kill counter and multiplier at the top centre, clear of the stick, the fire area and the GUN / VIEW / ZOOM buttons. Check it with a 1280×800 screenshot.
+- **S3. No stutter at the best moment.** On the tablet, a hitch right when a 105 kills 60 feels worse than a low average frame rate. Add to the tablet gate: **no frame over 50 ms in the second after a 105 impact that kills 30 or more**. For the Tech Lead: today `hud.update` rebuilds its DOM every frame (`replaceChildren`). Tallies should be a small pool of reused elements moved with `transform`, not new nodes for each kill.
+- **S4. Bodies fade out, they don't vanish.** When the body cap removes the oldest bodies, each one fades over a second or more. Hundreds of bodies vanishing one by one at the cap shimmer across the streets you've worked. Also check in the `/playtest` night-vision screenshots that a live zombie in a fresh pile reads as live. Thermal is covered (0.98 against 0.5 or less); night vision isn't.
+- **S5. Cap the layered impact sound (Audio Director).** Sound weight should grow with the kill count up to a ceiling, not play one voice per kill. It should never be the only cue: the tally (M1) is its visual twin.
+- **S6. Confirm what the owner's 1,200 cap counts.** I read "max 1200 size" as **1,200 living zombies**. At Huge that's up to 1,200 living plus 1,000 bodies, about 2,200 figures drawn. If the owner meant 1,200 figures in total, the Huge body cap has to drop. One question to the owner, through the Chief, before `/build`. The Tech Lead should also take Insane out of the tables in §4, the balance table and the end-card wording.
+
+**Tone: pass, with conditions.** The pillar 5 conditions are right: the "former neighbours" swap, no "massacre" or "extermination", and the end card leading with the people. Two additions:
+- Label the counter **KILLS**, never "BODY COUNT".
+- A tally is `×47` and nothing else. No "47 KILLS!" floats over the crater.
+
+**Ideas**
+- **I1. Vibration on the tablet:** a short pulse (`navigator.vibrate`, 40–60 ms) on a 105 impact. It's off when Reduce flicker or reduced motion is on, and it has its own setting. It needs no network.
+- **I2. Stream arrows on the minimap**, one per named direction, so the player can see "which stream is closest to the doors" (the skill this mode keeps) at a glance.
+- **I3. Burst tally as a toy:** M2's 25 mm burst total ("×23") makes the small gun's sweep through a crowd add up to something.
+
+**Other checks: no findings**
+- **Photosensitivity from blasts: pass.** The guns are unchanged, so rounds landing per second, the 105 kick and the night-vision washout stay at Hold levels. Per-kill effects are the new risk; M2 and M3 deal with it.
+- **Reduce flicker and motion:** covered by the spec plus M2 and S1.
+- **Thermal clutter:** bodies cool from 0.5 to 0.23, which is below road heat (0.33), so worked streets read as darker smudges under hot live crowds in both polarities. The LOD rule (same heat and size on screen) keeps distant live zombies the hottest thing in view. Fine as specified, given S4.
+
+**Verdict: APPROVED WITH CHANGES.** Do M1 to M4 in the build. M3's extra meter case must pass before release (QUALITY §2 blocker). S6 is one question for the owner before `/build`.
