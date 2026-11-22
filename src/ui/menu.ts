@@ -6,7 +6,8 @@ import { centroid } from '../map/geom';
 import type { MissionType } from '../sim/missions';
 import type { TemplateId } from '../map/recon';
 import { el } from './dom';
-import { showRecon } from './recon';
+import { showRecon, type SavedNote } from './recon';
+import { placeCache, placeId, timeAgo } from './placeCache';
 
 /**
  * Everything between the front page and a briefing:
@@ -89,7 +90,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   const file = el('input', undefined, undefined, fileLabel);
   file.type = 'file';
   file.accept = '.json,application/json';
-  el('p', 'small', 'Your search goes straight from your browser to OpenStreetMap. This game has no server and stores nothing. Saved map files stay on your computer.', scout);
+  el('p', 'small', 'Your search goes straight from your browser to OpenStreetMap. This game has no server. Places you scout are kept in this browser for 30 days so they open instantly next time; they are never sent anywhere. Saved map files stay on your computer.', scout);
   el('p', 'small', 'Best with a mouse and keyboard.', scout);
   el('p', 'attrib', 'Map data © OpenStreetMap contributors (ODbL) when a real place is used.', scout);
 
@@ -120,6 +121,8 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
 
   // ---------- switching screens ----------
   let closeRecon: (() => void) | null = null;
+  /** The note under the recon heading for a place kept on this device (only for that map). */
+  let savedNote: (SavedNote & { map: MapData }) | null = null;
   const show = (mode: MenuMode) => {
     closeRecon?.();
     closeRecon = null;
@@ -132,7 +135,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
         onChoose: (s, d, sd) => onStart({ map: m, type: s.base, template: s.template, anchor: s.anchor?.id, difficulty: d, seed: sd }),
         onCustom: () => show('custom'),
         onBack: () => show('scout'),
-      });
+      }, savedNote?.map === m ? savedNote : undefined);
     }
     if (mode === 'custom') {
       const m = currentMap();
@@ -144,8 +147,9 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
     else if (mode === 'recon') root.querySelector<HTMLButtonElement>('.mission-card button.primary')?.focus({ preventScroll: true });
     else start.focus({ preventScroll: true });
   };
-  const toRecon = (m: MapData) => {
+  const toRecon = (m: MapData, note?: SavedNote) => {
     map = m;
+    savedNote = note ? { ...note, map: m } : null;
     show('recon');
   };
 
@@ -182,33 +186,59 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
     ctrl = null;
     setBusy(false);
   };
-  const scoutPlace = async (query: string) => {
+  /** `refresh`: download this (already found) place again instead of using the copy on this device. */
+  const scoutPlace = async (query: string, refresh?: { lat: number; lon: number; label: string }) => {
     const id = ++run;
     ctrl = new AbortController();
     const signal = ctrl.signal;
     setBusy(true);
     setStage(0);
     cancel.focus({ preventScroll: true });
+    const cache = placeCache();
     try {
-      const place = await geocode(query, signal);
+      // Scouted before on this device: no request to OpenStreetMap at all.
+      let saved = refresh ? null : await cache.findByQuery(query);
       if (id !== run) return;
-      setStage(1);
-      placeLine.textContent = `${place.label}. This can take 10 to 20 seconds.`;
-      const json = await fetchOverpass(place, HALF, signal);
+      const place = refresh ?? saved ?? (await geocode(query, signal));
+      if (id !== run) return;
+      // The same spot under another name: skip the big download (and remember this name too).
+      if (!refresh && !saved) saved = await cache.findByCoords(place.lat, place.lon, query);
+      if (id !== run) return;
+      let json: OverpassJson;
+      if (saved) {
+        setStage(1, `Loaded from this device · downloaded ${timeAgo(Date.now() - saved.savedAt)}`);
+        placeLine.textContent = `${place.label}.`;
+        json = saved.json;
+        await painted(400); // long enough to read where it came from
+      } else {
+        setStage(1);
+        placeLine.textContent = `${place.label}. This can take 10 to 20 seconds.`;
+        json = await fetchOverpass(place, HALF, signal);
+      }
       if (id !== run) return;
       setStage(2);
       await painted();
       if (id !== run) return;
       const m = checkEnoughMap(trim(parseOverpass(json, place, HALF, place.label)));
       setStage(2, `Reading the map (${m.buildings.length.toLocaleString('en')} buildings, ${m.roads.length.toLocaleString('en')} roads)…`);
-      await painted(350);
+      // Keep a fresh download on this device (only a map good enough to fly over is worth keeping).
+      const [, kept] = await Promise.all([painted(350), saved ? true : cache.save(query, place, json)]);
       if (id !== run) return;
       setStage(3);
       await painted();
       if (id !== run) return;
       ctrl = null;
       setBusy(false);
-      toRecon(m);
+      toRecon(m, kept ? {
+        fromDevice: !!saved,
+        savedAt: saved?.savedAt ?? Date.now(),
+        onRefresh: () => {
+          show('scout');
+          q.value = query;
+          void scoutPlace(query, { lat: place.lat, lon: place.lon, label: place.label });
+        },
+        onForget: () => cache.forget(placeId(place.lat, place.lon)),
+      } : undefined);
     } catch (e) {
       if (id !== run) return; // cancelled, or a newer search started
       ctrl = null;

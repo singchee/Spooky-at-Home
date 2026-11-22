@@ -67,6 +67,26 @@ describe('map errors in plain English', () => {
     expect(f).not.toHaveBeenCalled();
   });
 
+  it('geocode: the map is named after the neighbourhood, never the house number typed (privacy)', async () => {
+    // Made-up answers in the open ocean, shaped like Nominatim's (addressdetails=1).
+    const answers = [
+      { lat: '-10', lon: '100', display_name: '12, Kelp Street, Test Reef, Open Ocean, 9999, Nowhere', address: { house_number: '12', road: 'Kelp Street', suburb: 'Test Reef', state: 'Open Ocean', postcode: '9999', country: 'Nowhere' } },
+      { lat: '-10', lon: '100', display_name: '12A, Kelp Street, Coral Town, Nowhere', address: { house_number: '12A', road: 'Kelp Street', town: 'Coral Town', country: 'Nowhere' } },
+      { lat: '-10', lon: '100', display_name: '12, Kelp Street, Nowhere', address: { house_number: '12', road: 'Kelp Street', country: 'Nowhere' } },
+      { lat: '-10', lon: '100', display_name: '12, Kelp Street, Test Reef, 9999, Nowhere' }, // no address details at all
+      { lat: '-10', lon: '100', display_name: '12/4, 77, 9999' }, // nothing safe left: coordinates
+    ];
+    const labels: string[] = [];
+    let urls = '';
+    for (const a of answers) {
+      vi.stubGlobal('fetch', vi.fn(async (u: string) => ((urls += u), json([a]))));
+      labels.push((await geocode('12 Kelp Street, Test Reef')).label);
+    }
+    expect(labels).toEqual(['Test Reef, Open Ocean', 'Coral Town, Nowhere', 'Kelp Street, Nowhere', 'Kelp Street, Test Reef', '-10.0000, 100.0000']);
+    for (const l of labels) expect(l).not.toMatch(/\b12A?\b|9999/);
+    expect(urls).toContain('addressdetails=1');
+  }, 15_000);
+
   it('geocode: unreachable, nothing found, busy', async () => {
     vi.stubGlobal('fetch', vi.fn(offline));
     expect(classifyMapError(await geocode('Nowhere Lane').catch((x) => x))).toBe('offline');

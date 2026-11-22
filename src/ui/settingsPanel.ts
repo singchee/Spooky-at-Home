@@ -1,5 +1,6 @@
 import { defaultSettings, getSettings, onSettingsChange, updateSettings, type Settings } from './settings';
 import { el } from './dom';
+import { placeCache } from './placeCache';
 
 /**
  * The settings panel: volumes, mouse, comfort. Opens over the pause screen, the front page or the menu.
@@ -124,6 +125,35 @@ export function openSettingsPanel(parent: HTMLElement, o: SettingsPanelOptions =
       sync.push((s) => (input.checked = s[d.key]));
     }
   }
+  // Places kept on this device (BACKLOG 3.12). Only a count and a size are shown here, never the places.
+  const places = el('fieldset', 'settings-group settings-places', undefined, panel);
+  el('legend', undefined, 'Saved places', places);
+  const placesText = el('p', 'small', 'Checking this browser…', places);
+  placesText.setAttribute('aria-live', 'polite');
+  const forgetAll = el('button', 'settings-forget-places', 'Forget all saved places', places);
+  forgetAll.type = 'button';
+  forgetAll.disabled = true;
+  el('p', 'small', 'Places you scout are kept in this browser for 30 days so they open instantly next time. They are never sent anywhere.', places);
+  const countPlaces = async () => {
+    const list = await placeCache().list();
+    const mb = list.reduce((s, i) => s + i.bytes, 0) / (1024 * 1024);
+    placesText.textContent = list.length
+      ? `${list.length} place${list.length === 1 ? '' : 's'} saved on this device (${mb < 0.1 ? 'under 0.1' : mb.toFixed(1)} MB).`
+      : 'No places saved on this device.';
+    forgetAll.disabled = !list.length;
+  };
+  void countPlaces();
+  forgetAll.addEventListener('click', async () => {
+    forgetAll.disabled = true;
+    const ok = await placeCache().forgetAll();
+    if (ok) await countPlaces();
+    else {
+      placesText.textContent = "This browser wouldn't let the game clear them. Clearing this site's data in the browser settings removes them too.";
+      forgetAll.disabled = false;
+    }
+    if (forgetAll.disabled) done.focus(); // the button that had focus is now disabled
+  });
+
   el('p', 'small', 'Saved in this browser only.', panel);
   const row = el('div', 'row settings-actions', undefined, panel);
   const reset = el('button', undefined, 'Reset to defaults', row);
