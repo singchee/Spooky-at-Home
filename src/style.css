@@ -585,3 +585,49 @@ button:disabled { opacity: 0.5; }
   .settings-toggle input { width: 28px; height: 28px; }
 }
 .coach.paused .coach-touch { display: none; }
+
+/* ---------- Intro: "The Late Bulletin" (src/ui/intro.ts) ---------- */
+.intro { position: fixed; inset: 0; z-index: 30; background: #000; overflow: hidden; color: var(--ink); cursor: default; }
+.intro-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+/* The TV's graphics: laid out at the TV's starting size, then mapped onto the TV screen (matrix3d). */
+.intro-tv { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; visibility: hidden; overflow: hidden;
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif; --u: 6px; }
+.itv-bug { position: absolute; right: 3%; top: 3.5%; font-weight: 900; letter-spacing: 0.08em; color: #fff; font-size: max(14px, calc(var(--u) * 3)); line-height: 1;
+  padding: 0.18em 0.35em; border: 2px solid rgba(255, 255, 255, 0.85); border-radius: 3px; background: rgba(155, 47, 42, 0.85); }
+.itv-live { position: absolute; font-weight: 800; font-size: max(14px, calc(var(--u) * 1.9)); line-height: 1; padding: 0.2em 0.4em; background: #9b2f2a; color: #fff; letter-spacing: 0.1em; }
+.itv-lower { position: absolute; left: 3%; bottom: 14%; max-width: 94%; display: flex; flex-direction: column; }
+.itv-name { align-self: flex-start; background: #e7eaee; color: #10151c; font-weight: 900; letter-spacing: 0.04em; font-size: max(15px, calc(var(--u) * 3)); padding: 0.12em 0.45em; line-height: 1.15; }
+.itv-place { align-self: flex-start; background: #9b2f2a; color: #fff; font-weight: 700; letter-spacing: 0.04em; font-size: max(14px, calc(var(--u) * 2.1)); padding: 0.15em 0.55em; line-height: 1.15; }
+.itv-ticker { position: absolute; left: 0; right: 0; bottom: 0; height: 11.5%; min-height: 20px; background: rgba(8, 12, 18, 0.92); border-top: 2px solid #9b2f2a; overflow: hidden; display: flex; align-items: center; }
+.itv-tick { white-space: nowrap; font-weight: 700; color: #f2f2ee; letter-spacing: 0.05em; font-size: max(14px, calc(var(--u) * 2)); padding-left: 3%; will-change: transform; }
+/* Captions: always on, with the speaker's name. */
+.intro-cap { position: absolute; left: 50%; bottom: max(28px, 6vh); transform: translateX(-50%); width: min(880px, calc(100% - 32px)); text-align: center; pointer-events: none;
+  opacity: 0; transition: opacity 0.25s linear; }
+.intro-cap.on { opacity: 1; }
+.intro-cap > span { display: inline; font-size: clamp(17px, 2.2vw, 22px); line-height: 1.5; background: rgba(0, 0, 0, 0.78); padding: 0.1em 0.4em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.intro-cap > .ic-who { color: var(--accent); font-weight: 700; letter-spacing: 0.06em; font-size: clamp(14px, 1.6vw, 16px); margin-right: 0.2em; }
+.intro-cap > .ic-who:empty { display: none; }
+.intro-cap.cue .ic-text { color: var(--muted); font-style: italic; }
+.intro-skip { position: absolute; top: 16px; right: 16px; min-height: 48px; min-width: 48px; padding: 10px 18px; font-size: 16px; z-index: 2;
+  background: rgba(12, 16, 14, 0.75); border: 1px solid rgba(231, 239, 233, 0.5); border-radius: 8px; color: var(--ink); }
+.intro-skip:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.intro-hud { position: absolute; inset: 0; pointer-events: none; color: rgba(231, 239, 233, 0.75); visibility: hidden; }
+.ih-read { position: absolute; left: 60px; top: 24px; font-family: var(--mono); font-size: 14px; letter-spacing: 0.12em; }
+.intro-radio { position: absolute; left: 20px; bottom: max(110px, 18vh); display: flex; flex-direction: column; gap: 6px; pointer-events: none; visibility: hidden;
+  background: rgba(0, 0, 0, 0.55); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(184, 255, 138, 0.35); }
+.ir-label { font-family: var(--mono); font-size: 14px; color: var(--accent); letter-spacing: 0.12em; }
+.ir-wave { display: flex; gap: 4px; align-items: center; height: 30px; }
+.ir-bar { width: 5px; height: 30px; background: var(--accent); border-radius: 2px; transform: scaleY(0.08); }
+.intro-title { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; visibility: hidden;
+  font-weight: 800; line-height: 0.92; letter-spacing: 0.04em; text-align: center; }
+.intro-title .lt-1 { font-size: clamp(48px, min(10vw, 15vh), 128px); color: #fff; text-shadow: 0 0 28px rgba(255, 255, 255, 0.35), 0 0 2px rgba(255, 255, 255, 0.6); }
+.intro-title .lt-2 { font-size: clamp(26px, min(5vw, 7.5vh), 64px); letter-spacing: 0.3em; margin-top: 8px; padding-left: 0.3em; opacity: 0.9; }
+/* Front page: the intro offer (first visit) and the "Watch intro" link afterwards. */
+.landing-intro-offer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 18px; padding: 10px 12px; border: 1px solid rgba(184, 255, 138, 0.5); border-radius: 8px;
+  background: rgba(12, 22, 12, 0.72); align-self: flex-start; max-width: 560px; }
+.lio-text { font-size: 15px; }
+.la-intro { min-height: 48px; font-size: 16px; padding: 10px 16px; border-radius: 8px; }
+.la-intro-link { align-self: flex-start; background: transparent; border-color: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; padding-left: 0; margin: -6px 0 6px; }
+.la-intro:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.landing-enter { animation: landing-enter 0.8s ease-out both; }
+@keyframes landing-enter { from { opacity: 0; } to { opacity: 1; } }
