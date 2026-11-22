@@ -88,6 +88,7 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 
 | 3.43 | Finish the Sydney, London, Rome and Tokyo presets: two cloud rounds failed (kumi 502/504 after 2–5 min; overpass-api.de resets connections from the cloud). Retry in a quiet window (night UTC), or from the owner's connection via a "Save this map file" export on the recon screen (new, small: exports the downloaded map as a file the build step accepts). Note: scripts/build-presets.mjs rewrites maps/preset-exclusions.json from only the places it finds, so merge, don't overwrite, the New York and Paris entries | map-check, playtest | todo |
 | 3.44 | Finer walk grid (or sub-cell wall tests) so zombies can't wedge in footprints thinner than 3 m (about 4 still stuck on Adelaide CBD after 3.32) | review, balance | todo |
+| 3.45 | Horde Night difficulty after the owner plays it. Balance run (12 seeds × 6 maps): the bot won 100% with doors at 40–60% on most maps; Huge on the sample town was tight (lowest 3%). Within spec bands but probably easy for the bot. Options if the owner finds it too easy: raise Big toward 3,000 total; Huge is already at the 1,200-figure cap, so raise its total, not its living cap. Do not shorten the 105 reload or soften the doors to move numbers | owner playtest, balance | waiting on owner playtest |
 
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
