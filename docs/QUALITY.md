@@ -22,6 +22,7 @@
 | Budget | Limit | Why |
 |---|---|---|
 | Simulation step, 1,000 zombies, headless | < 4 ms | Leaves room for rendering within a 16 ms frame |
+| Simulation step, 2,000 living crowd zombies + 6,000 dead entries, headless (spec 003) | < 4 ms | Headroom over the 1,200-figure cap; the dead must cost the sim nothing (`tests/crowd.test.ts`) |
 | Draw calls, sample town | < 150 | Merged buildings, instanced zombies |
 | JavaScript download (gzipped) | < 400 KB | Loads fast on home broadband |
 | Map download + build, 1.2 km square | < 15 s | Player patience |

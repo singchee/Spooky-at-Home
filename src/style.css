@@ -69,6 +69,25 @@ button:disabled { opacity: 0.5; }
 @keyframes hud-cold-pulse { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) { .hud-cold-only { animation: none; } }
 .hud-attrib { position: absolute; right: 16px; bottom: 16px; font-size: 14px; }
+/* Crowd nights (spec 003, Feel M1/S2): numbers on a solid dark plate with an outline, top centre, clear of the guns, stick and buttons. */
+.recon-crowd { margin-top: 16px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.15); }
+.recon-crowd-size { display: flex; gap: 16px; flex-wrap: wrap; }
+.recon-crowd-opt { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; }
+.crowd-top { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; gap: 16px; align-items: baseline; white-space: nowrap; background: rgba(0, 0, 0, 0.7); border-radius: 4px; padding: 4px 12px; }
+.crowd-top, .crowd-tally, .crowd-alarm { text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
+.crowd-kills { font-size: 22px; font-weight: 700; letter-spacing: 0.04em; }
+.crowd-mult { font-size: 22px; font-weight: 800; min-width: 2.2em; text-align: center; }
+.crowd-mult.down { color: #ffb4a9; }
+.crowd-score { font-size: 18px; }
+.crowd-alarm { position: absolute; left: 50%; top: 58px; transform: translateX(-50%); background: #6b4300; color: #fff; padding: 2px 10px; border-radius: 4px; font-weight: 700; font-size: 16px; white-space: nowrap; }
+.crowd-alarm.hit { background: #b3261e; }
+.crowd-tallies { position: absolute; inset: 0; overflow: hidden; }
+.crowd-tally { position: absolute; left: 0; top: 0; font-size: 22px; font-weight: 800; color: #fff; background: rgba(0, 0, 0, 0.62); border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 4px; padding: 0 6px; will-change: transform, opacity; }
+.crowd-fps { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); font-size: 14px; background: rgba(0, 0, 0, 0.7); padding: 2px 8px; border-radius: 4px; pointer-events: none; z-index: 6; }
+@media (max-width: 640px) {
+  .crowd-top { top: 176px; gap: 10px; }
+  .crowd-alarm { top: 220px; }
+}
 /* Landmark markers (3.19): outlined text, smaller and quieter than the mission's own markers; under every HUD panel. */
 .hud-landmarks { position: absolute; inset: 0; overflow: hidden; }
 .hud-landmark[hidden] { display: none; }

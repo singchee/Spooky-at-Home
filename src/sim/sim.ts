@@ -4,7 +4,10 @@ import type { RoadGraph } from '../map/roadGraph';
 import type { WalkGrid } from '../map/grid';
 import { hashString, mulberry32, type Rng } from '../util/rng';
 import { nearChildPlace } from '../map/recon';
-import { placeLabel } from './missions';
+import { fmtTime, placeLabel } from './missions';
+import {
+  ALARM_STEPS, CROWD_SPEED, MAX_SPAWNS_PER_STEP, MULT_DOWN, MULT_MAX, MULT_UP, SEP_PUSH, SEP_RADIUS, STREAM_JITTER, crowdDoors, crowdNoGo, streamRate,
+} from './crowd';
 import { CHILD_FIRE_CLEARANCE, FIRST_WAVE, HORDE_EDGE, HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH, WAVE_KINDS, type Mission, type WaveKind } from './missions';
 import type { LineId } from './campaignText';
 import { KILL_REACH, MAX_KILL_REACH, WEAPONS, weaponById, type WeaponDef } from './weapons';
@@ -150,6 +153,22 @@ export interface WeaponState {
   reloading: number;
 }
 
+/** Spec 003: the crowd night's score, all sim-side and deterministic. */
+export interface CrowdStats {
+  kills: number;
+  score: number;
+  multiplier: number;
+  bestMultiplier: number;
+  /** The biggest single round: kills, gun, and where (untrusted map text). */
+  best: { kills: number; weapon: string; place: string } | null;
+  spawned: number;
+  /** Spawns dropped because the crowd was at its size's cap (never queued: the schedule is time-only). */
+  dropped: number;
+  atDoors: number;
+  /** A living zombie is close to the doors: the tell before the multiplier drops (Feel M4). */
+  alarm: boolean;
+}
+
 export interface SimState {
   t: number;
   phase: 'running' | 'won' | 'lost';
@@ -168,6 +187,8 @@ export interface SimState {
   shots: number;
   kills: number;
   weapons: WeaponState[];
+  /** Only on a crowd night (absent otherwise, so other modes' traces are unchanged). */
+  crowd?: CrowdStats;
 }
 
 export const ORBIT = { radius: 1000, altitude: 1500, period: 120 };
@@ -194,7 +215,18 @@ export class Sim {
   t = 0;
   phase: SimState['phase'] = 'running';
   reason = '';
+  /** Every zombie ever spawned, dead or alive, append-only (ids = indices for the renderer and tests). */
   zombies: Zombie[] = [];
+  /**
+   * The live zombies in id order (spec 003): every per-zombie loop walks this, so the dead cost the sim nothing.
+   * Entries pushed onto `zombies` are picked up at the next sync (tests and Training push directly); dead ones
+   * are removed by stable compaction at the end of a step, so the rng is drawn in exactly the old order.
+   */
+  readonly living: Zombie[] = [];
+  private livingSeen = 0;
+  /** The `zombies` array `living` was built from: a different one (a test or caller swapped it) starts over. */
+  private livingOf: Zombie[] | null = null;
+  private livingDirty = false;
   survivors: Survivor[] = [];
   shells: Shell[] = [];
   weapons: WeaponState[];
@@ -233,6 +265,18 @@ export class Sim {
   private scatterSaid = false;
   private fewSaid = false;
   private coldSaid = false;
+  /** Crowd night (spec 003): the child no-go mask, the spawner's own stream and accumulators, the score. */
+  private noGo: Uint8Array | null = null;
+  private crng: Rng | null = null;
+  private spawnAcc: number[] = [];
+  private crowdStats: CrowdStats | null = null;
+  private calmT = 0;
+  private contactT = 0;
+  private contact = false;
+  private bucketHead: Int32Array | null = null;
+  private bucketNext = new Int32Array(0);
+  private snapX = new Float64Array(0);
+  private snapZ = new Float64Array(0);
   /** Endgame search help: quiet seconds before it starts (null = never on its own), and its own seeded stream. */
   private searchQuiet: number | null;
   private erng: Rng;
@@ -250,7 +294,8 @@ export class Sim {
     // Each horde mills around its own movable anchor (a copy, so the mission data never changes).
     const anchors = mission.hordes.map((h) => ({ ...h.centre }));
     this.scatterOn = opts.scatter ?? mission.type === 'clear';
-    this.searchQuiet = SEARCH_HELP && (opts.search ?? mission.type === 'clear') ? ENDGAME_QUIET_S : null;
+    // Endgame search help is Clear's (and Training's, on request); never a crowd night, whatever the caller asks.
+    this.searchQuiet = SEARCH_HELP && !mission.crowd && (opts.search ?? mission.type === 'clear') ? ENDGAME_QUIET_S : null;
     this.erng = mulberry32(hashString(`search|${mission.mapName}|${mission.seed}|${mission.type}|${mission.difficulty}`));
     this.srng = mulberry32(hashString(`scatter|${mission.mapName}|${mission.seed}|${mission.type}|${mission.difficulty}`));
     mission.hordes.forEach((h, k) => {
@@ -288,7 +333,13 @@ export class Sim {
       if (grid.isBlocked(last.x, last.z)) Object.assign(last, grid.nearestFree({ x: last.x, z: last.z }));
       this.doors.push(p.route ? destination(p.route[p.route.length - 1], map, mission.safehouse?.poly) : null);
     });
-    if (mission.safehouse && mission.type === 'defend') this.safeField = grid.flowField(grid.perimeterCells(mission.safehouse.poly));
+    if (mission.crowd && mission.safehouse) {
+      this.noGo = crowdNoGo(map, grid);
+      this.safeField = grid.flowField(crowdDoors(grid, mission.safehouse.poly, this.noGo), this.noGo);
+      this.crng = mulberry32(hashString(`crowd-sim|${mission.mapName}|${mission.seed}|${mission.crowd.size}|${mission.anchor?.id ?? ''}`));
+      this.spawnAcc = mission.crowd.streams.map(() => 0);
+      this.crowdStats = { kills: 0, score: 0, multiplier: 1, bestMultiplier: 1, best: null, spawned: 0, dropped: 0, atDoors: 0, alarm: false };
+    } else if (mission.safehouse && mission.type === 'defend') this.safeField = grid.flowField(grid.perimeterCells(mission.safehouse.poly));
     if (mission.waves) this.waveTimer = FIRST_WAVE; // first wave arrives quickly
     this.shelterGrace = Math.max(15, 45 - 6 * mission.difficulty);
     this.noSpawn = mission.waves ? noWaveSpawn(map, graph) : new Uint8Array(graph.nodes.length);
@@ -345,6 +396,30 @@ export class Sim {
       id: this.nextId++, x: p.x, z: p.z, vx: 0, vz: 0, cold, alive: true, diedAt: -1, home, goal: null,
       speed: ((cold ? 1.1 : 1.3) + this.rng() * 0.6 + 0.08 * d) * speedMul,
     });
+    this.syncLiving();
+  }
+
+  /** Pick up zombies appended to `zombies` since the last sync (in order), live ones only. */
+  syncLiving(): Zombie[] {
+    const zs = this.zombies;
+    if (zs !== this.livingOf || zs.length < this.livingSeen) {
+      // The list was swapped for another or cut (tests): start over.
+      this.living.length = 0;
+      this.livingSeen = 0;
+      this.livingOf = zs;
+    }
+    for (let i = this.livingSeen; i < zs.length; i++) if (zs[i].alive) this.living.push(zs[i]);
+    this.livingSeen = zs.length;
+    return this.living;
+  }
+
+  /** Drop the dead from `living`, keeping the order (never swap-remove: the rng order depends on it). */
+  private compactLiving(): void {
+    const l = this.living;
+    let w = 0;
+    for (let i = 0; i < l.length; i++) if (l[i].alive) l[w++] = l[i];
+    l.length = w;
+    this.livingDirty = false;
   }
 
   /** The kind of the next wave to arrive. */
@@ -398,6 +473,7 @@ export class Sim {
   step(dt: number): void {
     if (this.phase !== 'running') return;
     this.t += dt;
+    this.syncLiving();
     for (const s of this.weapons) {
       // Keep the remainder (can go slightly negative) so rate of fire is exact at any step size.
       s.cooldown = Math.max(-dt, s.cooldown - dt);
@@ -410,12 +486,18 @@ export class Sim {
       }
     }
     this.updateShells();
-    this.updateSurvivors(dt);
-    this.updateWaves(dt);
-    this.updateZombies(dt);
+    if (this.crowdStats) {
+      this.updateCrowdSpawns(dt);
+      this.updateCrowdZombies(dt);
+    } else {
+      this.updateSurvivors(dt);
+      this.updateWaves(dt);
+      this.updateZombies(dt);
+    }
     this.updateLines();
     this.updateSearch();
     this.checkResult();
+    if (this.livingDirty) this.compactLiving();
   }
 
   private updateShells(): void {
@@ -427,7 +509,7 @@ export class Sim {
       }
       const r = sh.weapon.radius;
       let kills = 0;
-      for (const z of this.zombies) {
+      for (const z of this.living) {
         if (!z.alive) continue;
         const d = Math.hypot(z.x - sh.to.x, z.z - sh.to.z);
         if (d < r || (d < r * KILL_REACH && this.rng() < 0.5)) {
@@ -436,7 +518,14 @@ export class Sim {
           kills++;
         }
       }
+      if (kills) this.livingDirty = true;
       this.kills += kills;
+      const cs = this.crowdStats;
+      if (cs && kills) {
+        cs.kills += kills;
+        cs.score += kills * cs.multiplier;
+        if (!cs.best || kills > cs.best.kills) cs.best = { kills, weapon: sh.weapon.id, place: placeLabel(this.map, sh.to) };
+      }
       if (kills) this.lastHit = this.t;
       if (this.scatterOn && sh.weapon.id === '105') this.scatter(sh.to, r);
       for (const s of this.survivors) {
@@ -460,7 +549,7 @@ export class Sim {
   /** Spec 002: every horde zombie a 105 left standing within SCATTER_REACH x its lethal radius runs (scatter stream only). */
   private scatter(at: V2, r: number): void {
     const count = new Map<number, number>();
-    for (const z of this.zombies) {
+    for (const z of this.living) {
       if (!z.alive || !z.home) continue;
       const k = this.hordeOf.get(z.home);
       if (k === undefined) continue;
@@ -501,7 +590,7 @@ export class Sim {
   /** Where scattered hordes will regroup, while any of their runners are out (feel M1: the in-flight marker). */
   regroupPoints(): { label: string; p: V2 }[] {
     const out = new Set<number>();
-    for (const z of this.zombies) if (z.alive && z.scatter && z.home) out.add(this.hordeOf.get(z.home)!);
+    for (const z of this.syncLiving()) if (z.alive && z.scatter && z.home) out.add(this.hordeOf.get(z.home)!);
     return [...out].sort((a, b) => a - b).map((k) => ({ label: this.hordes[k].regroup, p: { ...this.hordes[k].anchor } }));
   }
 
@@ -510,7 +599,7 @@ export class Sim {
       if (!s.alive || s.home) continue;
       let attackers = 0;
       let nearest = Infinity;
-      for (const z of this.zombies) {
+      for (const z of this.living) {
         if (!z.alive) continue;
         const d = Math.hypot(z.x - s.x, z.z - s.z);
         if (d < nearest) nearest = d;
@@ -567,7 +656,7 @@ export class Sim {
     if (this.waveTimer > 0) return;
     // A wave that can't arrive (too many alive, nowhere to spawn) keeps its kind for the next try.
     this.waveTimer = w.every * WAVE_KINDS[this.nextWaveKind()].gap;
-    const alive = this.zombies.reduce((n, z) => n + (z.alive ? 1 : 0), 0);
+    const alive = this.living.reduce((n, z) => n + (z.alive ? 1 : 0), 0);
     if (alive >= w.maxAlive) return;
     const active = this.activeSurvivors();
     const g = this.graph;
@@ -639,8 +728,11 @@ export class Sim {
         this.field = grid.flowField(active.map((s) => grid.idx(s.x, s.z)).filter((k) => k >= 0).flatMap((k) => this.freeAround(k)));
       }
     }
-    for (const z of this.zombies) {
-      if (!z.alive) continue;
+    for (const z of this.living) {
+      if (!z.alive) {
+        this.livingDirty = true;
+        continue;
+      }
       let dir: V2 | null = null;
       // Chase any survivor within 25 m directly.
       let near: Survivor | null = null;
@@ -865,6 +957,191 @@ export class Sim {
     }
   }
 
+  /**
+   * Crowd night spawner: each open stream's rate (a pure function of t) fills an accumulator; whole zombies spawn
+   * across the road at its node, at most MAX_SPAWNS_PER_STEP a step. At the size's cap a spawn is dropped, never queued.
+   */
+  private updateCrowdSpawns(dt: number): void {
+    const plan = this.mission.crowd!;
+    const cs = this.crowdStats!;
+    const r = this.crng!;
+    let alive = 0;
+    for (const z of this.living) if (z.alive) alive++;
+    let spawned = 0;
+    const t0 = this.t - dt;
+    for (let k = 0; k < plan.streams.length; k++) {
+      this.spawnAcc[k] += streamRate(plan, k, t0) * dt;
+      while (this.spawnAcc[k] >= 1 && spawned < MAX_SPAWNS_PER_STEP) {
+        this.spawnAcc[k] -= 1;
+        if (alive >= plan.maxAlive) {
+          cs.dropped++;
+          continue;
+        }
+        const at = plan.streams[k].at;
+        const d = this.grid.steer(this.safeField!, at.x, at.z) ?? { x: 1, z: 0 };
+        const across = (r() * 2 - 1) * (STREAM_JITTER - 0.5);
+        const back = r() * 2;
+        let p = { x: at.x - d.z * across - d.x * back, z: at.z + d.x * across - d.z * back };
+        if (!this.free(p.x, p.z)) p = { x: at.x - d.z * across * 0.5, z: at.z + d.x * across * 0.5 };
+        if (!this.free(p.x, p.z)) p = { x: at.x, z: at.z };
+        this.spawnZombie(p, false, null, CROWD_SPEED);
+        alive++;
+        spawned++;
+        cs.spawned++;
+      }
+    }
+  }
+
+  /** Walkable and outside the child no-go mask (the crowd guardrail, checked on every move). */
+  private free(x: number, z: number): boolean {
+    if (this.grid.isBlocked(x, z)) return false;
+    const k = this.grid.idx(x, z);
+    return !(this.noGo && this.noGo[k]);
+  }
+
+  /**
+   * Crowd zombies: down the doors' field (steer keeps lanes), pushed apart by neighbours from a bucket grid built at
+   * the start of the step (order-independent), every move refused if it would enter a wall or the child mask.
+   * At the doors they wear them down, capped; the multiplier and the alarm follow.
+   */
+  private updateCrowdZombies(dt: number): void {
+    const grid = this.grid;
+    const field = this.safeField!;
+    const plan = this.mission.crowd!;
+    const cs = this.crowdStats!;
+    const live = this.living;
+    const n = live.length;
+    const cells = grid.n * grid.n;
+    if (!this.bucketHead || this.bucketHead.length !== cells) this.bucketHead = new Int32Array(cells).fill(-1);
+    if (this.bucketNext.length < n) {
+      const cap = Math.max(n, this.bucketNext.length * 2, 256);
+      this.bucketNext = new Int32Array(cap);
+      this.snapX = new Float64Array(cap);
+      this.snapZ = new Float64Array(cap);
+    }
+    const head = this.bucketHead;
+    const next = this.bucketNext;
+    const sx = this.snapX;
+    const sz = this.snapZ;
+    for (let a = 0; a < n; a++) {
+      const z = live[a];
+      sx[a] = z.x;
+      sz[a] = z.z;
+      next[a] = -1;
+      if (!z.alive) {
+        this.livingDirty = true;
+        continue;
+      }
+      const c = grid.idx(z.x, z.z);
+      if (c < 0) continue;
+      next[a] = head[c];
+      head[c] = a;
+    }
+    const gn = grid.n;
+    const R = SEP_RADIUS;
+    let atDoors = 0;
+    let alarm = false;
+    for (let a = 0; a < n; a++) {
+      const z = live[a];
+      if (!z.alive) continue;
+      const here = grid.fieldAt(field, sx[a], sz[a]);
+      let dir: V2 = { x: 0, z: 0 };
+      if (here === 0) atDoors++;
+      else {
+        if (here > 0 && here <= ALARM_STEPS) alarm = true;
+        dir = grid.steer(field, sx[a], sz[a]) ?? dir;
+      }
+      // Separation: read the snapshot only, so the result doesn't depend on loop order.
+      let px = 0;
+      let pz = 0;
+      const c = grid.idx(sx[a], sz[a]);
+      if (c >= 0) {
+        const ci = c % gn;
+        const cj = (c - ci) / gn;
+        for (let dj = -1; dj <= 1; dj++) {
+          const jj = cj + dj;
+          if (jj < 0 || jj >= gn) continue;
+          for (let di = -1; di <= 1; di++) {
+            const ii = ci + di;
+            if (ii < 0 || ii >= gn) continue;
+            for (let b = head[jj * gn + ii]; b >= 0; b = next[b]) {
+              if (b === a) continue;
+              const dx = sx[a] - sx[b];
+              const dz = sz[a] - sz[b];
+              if (dx > R || dx < -R || dz > R || dz < -R) continue;
+              const d = Math.hypot(dx, dz);
+              if (d >= R) continue;
+              if (d < 1e-6) {
+                // Exactly on top of each other: part by id, the same way whichever is processed first.
+                px += z.id < live[b].id ? 1 : -1;
+                continue;
+              }
+              const w = (R - d) / R;
+              px += (dx / d) * w;
+              pz += (dz / d) * w;
+            }
+          }
+        }
+      }
+      const sp = z.speed;
+      let vx = dir.x * sp + px * SEP_PUSH;
+      let vz = dir.z * sp + pz * SEP_PUSH;
+      const v = Math.hypot(vx, vz);
+      const vmax = sp * 1.25;
+      if (v > vmax) {
+        vx *= vmax / v;
+        vz *= vmax / v;
+      }
+      const nx = z.x + vx * dt;
+      const nz = z.z + vz * dt;
+      if (this.free(nx, nz)) {
+        z.x = nx;
+        z.z = nz;
+      } else if (this.free(nx, z.z)) z.x = nx;
+      else if (this.free(z.x, nz)) z.z = nz;
+      z.vx = vx;
+      z.vz = vz;
+    }
+    // Clear only the buckets used.
+    for (let a = 0; a < n; a++) {
+      const c = grid.idx(sx[a], sz[a]);
+      if (c >= 0) head[c] = -1;
+    }
+    cs.atDoors = atDoors;
+    cs.alarm = alarm || atDoors > 0;
+    this.integrity -= Math.min(atDoors, plan.doors.cap) * plan.doors.rate * dt;
+    // The multiplier: the doors untouched climbs it, zombies at them knock it down (pillar 2 in the score).
+    if (atDoors > 0) {
+      this.calmT = 0;
+      let drop = false;
+      if (!this.contact) {
+        this.contact = true;
+        this.contactT = 0;
+        drop = true;
+      } else {
+        this.contactT += dt;
+        if (this.contactT >= MULT_DOWN) {
+          this.contactT -= MULT_DOWN;
+          drop = true;
+        }
+      }
+      if (drop && cs.multiplier > 1) {
+        cs.multiplier--;
+        this.emit({ type: 'radio', text: `They're at the doors. Multiplier down to ×${cs.multiplier}.` });
+      }
+    } else {
+      this.contact = false;
+      this.calmT += dt;
+      if (this.calmT >= MULT_UP) {
+        this.calmT -= MULT_UP;
+        if (cs.multiplier < MULT_MAX) {
+          cs.multiplier++;
+          cs.bestMultiplier = Math.max(cs.bestMultiplier, cs.multiplier);
+        }
+      }
+    }
+  }
+
   /** The gunner switched camera (the game calls this): flicking between views without a hit is a sign of searching. */
   noteSensorSwitch(): void {
     this.switches.push(this.t);
@@ -883,6 +1160,7 @@ export class Sim {
 
   /** Start the search help now for the zombies `pick` chooses (Training night calls this; Clear starts it itself). */
   startSearch(pick: (z: Zombie) => boolean): boolean {
+    if (this.crowdStats) return false; // crowd nights: everyone is warm and in the streets; no search help
     const targets = this.zombies.filter((z) => z.alive && pick(z));
     if (!targets.length) return false;
     this.search = { ids: new Set(targets.map((z) => z.id)), areas: [], kills: this.kills };
@@ -1008,7 +1286,7 @@ export class Sim {
     if (!this.scatterOn) return;
     let left = 0;
     let cold = 0;
-    for (const z of this.zombies) {
+    for (const z of this.living) {
       if (!z.alive) continue;
       left++;
       if (z.cold) cold++;
@@ -1043,7 +1321,7 @@ export class Sim {
     const alive = this.survivors.filter((s) => s.alive);
     const home = this.survivors.filter((s) => s.home).length;
     if (m.type === 'clear') {
-      if (this.zombies.every((z) => !z.alive)) return end(true, 'Every horde cleared.');
+      if (this.living.every((z) => !z.alive)) return end(true, 'Every horde cleared.');
       if (this.survivors.length && !alive.length) return end(false, 'The sheltering friendlies were overrun.');
       if (this.t >= m.timeLimit) return end(false, 'Out of time. The hordes are still out there.');
     } else if (m.type === 'escort') {
@@ -1051,6 +1329,9 @@ export class Sim {
       if (!stillPossible) return end(false, `Too few survivors left to make it home (needed ${m.needHome}).`);
       if (alive.every((s) => s.home)) return end(true, `${home} of ${this.survivors.length} survivors made it home.`);
       if (this.t >= m.timeLimit) return end(false, 'Out of time before everyone got home.');
+    } else if (this.crowdStats) {
+      if (this.integrity <= 0) return end(false, `The doors gave at ${fmtTime(this.t)}.`);
+      if (this.t >= m.timeLimit) return end(true, 'The doors held. Everyone inside saw the dawn.');
     } else {
       if (this.integrity <= 0) return end(false, 'The dead broke into the safehouse.');
       if (this.t >= m.timeLimit) return end(true, 'Safehouse held until dawn patrol arrived.');
@@ -1058,7 +1339,7 @@ export class Sim {
   }
 
   state(): SimState {
-    const zAlive = this.zombies.filter((z) => z.alive);
+    const zAlive = this.syncLiving().filter((z) => z.alive);
     return {
       t: this.t,
       phase: this.phase,
@@ -1077,6 +1358,7 @@ export class Sim {
       shots: this.shots,
       kills: this.kills,
       weapons: this.weapons.map((w) => ({ ...w })),
+      ...(this.crowdStats ? { crowd: { ...this.crowdStats, best: this.crowdStats.best && { ...this.crowdStats.best } } } : {}),
     };
   }
 }

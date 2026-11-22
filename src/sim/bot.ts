@@ -70,7 +70,7 @@ export class Bot {
     const view = this.skill.view;
     if (view) this.lookT += this.skill.thinkEvery;
     const inView = (z: { x: number; z: number }) => !view || (!!this.look && Math.hypot(z.x - this.look.x, z.z - this.look.z) <= view);
-    const all = sim.zombies.filter((z) => z.alive && inView(z));
+    const all = sim.syncLiving().filter((z) => z.alive && inView(z));
     const canSee = (z: { cold: boolean }) => this.skill.seesCold || this.sensor === 'night' || !z.cold;
     const visible = all.filter(canSee);
     if (view && !visible.length && (!this.look || this.lookT >= LOOK_DWELL * (this.sensor === 'night' ? 2 : 1))) {

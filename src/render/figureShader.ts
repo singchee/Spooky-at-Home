@@ -249,6 +249,7 @@ const vertexShader = /* glsl */ `
   uniform float uKind;   // 0 zombies, 1 survivors
   uniform float uBase;   // height of the feet above the map's zero (roads sit at 1 m)
   uniform float uScale;  // overall size: larger than life so figures read from the gunship
+  uniform float uHeatW;  // scales the core-to-limb heat weights (1; crowd LOD matches the model's mean heat, spec 003)
   attribute float aPart;
   attribute vec3 aPivot;
   attribute float aLimbT;
@@ -321,6 +322,7 @@ const vertexShader = /* glsl */ `
     float bounce = dead * sin(clamp((age - 0.66) / 0.24, 0.0, 1.0) * 3.1416) * 0.08;
     float live = 1.0 - fall;
     float react = iC.w * (1.0 - dead);
+    float sink = iC.w * dead;   // bodies: how far through sinking out of sight (spec 003 body cap), 0-1
     float idleW = (1.0 - dead) * (1.0 - clamp(amp * 3.0, 0.0, 1.0)) * (1.0 - crouch) * (1.0 - zombie);
 
     // ---- Legs (both, so the standing leg sets the hip height and the feet stay on the ground).
@@ -445,7 +447,7 @@ const vertexShader = /* glsl */ `
     p = rYaw * p;
     n = normalize(rYaw * n);
 
-    vec4 world = modelMatrix * vec4(iA.x + p.x, uBase + p.y, iA.y + p.z, 1.0);
+    vec4 world = modelMatrix * vec4(iA.x + p.x, uBase + p.y - sink * ${f(1.6)}, iA.y + p.z, 1.0);
     vec4 mv = viewMatrix * world;
     if (isPanel > 0.5) {
       mv.xy += corner.xy * uScale;                                  // a square facing the camera
@@ -465,7 +467,7 @@ const vertexShader = /* glsl */ `
     float hw = aLimbT + isFA * (sleeves * 0.04 - (1.0 - sleeves) * 0.15 * step(aLimbT, 0.95));
     float warm = clamp((iC.y - 0.2) / 0.3, 0.0, 1.0);    // 0 for cold-blooded zombies: no variation at all
     float limbHeat = iC.y + (r2 - 0.5) * 0.1 * warm;
-    float heat = mix(iC.x, limbHeat, clamp(hw, 0.0, 1.0));
+    float heat = mix(iC.x, limbHeat, clamp(hw * uHeatW, 0.0, 1.0));
     heat = 0.2 + (heat - 0.2) * edge;
     // Visible light: clothes and skin under soft moonlight from above. Zombie clothes are grimy and
     // vary a lot (a crowd of individuals on night vision); survivors' are a little brighter.
@@ -494,6 +496,7 @@ export function makeFigureMaterial(kind: 'zombie' | 'survivor'): THREE.ShaderMat
       uKind: { value: kind === 'zombie' ? 0 : 1 },
       uBase: { value: 1.05 },
       uScale: { value: FIGURE_SCALE },
+      uHeatW: { value: 1 },
     },
     vertexShader,
     fragmentShader,

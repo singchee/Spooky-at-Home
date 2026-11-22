@@ -37,7 +37,7 @@ const vertexShader = /* glsl */ `
   attribute vec4 iA; // x, z, heading, seed 0-1
   attribute vec4 iB; // clip A: row, next row, fraction; weight of clip B
   attribute vec4 iC; // clip B: row, next row, fraction; 1 when dead
-  attribute vec4 iD; // core heat, limb heat, visible-light scale, unused
+  attribute vec4 iD; // core heat, limb heat, visible-light scale, body sink 0-1 (spec 003 body cap)
   varying vec3 vSig;
 
   mat3 rotY(float a) { float c = cos(a), s = sin(a); return mat3(c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c); }
@@ -67,7 +67,7 @@ const vertexShader = /* glsl */ `
     p = rYaw * p;
     n = rYaw * n;
 
-    vec4 world = modelMatrix * vec4(iA.x + p.x, uBase + p.y, iA.y + p.z, 1.0);
+    vec4 world = modelMatrix * vec4(iA.x + p.x, uBase + p.y - iD.w * 1.6, iA.y + p.z, 1.0);
     vec4 mv = viewMatrix * world;
     if (aPanel > 0.5) {
       mv.xy += aCorner * ${(MODEL_PANEL_SIZE / 2).toFixed(4)} * uScale;   // a square facing the camera

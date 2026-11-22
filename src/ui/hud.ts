@@ -88,23 +88,26 @@ export class Hud {
     const training = (m as TrainingMission).training;
     // Training night has no clock and no friendly-fire limit: "99:57" and "0/99" read like bugs.
     this.timer.hidden = !!training;
-    this.timer.textContent = m.type === 'defend' ? `HOLD ${fmtTime(s.timeLeft)}` : `TIME ${fmtTime(s.timeLeft)}`;
+    this.timer.textContent = m.crowd ? `DAWN ${fmtTime(s.timeLeft)}` : m.type === 'defend' ? `HOLD ${fmtTime(s.timeLeft)}` : `TIME ${fmtTime(s.timeLeft)}`;
     const obj: string[] = [];
-    if (training) {
+    if (m.crowd) {
+      // Crowd nights (Feel S2): only the words this mode needs. KILLS, the multiplier and the score are top centre.
+      obj.push(`DOORS ${Math.round(s.integrity * 100)}%`);
+    } else if (training) {
       // The far-off placeholders that keep the training mission open aren't counted.
       obj.push(`CONTACTS ${Math.max(0, s.zombiesAlive - training.reserveHostiles)}`);
       const friends = Math.max(0, s.survivorsAlive - training.reserveFriendlies);
       if (friends) obj.push(`FRIENDLIES ${friends}`);
     } else if (m.type === 'clear') obj.push(`HOSTILES ${s.zombiesAlive}/${s.zombiesTotal}`);
     else obj.push(`CONTACTS ${s.zombiesAlive}`);
-    if (!training) {
+    if (!training && !m.crowd) {
       if (m.type === 'escort') obj.push(`HOME ${s.survivorsHome}/${s.survivorsTotal} (NEED ${s.needHome})`, `MOVING ${s.survivorsAlive}`);
       if (m.type === 'defend') obj.push(`SAFEHOUSE ${Math.round(s.integrity * 100)}%`);
       if (m.type === 'clear' && s.survivorsTotal) obj.push(`FRIENDLIES ${s.survivorsAlive}`);
     }
     const cold = s.coldAlive > 0 ? coldHint(s.coldAlive, sensor, touch) : '';
     if (cold) obj.push(cold);
-    if (!training) obj.push(`FRIENDLY FIRE ${s.friendlyHits}/${m.friendlyFireLimit}`);
+    if (!training && !m.crowd) obj.push(`FRIENDLY FIRE ${s.friendlyHits}/${m.friendlyFireLimit}`);
     // When the cold-blooded ones are all that's left (Clear), their line stands out: that's the moment to switch view.
     const coldOnly = !training && m.type === 'clear' && s.coldAlive > 0 && s.coldAlive === s.zombiesAlive;
     this.objective.replaceChildren(...obj.map((o) => el('div', o === cold && coldOnly ? 'hud-cold-only' : undefined, o)));

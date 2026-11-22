@@ -6,6 +6,7 @@ import {
   CATEGORY_INFO, CHILD_KINDS, MISSION_TEMPLATES, featureName, findAnchor, nearChildPlace, routeNearChildPlace, segmentNearChildPlace, type TemplateId,
 } from '../map/recon';
 import { MAX_KILL_REACH } from './weapons';
+import type { CrowdPlan } from './crowd';
 import { hashString, mulberry32, pick, shuffle, type Rng } from '../util/rng';
 
 /**
@@ -90,6 +91,8 @@ export interface Mission {
   /** Set when the mission was built from a recon template around a real place. */
   template?: TemplateId;
   anchor?: { id: string; name: string; category: FeatureCategory; p: V2; pts?: V2[] };
+  /** Spec 003: a crowd night (Horde Night). The type stays 'defend'; absent on every other mission. */
+  crowd?: CrowdPlan;
 }
 
 export interface MissionOptions {
@@ -217,7 +220,7 @@ function safeBuilding(map: MapData, b: { pts: V2[]; kind?: string }): boolean {
   return !CHILD_KINDS.includes(b.kind ?? '') && !nearChildPlace(map, centroid(b.pts));
 }
 
-function findSafehouse(map: MapData, g: RoadGraph, rng: Rng): Mission['safehouse'] | null {
+export function findSafehouse(map: MapData, g: RoadGraph, rng: Rng): Mission['safehouse'] | null {
   const lim = map.half * 0.65;
   const pois = map.pois.filter((p) => SAFE_KINDS.includes(p.kind) && Math.abs(p.p.x) < lim && Math.abs(p.p.z) < lim && !nearChildPlace(map, p.p));
   shuffle(rng, pois);
@@ -565,7 +568,7 @@ function buildDefend(c: Ctx, safehouse: Safehouse, fl?: DefendFlavour): MissionR
 // ---------------------------------------------------------------------------------------
 
 /** The building that stands for a place: the one it's in, one with its name, or the biggest on its grounds. */
-function safehouseFromFeature(map: MapData, f: Feature, name: string): Safehouse {
+export function safehouseFromFeature(map: MapData, f: Feature, name: string): Safehouse {
   // Guardrail (PLAN §9): never a school building, nor one beside a school, kindergarten or playground.
   const solid = (b: { pts: V2[]; kind?: string }) => polygonArea(b.pts) >= 60 && safeBuilding(map, b);
   let b = map.buildings.find((x) => solid(x) && pointInPolygon(f.p, x.pts));
@@ -748,6 +751,11 @@ export interface WaveDirection {
 }
 
 export function likelyWaveDirections(m: Mission, map: MapData, g: RoadGraph): WaveDirection[] {
+  // A crowd night's streams are known exactly: they are the intel (hard rule 9).
+  if (m.crowd && m.safehouse) {
+    const to = m.safehouse.centre;
+    return m.crowd.streams.map((s) => ({ from: { ...s.at }, to, compass: s.compass, share: 1 / m.crowd!.streams.length }));
+  }
   if (!m.waves || m.type !== 'defend' || !m.safehouse) return [];
   const ref = m.safehouse.centre;
   const lim = map.half * 0.95;
