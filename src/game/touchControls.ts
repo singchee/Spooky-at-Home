@@ -31,6 +31,8 @@ export interface TouchActions {
   pause(): void;
   /** Labels for the GUN, VIEW and ZOOM buttons, e.g. "40", "WH" and "×2". */
   labels(): { weapon: string; view: string; zoom: string };
+  /** Touch controls came on (true) or went off. */
+  activeChanged?(on: boolean): void;
 }
 
 /** The OS says the main pointer is a finger. */
@@ -195,6 +197,7 @@ export class TouchControls {
   setActive(on: boolean): void {
     this.active = on;
     this.container.classList.toggle('touch-mode', on);
+    this.act.activeChanged?.(on);
     if (!on) {
       this.releaseStick();
       this.releaseFire();

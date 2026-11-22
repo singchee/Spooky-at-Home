@@ -409,7 +409,13 @@ export class Game {
     this.listeners.push([t, type, fn]);
   }
 
+  /**
+   * Capture the mouse for aiming (desktop). Never with touch controls on: while the pointer is locked, Chrome
+   * reports every pointer event, touches included, at (0, 0), so the stick read "up" wherever it was touched
+   * and a tap aimed at the corner of the picture (owner, Android tablet, after "Start mission").
+   */
   lockPointer(): void {
+    if (this.touch?.active) return;
     try {
       const p = this.renderer.domElement.requestPointerLock?.() as unknown;
       if (p instanceof Promise) p.catch(() => undefined);
@@ -432,7 +438,8 @@ export class Game {
     });
     this.on(window, 'mouseup', () => (this.firing = false));
     this.on(document, 'pointerlockchange', () => {
-      if (document.pointerLockElement !== canvas && this.screen === 'playing') this.pause();
+      // Touch controls switching on let go of the mouse (below): that is no reason to pause.
+      if (document.pointerLockElement !== canvas && this.screen === 'playing' && !this.touch.active) this.pause();
     });
     this.on(window, 'mousemove', (e) => {
       if (document.pointerLockElement !== canvas || this.screen !== 'playing') return;
@@ -466,6 +473,11 @@ export class Game {
       cycleView: () => this.perform('view-next'),
       zoom: (dir) => this.zoomBy(dir),
       pause: () => this.perform('pause'),
+      // A touch on a screen that had the mouse captured (e.g. a touchscreen laptop): let go of the mouse,
+      // or every touch would read as (0, 0).
+      activeChanged: (on) => {
+        if (on && document.pointerLockElement) document.exitPointerLock?.();
+      },
       labels: () => ({ weapon: this.weapon, view: viewLabel({ sensor: this.sensor, polarity: this.polarity }), zoom: `×${this.zoom.toFixed(1)}` }),
     });
     // Zoom: the mouse wheel (or trackpad) steps along the zoom levels; pinch and the ZOOM button are in TouchControls.
