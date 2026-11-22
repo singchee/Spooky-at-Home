@@ -110,3 +110,6 @@ I read the model guide first. Seedance 2.5 is the default text-to-video model. I
 
 - Voiceover recorded and normalised (see `public/audio/CREDITS.md`, batch 3). Each line was recorded once; none needed a retake. **A human needs to listen to it**, especially for the delivery of lines 3, 4 and 9.
 - Not built: the intro player, its captions, the skip control or the menu's "Watch intro" button. That's a class C feature for `/pitch` once the owner picks A or B.
+
+## Owner decision (22 Nov 2026)
+Build **option A**: motion graphics made in the game's own style (stylised TV with thermal footage from our renderer, pull-back into a blocky command room like the briefing diorama, the commander as a low-poly figure), with the recorded voiceover. No AI video.

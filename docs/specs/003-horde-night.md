@@ -357,3 +357,6 @@ Reviewed against the owner's cap (Big 600 on the tablet, Huge 1,200 on desktop, 
 - **Thermal clutter:** bodies cool from 0.5 to 0.23, which is below road heat (0.33), so worked streets read as darker smudges under hot live crowds in both polarities. The LOD rule (same heat and size on screen) keeps distant live zombies the hottest thing in view. Fine as specified, given S4.
 
 **Verdict: APPROVED WITH CHANGES.** Do M1 to M4 in the build. M3's extra meter case must pass before release (QUALITY §2 blocker). S6 is one question for the owner before `/build`.
+
+## Owner decision (22 Nov 2026, clarifying "max 1,200")
+**1,200 includes bodies**: at most 1,200 zombie figures drawn at once, living and dead together. The build sets each size's living cap and body cap inside that total (bodies fade out over at least 1 s when the cap removes them, per Feel S4). The sim budget (2,000 living + 6,000 dead under 4 ms) stays as headroom.
