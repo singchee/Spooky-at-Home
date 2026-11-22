@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   HOTKEY_STRIP,
+  coldHint,
   PAUSE_ESC_GRACE,
   RESULT_KEY_GRACE,
   STICK_SPEED,
@@ -11,6 +12,14 @@ import {
   stickNudge,
   viewLabel,
 } from '../src/game/controls';
+
+describe('cold-blooded hint names the control the player has (spec 002 feel M2)', () => {
+  it('keyboard: V; touch: the VIEW button; nothing once on night vision', () => {
+    expect(coldHint(3, 'thermal', false)).toBe('COLD-BLOODED 3 (V: NIGHT VISION)');
+    expect(coldHint(3, 'thermal', true)).toBe('COLD-BLOODED 3 (VIEW: NIGHT VISION)');
+    expect(coldHint(2, 'night', true)).toBe('COLD-BLOODED 2');
+  });
+});
 
 describe('key map (3.11)', () => {
   it('R cycles the gun, Q cycles the view, Esc opens the pause menu', () => {

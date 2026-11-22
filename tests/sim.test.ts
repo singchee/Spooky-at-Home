@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { makeSampleTown } from '../src/map/sample';
 import { buildRoadGraph, dijkstra, nearestNode, pathFromPrev } from '../src/map/roadGraph';
 import { WalkGrid } from '../src/map/grid';
-import { generateMission, MISSION_TYPES, waveIntel, type MissionType } from '../src/sim/missions';
+import { generateMission, MISSION_TYPES, SCATTER_BRIEF, waveIntel, type MissionType } from '../src/sim/missions';
 import { createSim } from '../src/sim/setup';
 import { Bot, SKILL } from '../src/sim/bot';
 import type { Sim } from '../src/sim/sim';
@@ -187,6 +187,52 @@ describe('committed fingerprint: single-mission defend (locked before spec 001 t
     expect(fnv(JSON.stringify(trace))).toBe(EXPECTED_DEFEND_TRACE);
   });
 });
+describe('committed hashes: escort and classic clear (spec 002 commit 1, locked before scatter touches sim.ts)', () => {
+  const fnv = (s: string) => {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+    return (h >>> 0).toString(16);
+  };
+  const trace = (type: MissionType) => {
+    const sim = make(type, 3, 42);
+    for (let i = 0; i < 1800; i++) sim.step(1 / 60);
+    const q = (v: number) => Math.round(v * 1000);
+    return {
+      state: sim.state(),
+      zombies: sim.zombies.map((z) => [z.id, q(z.x), q(z.z), z.alive ? 1 : 0, z.cold ? 1 : 0]),
+      survivors: sim.survivors.map((s) => [s.id, q(s.x), q(s.z), s.alive ? 1 : 0, s.home ? 1 : 0]),
+    };
+  };
+  it('an escort plays identically (trace hash, d3 seed 42, 30 s, no input)', () => {
+    const t = trace('escort');
+    expect(t.zombies.length).toBeGreaterThan(0);
+    // If this fails, Escort changed for everyone. Spec 002 (scatter) must never move it.
+    expect(fnv(JSON.stringify(t))).toBe(EXPECTED_ESCORT_TRACE);
+  });
+  it('committed fingerprint: sample-town classic clear d3 seed 42 has not changed', () => {
+    const r = generateMission(map, graph, grid, { type: 'clear', difficulty: 3, seed: 42 });
+    expect(fnv(JSON.stringify(r))).toBe(EXPECTED_CLEAR_FINGERPRINT);
+    // The scatter briefing sentence is text only: without it, the mission is exactly the one locked in commit 1.
+    if (r.ok) r.mission.briefing = r.mission.briefing.filter((b) => b !== SCATTER_BRIEF);
+    expect(fnv(JSON.stringify(r))).toBe(CLEAR_FINGERPRINT_WITHOUT_SCATTER_TEXT);
+  });
+  it('a classic clear with nobody firing plays identically (trace hash, d3 seed 42, 30 s)', () => {
+    const t = trace('clear');
+    expect(t.zombies.length).toBeGreaterThan(0);
+    // Scatter only starts when a 105 lands, so this must not move in the scatter commit.
+    expect(fnv(JSON.stringify(t))).toBe(EXPECTED_CLEAR_TRACE);
+  });
+});
+// Spec 002 commit 1 ("Leash before scatter"): Escort had no trace hash; this locks today's.
+const EXPECTED_ESCORT_TRACE = 'dc9b389b';
+// Spec 002 commit 1: locked with the 99 m HORDE_CHILD_GAP (SCATTER_LEASH 45). They differ from the pre-gap
+// values on purpose: the wider gap moves hordes, the shelter spot or the drift line in ~25% of Clear missions.
+// 45b4ee67: the Clear briefing gains the scatter sentence (SCATTER_BRIEF, text only). Without it: 8af85e6 (commit 1).
+const EXPECTED_CLEAR_FINGERPRINT = '45b4ee67';
+const CLEAR_FINGERPRINT_WITHOUT_SCATTER_TEXT = '8af85e6';
+// Before the gap (80 m) they were b2ab636a and 486e254c.
+const EXPECTED_CLEAR_TRACE = 'a8aa6fd6';
+
 // Spec 001 step 1: locks today's single-mission Hold (mission and 30 s of play with no input) before the finale work.
 // c7cefb39 (3.16): defend waves are bigger from difficulty 2 (d3: 30 per wave, was 18; maxAlive 191, was 155).
 const EXPECTED_DEFEND_FINGERPRINT = 'c7cefb39';

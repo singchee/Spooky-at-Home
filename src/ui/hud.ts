@@ -6,6 +6,7 @@ import type { MapData, V2 } from '../map/types';
 import { el } from './dom';
 import { TacticalMap } from './tacticalMap';
 import { HotkeyStrip } from './hotkeys';
+import { coldHint } from '../game/controls';
 
 /** Static crosshair artwork per gun (constants we wrote, not map data). */
 const SHAPES: Record<string, string> = {
@@ -64,7 +65,7 @@ export class Hud {
     if (this.lines.length > 5) this.lines.shift();
   }
 
-  update(s: SimState, m: Mission, weapon: string, sensor: string, polarity: number, zoom: boolean, switching: boolean, now: number, danger = false): void {
+  update(s: SimState, m: Mission, weapon: string, sensor: string, polarity: number, zoom: boolean, switching: boolean, now: number, danger = false, touch = false): void {
     // Weapons
     this.weapons.replaceChildren();
     for (const w of WEAPONS) {
@@ -91,7 +92,7 @@ export class Hud {
       if (m.type === 'defend') obj.push(`SAFEHOUSE ${Math.round(s.integrity * 100)}%`);
       if (m.type === 'clear' && s.survivorsTotal) obj.push(`FRIENDLIES ${s.survivorsAlive}`);
     }
-    if (s.coldAlive > 0) obj.push(`COLD-BLOODED ${s.coldAlive}${sensor === 'night' ? '' : ' (V: NIGHT VISION)'}`);
+    if (s.coldAlive > 0) obj.push(coldHint(s.coldAlive, sensor, touch));
     if (!training) obj.push(`FRIENDLY FIRE ${s.friendlyHits}/${m.friendlyFireLimit}`);
     this.objective.replaceChildren(...obj.map((o) => el('div', undefined, o)));
     // Radio
@@ -129,8 +130,8 @@ export class Hud {
     if (this.minimap.live) box.appendChild(this.minimap.live);
   }
 
-  updateMinimap(aircraft: V2, aim: V2, survivors: V2[]): void {
-    this.minimap?.update({ aircraft, aim, survivors });
+  updateMinimap(aircraft: V2, aim: V2, survivors: V2[], regroup: V2[] = []): void {
+    this.minimap?.update({ aircraft, aim, survivors, regroup });
   }
 
   dispose(): void {

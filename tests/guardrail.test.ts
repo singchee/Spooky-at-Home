@@ -3,11 +3,12 @@ import { makeSampleTown } from '../src/map/sample';
 import { buildRoadGraph, dijkstra, nearestNode, pathFromPrev, type RoadGraph } from '../src/map/roadGraph';
 import { WalkGrid } from '../src/map/grid';
 import { distToSegment, pointInPolygon } from '../src/map/geom';
-import { CHILD_FIRE_CLEARANCE, HORDE_SPREAD, HORDE_WANDER, generateMission } from '../src/sim/missions';
+import { CHILD_FIRE_CLEARANCE, HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH, generateMission } from '../src/sim/missions';
 import { nearChildPlace, childZones, TEMPLATE_IDS } from '../src/map/recon';
 import { parseOverpass, featureCategory, type OverpassJson } from '../src/map/overpass';
 import { KILL_REACH, WEAPONS } from '../src/sim/weapons';
 import { Sim, WAVE_SPREAD, noWaveSpawn } from '../src/sim/sim';
+import { Bot, SKILL } from '../src/sim/bot';
 import type { MapData, V2 } from '../src/map/types';
 import { schoolHeavyTown } from './worldFixture';
 
@@ -154,11 +155,11 @@ describe('item 3.8: school guardrail gaps', () => {
     expect(withStragglers, 'stragglers still come in from the clear side of town').toBe(built);
   }, 120_000);
 
-  it('hordes: worst-case wander plus a 105 round stays 30 m clear of child places, every template, difficulty and seed', () => {
-    // From the sim's own numbers: zombies start within HORDE_SPREAD and mill within HORDE_WANDER of their
-    // gathering point, and a 105 round can kill reach105 from where it lands.
-    const gap = Math.max(HORDE_SPREAD, HORDE_WANDER) + reach105 + CHILD_FIRE_CLEARANCE;
-    expect(gap).toBeGreaterThanOrEqual(80);
+  it('hordes: worst-case wander or scatter plus a 105 round stays 30 m clear of child places, every template, difficulty and seed', () => {
+    // From the sim's own numbers: zombies start within HORDE_SPREAD, mill within HORDE_WANDER and, scattered by a
+    // 105 in Clear (spec 002), run at most SCATTER_LEASH from their horde's path; a 105 round can kill reach105 from where it lands.
+    const gap = Math.max(HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH) + reach105 + CHILD_FIRE_CLEARANCE;
+    expect(gap).toBeGreaterThanOrEqual(99);
     for (const town of [makeSampleTown(), schoolHeavyTown()]) {
       const g = buildRoadGraph(town);
       const w = new WalkGrid(town);
@@ -243,7 +244,79 @@ describe('item 3.8: school guardrail gaps', () => {
     }
     expect(watched).toBeGreaterThan(1000);
   }, 240_000);
+
+  it('in play, firing (spec 002): shelled hordes scatter, yet no horde zombie ever stands where a 105 would land within 30 m of a child place', () => {
+    // The no-input test above never scatters anyone. Here two shooters fire every gun: the human-skill bot, and an
+    // adversary that drops every 105 12 m beyond a horde on the far side from its nearest child place, so the
+    // runners flee straight at the school. Every living horde zombie is checked every step.
+    const town = schoolHeavyTown();
+    const g = buildRoadGraph(town);
+    const w = new WalkGrid(town);
+    const zones = childPlaces(town);
+    const floor = reach105 + CHILD_FIRE_CLEARANCE - 2; // 2 m: the walk grid's half-cell nudges
+    let runs = 0;
+    let scattered = 0;
+    for (const template of ['classic-clear', 'clear-park'] as const) {
+      for (const d of [1, 3, 5]) {
+        for (let seed = 1; seed <= 4; seed++) {
+          for (const shooter of ['bot', 'adversary'] as const) {
+            const r = generateMission(town, g, w, { type: 'auto', difficulty: d, seed, template });
+            if (!r.ok) continue;
+            runs++;
+            const sim = new Sim(r.mission, town, g, w);
+            const bot = shooter === 'bot' ? new Bot(sim, SKILL.human) : null;
+            let next = 0;
+            let worst = Infinity;
+            const ran = new Set<number>();
+            while (sim.phase === 'running' && sim.t < 180) {
+              if (bot) bot.step(1 / 30);
+              else if (sim.weaponReady('105')) {
+                const anchors = [...new Set(sim.zombies.filter((z) => z.alive && z.home).map((z) => z.home!))];
+                if (anchors.length) {
+                  const a = anchors[next++ % anchors.length];
+                  const c = nearestChildPoint(zones, a);
+                  const len = dist(a, c) || 1;
+                  sim.fire('105', { x: a.x + ((a.x - c.x) / len) * 12, z: a.z + ((a.z - c.z) / len) * 12 });
+                }
+              }
+              sim.step(1 / 30);
+              for (const z of sim.zombies) {
+                if (!z.alive || !z.home) continue;
+                if (z.scatter) ran.add(z.id);
+                worst = Math.min(worst, nearestChildPlace(zones, z));
+              }
+            }
+            scattered += ran.size;
+            expect(worst, `${template} d${d} s${seed} ${shooter}`).toBeGreaterThanOrEqual(floor);
+          }
+        }
+      }
+    }
+    expect(runs).toBeGreaterThanOrEqual(40);
+    expect(scattered, 'the shooters really scattered hordes').toBeGreaterThan(200);
+  }, 600_000);
 });
+
+/** The closest point of the nearest child place (its outline, or its point when it has none). */
+function nearestChildPoint(zones: { p: V2; pts?: V2[] }[], p: V2): V2 {
+  let best = { d: Infinity, q: p };
+  const consider = (q: V2) => {
+    const d = Math.hypot(p.x - q.x, p.z - q.z);
+    if (d < best.d) best = { d, q };
+  };
+  for (const z of zones) {
+    consider(z.p);
+    if (!z.pts) continue;
+    for (let i = 0, j = z.pts.length - 1; i < z.pts.length; j = i++) {
+      const a = z.pts[j];
+      const b = z.pts[i];
+      const l2 = (b.x - a.x) ** 2 + (b.z - a.z) ** 2 || 1;
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.z - a.z) * (b.z - a.z)) / l2));
+      consider({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t });
+    }
+  }
+  return best.q;
+}
 
 const dist = (a: V2, b: V2) => Math.hypot(a.x - b.x, a.z - b.z);
 /** Schools, kindergartens, childcare and playgrounds, worked out here independently of the code under test. */

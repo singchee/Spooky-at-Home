@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import './style.css';
 import { makeSampleTown } from './map/sample';
+import { TEMPLATE_IDS, type TemplateId } from './map/recon';
 import type { MapData } from './map/types';
 import { createSim } from './sim/setup';
 import type { MissionType } from './sim/missions';
@@ -179,6 +180,8 @@ if (params.get('autostart') === '1') {
       type: (['clear', 'escort', 'defend', 'auto'].includes(params.get('type') ?? '') ? params.get('type') : 'escort') as MissionType | 'auto',
       difficulty: clampInt(params.get('difficulty'), 1, 5, 2),
       seed: clampInt(params.get('seed'), 1, 1e9, 1),
+      // ?template=forest-sweep (sample town): a recon template, for /playtest scenarios (spec 002).
+      template: TEMPLATE_IDS.find((id) => id === params.get('template')) as TemplateId | undefined,
     },
     { bot: params.get('bot') === '1', skipBriefing: params.get('brief') !== '1', sensor: params.get('sensor') === 'night' ? 'night' : undefined },
   );

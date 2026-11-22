@@ -89,7 +89,7 @@ describe('asset loader', () => {
 const AWAITING_CAMPAIGN = [
   'n1-open', 'n2-open', 'n3-open', 'previously', 'welcome-back', 'first-cold', 'n1-close', 'n2-close', 'n3-close',
   'campaign-thanks', 'night-lost', 'night-won-losses', 'night-won-clean', 'tennis-open', 'park-open', 'forest-open',
-  'shops-open', 'station-open', 'sports-open', 'landmark-open', 'ff-one-left', 'need-met', 'few-left', 'cold-leftovers',
+  'shops-open', 'station-open', 'sports-open', 'landmark-open', 'ff-one-left', 'need-met',
   'one-minute', 'doors-failing', 'idle',
 ];
 

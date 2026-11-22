@@ -18,6 +18,8 @@ export interface BotSkill {
   seesCold: boolean;
   /** Seconds lost switching cameras. */
   sensorSwitch: number;
+  /** Only these guns (balance runs, e.g. a 105-only bot for spec 002). Unset: all three. */
+  guns?: string[];
 }
 
 export const SKILL: Record<'ace' | 'human', BotSkill> = {
@@ -85,7 +87,9 @@ export class Bot {
       if (!best || score > best.score) best = { x: z.x, z: z.z, score, cluster };
     }
     if (!best) return;
-    const order = best.cluster >= 5 ? ['105', '40', '25'] : best.cluster >= 2 ? ['40', '25', '105'] : ['25', '40'];
+    let order = best.cluster >= 5 ? ['105', '40', '25'] : best.cluster >= 2 ? ['40', '25', '105'] : ['25', '40'];
+    const guns = this.skill.guns;
+    if (guns) order = order.filter((id) => guns.includes(id)).concat(guns.filter((id) => !order.includes(id)));
     for (const id of order) {
       if (this.skill.oneGunAtATime && id !== this.gun) {
         // A person switches to the gun they want, then waits for it.

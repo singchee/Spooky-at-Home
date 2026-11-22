@@ -22,6 +22,7 @@ import { getSettings, onSettingsChange, updateSettings } from '../ui/settings';
 import { openSettingsPanel } from '../ui/settingsPanel';
 import { bestKey, bests, formatBest, formatTime, missionKind } from '../ui/bests';
 import { gradeMission, scoreInput } from '../sim/score';
+import { LINES, captionText, line } from '../sim/campaignText';
 import { effectiveReduceFlicker, mouseAimDelta } from './input';
 import { KEYS_SENTENCE, TOUCH_SENTENCE, keyAction, nextView, viewLabel, type ControlAction } from './controls';
 import { TouchControls } from './touchControls';
@@ -646,6 +647,10 @@ export class Game {
         case 'radio':
           this.radio(e.text);
           break;
+        case 'line': // spec 002: few-left / cold-leftovers, captioned (the spoken words, then the count) and voiced
+          this.radio(captionText(line(e.id, e.id === 'few-left' ? `Nearly there: ${e.left} left.` : `${e.left} left, all cold-blooded.`)));
+          if (LINES[e.id].recorded) audio.say(e.id);
+          break;
         case 'result':
           audio.sting(e.won);
           this.showResult(e.won, e.reason);
@@ -703,8 +708,8 @@ export class Game {
     this.hudTimer -= dt;
     if (this.hudTimer <= 0) {
       this.hudTimer = 0.1;
-      this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose());
-      this.hud.updateMinimap(ac, this.aim, this.sim.survivors.filter((s) => s.alive && !s.home));
+      this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose(), this.touch.active);
+      this.hud.updateMinimap(ac, this.aim, this.sim.survivors.filter((s) => s.alive && !s.home), this.sim.regroupPoints().map((g) => g.p));
     }
     this.hud.setMarkers(this.markers());
   }
@@ -764,6 +769,8 @@ export class Game {
     if (moving.length && m.type === 'escort') {
       out.push({ label: 'SURVIVORS', p: { x: moving.reduce((a, s) => a + s.x, 0) / moving.length, z: moving.reduce((a, s) => a + s.z, 0) / moving.length } });
     }
+    // Spec 002 feel M1: a scattered horde's regroup point while its runners are out (map text: textContent in the HUD).
+    for (const g of this.sim.regroupPoints()) out.push({ label: g.label, p: g.p });
     const wpx = this.renderer.domElement.clientWidth;
     const hpx = this.renderer.domElement.clientHeight;
     const v = new THREE.Vector3();
