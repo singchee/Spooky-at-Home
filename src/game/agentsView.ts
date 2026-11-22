@@ -157,6 +157,11 @@ export class AgentsView {
     if (!this.lod) {
       this.group.remove(this.zombies.mesh);
       this.zombies.dispose();
+    } else {
+      // Same mean heat either way (pillar 3): scale the figure's heat weights to the model's area-weighted mean.
+      const f = meanHeatWeight(this.zombies.mesh.geometry, 'aLimbT');
+      const mw = meanHeatWeight(m.zombie.geometry, 'aHeatW');
+      if (f > 0 && mw > 0) this.zombies.material.uniforms.uHeatW.value = mw / f;
     }
     // Clip choices are made fresh for every agent.
     this.zt.f.clip.fill(-1);
@@ -628,6 +633,12 @@ export class AgentsView {
       });
     }
     this.pending.length = 0;
+  }
+
+  /** Level-of-detail parity (playtest): the figure's and the zombie model's area-weighted mean heat weight. */
+  heatWeights(): { figure: number; model: number | null } {
+    const scale = this.zombies.material.uniforms.uHeatW.value as number;
+    return { figure: meanHeatWeight(this.zombies.mesh.geometry, 'aLimbT') * scale, model: this.zm ? meanHeatWeight(this.zm.model.geometry, 'aHeatW') : null };
   }
 
   /** For tests and budgets: instances drawn per kind, and draw objects (one per kind). */

@@ -324,6 +324,10 @@ describe('crowd nights (spec 003): draw list caps, level of detail, death heat',
     const w = meanHeatWeight(new FigureBatch('zombie', 1).mesh.geometry, 'aLimbT');
     expect(w).toBeGreaterThan(0);
     expect(w).toBeLessThan(1);
+    // Crowd figures scale their heat weights so their mean heat matches the model's (within 0.03 of heat).
+    const hw = view.heatWeights();
+    expect(Math.abs(hw.figure - hw.model!) * (HEAT.warmCore - HEAT.warmLimb)).toBeLessThan(0.03);
+    expect(((new AgentsView({ models: false }) as unknown as { zombies: FigureBatch }).zombies.material.uniforms.uHeatW.value as number)).toBe(1);
     view.dispose();
   });
 

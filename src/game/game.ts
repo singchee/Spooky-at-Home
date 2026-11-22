@@ -64,6 +64,8 @@ interface TestHooks {
   aimOffset?: () => [number, number];
   /** Where a ground point appears on screen now, CSS px (the touch stick checks measure which way the aim moved). */
   screenOf?: (x: number, z: number) => [number, number];
+  /** Crowd nights: area-weighted mean heat weight of the figure and the model (LOD parity, spec 003). */
+  lodParity?: () => { figure: number; model: number | null };
 }
 
 
@@ -252,6 +254,7 @@ export class Game {
       hooks.holdFire = (on) => {
         this.firing = on && this.screen === 'playing';
       };
+      hooks.lodParity = () => this.agents.heatWeights();
     }
   }
 
@@ -947,7 +950,7 @@ export class Game {
     this.disposed = true;
     // Test hooks must not outlive this game (they'd point at a dead one).
     const hooks = window.__spooky as TestHooks | undefined;
-    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf'] as const) delete hooks[k];
+    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf', 'lodParity'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
     audio.release('mission');
     this.offSettings();

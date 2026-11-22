@@ -249,6 +249,7 @@ const vertexShader = /* glsl */ `
   uniform float uKind;   // 0 zombies, 1 survivors
   uniform float uBase;   // height of the feet above the map's zero (roads sit at 1 m)
   uniform float uScale;  // overall size: larger than life so figures read from the gunship
+  uniform float uHeatW;  // scales the core-to-limb heat weights (1; crowd LOD matches the model's mean heat, spec 003)
   attribute float aPart;
   attribute vec3 aPivot;
   attribute float aLimbT;
@@ -466,7 +467,7 @@ const vertexShader = /* glsl */ `
     float hw = aLimbT + isFA * (sleeves * 0.04 - (1.0 - sleeves) * 0.15 * step(aLimbT, 0.95));
     float warm = clamp((iC.y - 0.2) / 0.3, 0.0, 1.0);    // 0 for cold-blooded zombies: no variation at all
     float limbHeat = iC.y + (r2 - 0.5) * 0.1 * warm;
-    float heat = mix(iC.x, limbHeat, clamp(hw, 0.0, 1.0));
+    float heat = mix(iC.x, limbHeat, clamp(hw * uHeatW, 0.0, 1.0));
     heat = 0.2 + (heat - 0.2) * edge;
     // Visible light: clothes and skin under soft moonlight from above. Zombie clothes are grimy and
     // vary a lot (a crowd of individuals on night vision); survivors' are a little brighter.
@@ -495,6 +496,7 @@ export function makeFigureMaterial(kind: 'zombie' | 'survivor'): THREE.ShaderMat
       uKind: { value: kind === 'zombie' ? 0 : 1 },
       uBase: { value: 1.05 },
       uScale: { value: FIGURE_SCALE },
+      uHeatW: { value: 1 },
     },
     vertexShader,
     fragmentShader,

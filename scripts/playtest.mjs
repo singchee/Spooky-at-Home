@@ -1,5 +1,5 @@
 // Headless browser playtest (gates G7, G8 and visual evidence).
-// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls|scatter|intro]
+// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls|scatter|intro|crowd]
 // Starts `vite preview`, loads each mission type with the bot playing, switches cameras,
 // takes screenshots, and records console errors and draw calls. Chromium is preinstalled.
 // It also runs the photosensitivity flash checks and survivor-kit screenshots (`--only safety`
@@ -117,6 +117,18 @@ try {
   // Photosensitivity flash counts (WCAG 2.3.1) and the survivor kit on every camera.
   if (!only || only === 'safety') {
     for (const r of await safetyChecks(browser)) {
+      results.push(r);
+      if (r.errors.length) exitCode = 1;
+    }
+    // Spec 003: crowd nights' flash scenarios A (surge, all guns), B (50+ kills a second) and C (zoomed 25 mm, darkening).
+    for (const r of await crowdFlashChecks(browser)) {
+      results.push(r);
+      if (r.errors.length) exitCode = 1;
+    }
+  }
+  // Spec 003: crowd nights at the surge (screenshots, draw calls, frame times, the HUD at tablet size, LOD parity).
+  if (!only || only === 'crowd') {
+    for (const r of await crowdChecks(browser)) {
       results.push(r);
       if (r.errors.length) exitCode = 1;
     }
@@ -2999,6 +3011,294 @@ async function presetChecks(browser) {
     } catch (e) {
       errs.push(String(e));
     }
+    res.push(r);
+    await page.close();
+  }
+  return res;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Spec 003 (Horde Night, a crowd mode): flash scenarios A, B and C for the safety checks, and the
+// crowd section (--only crowd): screenshots at the surge, draw calls, triangles, frame times,
+// the HUD at tablet size, and level-of-detail heat parity on the real models.
+// ---------------------------------------------------------------------------------------------
+
+/** The densest 16 m cell of live zombies at least `clear` metres from the doors (and its zombie count). */
+function crowdDensest(page, doors, clear = 45, skip = 0) {
+  return page.evaluate(([d, clr, sk]) => {
+    const zs = window.__spooky.zombies();
+    const m = new Map();
+    for (const z of zs) {
+      if (Math.hypot(z.x - d.x, z.z - d.z) < clr) continue;
+      const k = `${Math.floor(z.x / 16)},${Math.floor(z.z / 16)}`;
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
+    const cells = [...m.entries()].sort((a, b) => b[1] - a[1]);
+    const pick = cells[Math.min(sk, cells.length - 1)];
+    if (!pick) return { x: d.x, z: d.z, n: 0, alive: zs.length }; // nothing out on the streets: the doors
+    const [i, j] = pick[0].split(',').map(Number);
+    let sx = 0;
+    let sz = 0;
+    let n = 0;
+    for (const z of zs) if (Math.floor(z.x / 16) === i && Math.floor(z.z / 16) === j) { sx += z.x; sz += z.z; n++; }
+    return { x: sx / n, z: sz / n, n, alive: zs.length };
+  }, [doors, clear, skip]);
+}
+
+/** Open a crowd night and fast-forward (sim only matters) to game time `t`, then back to 60 fps game time. */
+async function crowdAt(browser, size, t, viewport, extra = {}) {
+  const { page, errs } = await gamePage(browser, `mode=crowd&size=${size}&seed=1&autostart=1&fps=1`, { viewport, ...extra });
+  page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  const doors = (await info(page)).aim;
+  // Nobody shooting, the streets empty onto the doors and the cap drops the surge: keep the doors' pile down
+  // (105 and 40 at it), so the streams stay packed. Fast-forwarded in a tiny window (software rendering is slow).
+  await page.setViewportSize({ width: 320, height: 200 });
+  await crowdFireLoop(page, doors, ['105', '40'], false, -45);
+  await fixedStep(page, 1);
+  await untilGameTime(page, t - 6, 1800000);
+  await stopCrowdFire(page);
+  await untilGameTime(page, t, 1800000); // the 105 reloads, so scenarios start with every gun loaded
+  await fixedStep(page, 1 / 60);
+  await page.setViewportSize(viewport);
+  await page.waitForTimeout(300);
+  return { page, errs, doors };
+}
+
+/** In the page: every frame, fire each ready gun (the given ones) at the densest stream cells (test hooks only). */
+function crowdFireLoop(page, doors, guns, spread, clear = 45) {
+  return page.evaluate(([d, gs, spr, clr]) => {
+    const st = { stop: false, aimT: -1 };
+    window.__crowdFire = st;
+    const cells = () => {
+      const zs = window.__spooky.zombies();
+      const m = new Map();
+      for (const z of zs) {
+        const r = Math.hypot(z.x - d.x, z.z - d.z);
+        // clear > 0: streams only (this far from the doors or more); clear < 0: the doors' pile only.
+        if (clr >= 0 ? r < clr : r > -clr) continue;
+        const k = `${Math.floor(z.x / 16)},${Math.floor(z.z / 16)}`;
+        const c = m.get(k) ?? { n: 0, x: 0, z: 0 };
+        c.n++;
+        c.x += z.x;
+        c.z += z.z;
+        m.set(k, c);
+      }
+      return [...m.values()].sort((a, b) => b.n - a.n).map((c) => ({ x: c.x / c.n, z: c.z / c.n }));
+    };
+    const loop = () => {
+      if (st.stop) return;
+      const t = window.__spooky.state().t;
+      const cs = cells();
+      if (cs.length) {
+        if (t - st.aimT > 0.5) {
+          window.__spooky.aimAt(cs[0].x, cs[0].z);
+          st.aimT = t;
+        }
+        gs.forEach((g, i) => {
+          const c = spr ? cs[Math.min(i, cs.length - 1)] : cs[0];
+          window.__spooky.fireAt(g, c.x, c.z);
+        });
+      }
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }, [doors, guns, spread, clear]);
+}
+/** Wheel the zoom to at least `to` (2: the x2.4 step) or back to x1 (the gun's own lens). */
+async function crowdZoom(page, to) {
+  const vp = page.viewportSize();
+  await page.mouse.move(vp.width / 2, vp.height / 2);
+  for (let i = 0; i < 5; i++) {
+    const z = (await info(page)).zoomLevel;
+    if (to > 1 ? z >= to : Math.abs(z - 1) < 0.01) return;
+    await page.mouse.wheel(0, to > 1 || z < 1 ? -100 : 100);
+    await page.waitForTimeout(50);
+  }
+}
+
+function stopCrowdFire(page) {
+  return page.evaluate(() => { window.__crowdFire.stop = true; });
+}
+
+// (A function, not a const: the checks run from top-level await before consts down here exist.)
+function crowdSensors() {
+  return [
+  ['white-hot', async () => {}],
+  ['black-hot', async (p) => { await p.keyboard.press('h'); }],
+  ['night vision', async (p) => { await p.evaluate(() => window.__spooky.setSensor('night')); }],
+  ];
+}
+
+async function crowdFlashChecks(browser) {
+  const res = [];
+  const SURGE = 205;
+  // A. Ten seconds of the dawn surge with all three guns into the densest stream, each view, at a small
+  //    desktop window (Huge) and the tablet viewport (1280 x 800, Big).
+  for (const [size, viewport] of [['huge', { width: 640, height: 360 }], ['big', { width: 1280, height: 800 }]]) {
+    for (const [label, setup] of crowdSensors()) {
+      const { page, errs, doors } = await crowdAt(browser, size, SURGE, viewport);
+      await setup(page);
+      await untilGameTime(page, (await gameTime(page)) + 1.2, 600000);
+      const k0 = (await page.evaluate(() => window.__spooky.state())).kills;
+      await startMeter(page, 'canvas.game-canvas');
+      const t0 = await gameTime(page);
+      await crowdFireLoop(page, doors, ['25', '40', '105'], false);
+      await untilGameTime(page, t0 + 10, 1800000);
+      await stopCrowdFire(page);
+      const frames = await stopMeter(page);
+      const st = await page.evaluate(() => window.__spooky.state());
+      const r = judge(`crowd A: surge, all three guns into the densest stream 10 s, ${label}, ${size} ${viewport.width}x${viewport.height}`, frames, { kills: st.kills - k0, rounds: st.shots, alive: st.zombiesAlive });
+      if (st.kills - k0 < 50) r.errors.push(`only ${st.kills - k0} kills in 10 s: was the gun firing into the crowd?`);
+      r.errors.push(...errs);
+      res.push(r);
+      await page.close();
+    }
+  }
+  // B. Over 50 kills a second for 10 s: the 105, 40 and 25 each into one of the three densest cells, Huge, white-hot.
+  {
+    const { page, errs, doors } = await crowdAt(browser, 'huge', SURGE, { width: 640, height: 360 });
+    await untilGameTime(page, (await gameTime(page)) + 1, 600000);
+    const k0 = (await page.evaluate(() => window.__spooky.state())).kills;
+    await startMeter(page, 'canvas.game-canvas');
+    const t0 = await gameTime(page);
+    await crowdFireLoop(page, doors, ['105', '40', '25'], true);
+    await untilGameTime(page, t0 + 10, 1800000);
+    await stopCrowdFire(page);
+    const frames = await stopMeter(page);
+    const kills = (await page.evaluate(() => window.__spooky.state())).kills - k0;
+    const r = judge('crowd B: 10 s of mass kills (105, 40 and 25 into the three densest cells), white-hot, huge', frames, { kills, killsPerSec: Number((kills / 10).toFixed(1)) });
+    if (kills < 500) r.errors.push(`${(kills / 10).toFixed(1)} kills a second: the scenario needs over 50 (not a flash failure; the crowd wasn't dense enough)`);
+    r.errors.push(...errs);
+    res.push(r);
+    await page.close();
+  }
+  // C. Feel M3: the 25 mm zoomed x2 on a packed stream and a 105 into it, white-hot and black-hot. The meter
+  //    counts darkening as well as brightening (a whole stream dying at once).
+  for (const [label, setup] of crowdSensors().slice(0, 2)) {
+    const { page, errs, doors } = await crowdAt(browser, 'huge', SURGE, { width: 640, height: 360 });
+    await page.keyboard.press('1');
+    await crowdZoom(page, 2);
+    await setup(page);
+    const c = await crowdDensest(page, doors);
+    await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [c.x, c.z]);
+    await untilGameTime(page, (await gameTime(page)) + 1.2, 600000);
+    const k0 = (await page.evaluate(() => window.__spooky.state())).kills;
+    const fired = await page.evaluate(([x, z]) => window.__spooky.fireAt('105', x, z), [c.x, c.z]);
+    const t0 = await gameTime(page);
+    await fixedStep(page, 0.05);
+    await untilGameTime(page, t0 + 3, 600000);
+    await fixedStep(page, 1 / 60);
+    await startMeter(page, 'canvas.game-canvas');
+    await untilGameTime(page, t0 + 8, 1200000);
+    const frames = await stopMeter(page);
+    const kills = (await page.evaluate(() => window.__spooky.state())).kills - k0;
+    const zl = (await info(page)).zoomLevel;
+    const r = judge(`crowd C: a 105 into a packed stream through the 25 mm zoomed x${zl}, ${label} (darkening counted)`, frames, { kills, crowdInCell: c.n });
+    if (!fired) r.errors.push('the 105 did not fire');
+    if (zl < 2) r.errors.push(`zoom only x${zl}`);
+    r.errors.push(...errs);
+    res.push(r);
+    await page.close();
+  }
+  return res;
+}
+
+/** Real frame times in the page for `secs` of real time: median fps, worst whole second, longest frame. */
+function crowdFrameTimes(page, secs) {
+  return page.evaluate((s) => new Promise((done) => {
+    const ts = [];
+    const end = performance.now() + s * 1000;
+    const loop = (t) => {
+      ts.push(t);
+      if (t < end) requestAnimationFrame(loop);
+      else {
+        const d = ts.slice(1).map((x, i) => x - ts[i]).sort((a, b) => a - b);
+        const med = d[d.length >> 1] || 0;
+        let worst = Infinity;
+        for (let i = 0, j = 0; i < ts.length; i++) {
+          while (ts[i] - ts[j] > 1000) j++;
+          if (ts[i] - ts[0] >= 1000) worst = Math.min(worst, i - j);
+        }
+        done({ medianFps: med ? Number((1000 / med).toFixed(1)) : 0, worst1sFps: Number.isFinite(worst) ? worst : 0, maxFrameMs: Number((d[d.length - 1] || 0).toFixed(1)), frames: d.length });
+      }
+    };
+    requestAnimationFrame(loop);
+  }), secs);
+}
+
+async function crowdChecks(browser) {
+  const res = [];
+  for (const [size, viewport, touch] of [['big', { width: 1280, height: 800 }, true], ['huge', { width: 1280, height: 720 }, false]]) {
+    const { page, errs, doors } = await crowdAt(browser, size, 215, viewport, touch ? { hasTouch: true, isMobile: true } : {});
+    const errors = [];
+    const r = { type: `crowd night: ${size} at the surge, ${viewport.width}x${viewport.height}${touch ? ' touch' : ''}`, ok: true, errors };
+    // A fresh pile: a 105 into the densest stream, then the views once it has landed.
+    const c = await crowdDensest(page, doors);
+    await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [c.x, c.z]);
+    const k0 = (await page.evaluate(() => window.__spooky.state())).kills;
+    await page.evaluate(([x, z]) => window.__spooky.fireAt('105', x, z), [c.x, c.z]);
+    await untilGameTime(page, (await gameTime(page)) + 4.6, 600000);
+    r.killsBy105 = (await page.evaluate(() => window.__spooky.state())).kills - k0;
+    r.alive = (await page.evaluate(() => window.__spooky.state())).zombiesAlive;
+    // Real-time frames (cloud: no GPU, regression only) in the 105 view.
+    await page.keyboard.press('3');
+    await fixedStep(page, null);
+    r.frames105 = await crowdFrameTimes(page, 8);
+    const i105 = await info(page);
+    r.drawCalls105 = i105.drawCalls;
+    r.triangles105 = i105.triangles;
+    await fixedStep(page, 1 / 60);
+    for (const [label, setup] of crowdSensors()) {
+      await setup(page);
+      await untilGameTime(page, (await gameTime(page)) + 0.8, 600000);
+      const slug = label.replace(/\s+/g, '-');
+      for (const zoomed of [false, true]) {
+        await page.keyboard.press(zoomed ? '1' : '3');
+        if (zoomed) await crowdZoom(page, 2);
+        await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [c.x, c.z]);
+        await untilGameTime(page, (await gameTime(page)) + 0.6, 600000);
+        const file = `${out}/crowd-${size}-${slug}-${zoomed ? 'x2' : 'x1'}.png`;
+        await page.screenshot({ path: file });
+        const inf = await info(page);
+        (r.shots ??= []).push({ file, drawCalls: inf.drawCalls, triangles: inf.triangles, zoom: inf.zoomLevel });
+        if (inf.drawCalls >= 150) errors.push(`${inf.drawCalls} draw calls (${label}, ${zoomed ? 'zoomed 25 mm' : '105 view'}): budget is < 150`);
+        if (zoomed) await crowdZoom(page, 1);
+      }
+      if (label === 'black-hot') await page.keyboard.press('h'); // back to white-hot before night vision
+    }
+    // The zoomed 25 mm in real time as well (models near the aim point).
+    await page.evaluate(() => window.__spooky.setSensor('thermal'));
+    await page.keyboard.press('1');
+    await crowdZoom(page, 2);
+    await fixedStep(page, null);
+    r.framesZoomed25 = await crowdFrameTimes(page, 8);
+    const iz = await info(page);
+    r.drawCallsZoomed25 = iz.drawCalls;
+    r.trianglesZoomed25 = iz.triangles;
+    await fixedStep(page, 1 / 60);
+    // HUD (Feel M1, S2): KILLS, multiplier and score top centre, clear of every other panel and the touch buttons;
+    // numbers 18 px or more; no FRIENDLY FIRE, FRIENDLIES or CONTACTS.
+    const hud = await page.evaluate(() => {
+      const px = (sel) => [...document.querySelectorAll(sel)].map((e) => parseFloat(getComputedStyle(e).fontSize));
+      return { kills: px('.crowd-kills'), mult: px('.crowd-mult'), tally: px('.crowd-tally'), text: document.querySelector('.hud-mission')?.textContent ?? '', top: document.querySelector('.crowd-kills')?.textContent ?? '' };
+    });
+    r.hud = hud;
+    if (Math.min(...hud.kills, ...hud.mult, ...hud.tally) < 18) errors.push(`HUD numbers below 18 px: ${JSON.stringify(hud)}`);
+    if (/FRIENDLY FIRE|FRIENDLIES|CONTACTS/.test(hud.text)) errors.push(`mission panel shows words this mode doesn't need: ${hud.text}`);
+    if (!/^KILLS \d/.test(hud.top)) errors.push(`no KILLS counter: "${hud.top}"`);
+    const ov = await overlaps(page, '.crowd-top', [...hudPanels(), '.touch-controls button', '.touch-controls [class*=stick]']);
+    if (ov.length) errors.push(...ov);
+    await page.screenshot({ path: `${out}/crowd-${size}-hud-${viewport.width}x${viewport.height}.png` });
+    // Level of detail on the real model: same mean heat (within 0.03) as the figure it stands in for.
+    const lod = await page.evaluate(() => window.__spooky.lodParity?.() ?? null);
+    r.lod = lod;
+    if (lod && lod.model !== null) {
+      const dHeat = Math.abs(lod.model - lod.figure) * (0.98 - 0.5);
+      r.lodHeatGap = Number(dHeat.toFixed(4));
+      if (dHeat > 0.03) errors.push(`LOD mean heat differs by ${dHeat.toFixed(3)} (limit 0.03): figure weight ${lod.figure.toFixed(3)}, model ${lod.model.toFixed(3)}`);
+    } else errors.push('the character models did not load, so level of detail was not exercised');
+    errors.push(...errs);
+    r.ok = !errors.length;
     res.push(r);
     await page.close();
   }

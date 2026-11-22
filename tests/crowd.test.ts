@@ -284,7 +284,37 @@ describe('crowd night: kerb to kerb (test 6)', () => {
     const median = offs[offs.length >> 1];
     console.log(`kerb to kerb: median ${median.toFixed(2)} m from the centreline over ${offs.length} samples`);
     expect(offs.length).toBeGreaterThan(1000);
-    expect(median).toBeGreaterThan(2);
+    expect(median).toBeGreaterThan(2);  }, 120_000);
+
+  it('streams walk side by side, not single file: most stream zombies have a neighbour abreast (0.7-5 m across, < 1.5 m along)', () => {
+    // The centreline measure above can't tell single file from a full street on this map (flow-field paths cut
+    // through yards: today's downhill steering scores 6.5 m on it). This one can: measured on this tree, today's
+    // downhill steering with no separation gives 11-14% abreast, steer() alone 30-34%, steer() + separation 66-75%.
+    for (const size of CROWD_SIZE_IDS) {
+      const sim = crowd(sample, 1, size);
+      const doors = sim.mission.safehouse!.centre;
+      let n = 0;
+      let abreast = 0;
+      while (sim.t < 130) {
+        sim.step(1 / 60);
+        if (sim.t < 90 || Math.abs(sim.t * 2 - Math.round(sim.t * 2)) > 1 / 120) continue;
+        const zs = sim.living.filter((z) => z.alive && Math.hypot(z.x - doors.x, z.z - doors.z) > 60 && Math.hypot(z.vx, z.vz) > 0.5);
+        for (const z of zs) {
+          const v = Math.hypot(z.vx, z.vz);
+          const fx = z.vx / v;
+          const fz = z.vz / v;
+          n++;
+          if (zs.some((o) => {
+            if (o === z || Math.abs(o.x - z.x) > 5 || Math.abs(o.z - z.z) > 5) return false;
+            const along = (o.x - z.x) * fx + (o.z - z.z) * fz;
+            const across = Math.abs(-(o.x - z.x) * fz + (o.z - z.z) * fx);
+            return Math.abs(along) < 1.5 && across > 0.7 && across < 5;
+          })) abreast++;
+        }
+      }
+      expect(n).toBeGreaterThan(10000);
+      expect(abreast / n, size).toBeGreaterThan(0.5);
+    }
   }, 120_000);
 });
 
