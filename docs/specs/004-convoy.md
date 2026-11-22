@@ -1,6 +1,6 @@
 # 004 — Convoy: keep the trucks rolling down your main road
 
-*Status: approved, awaiting /plan* · *Owner: Game Director* · *Date: 22 Nov 2026*
+*Status: ready (both /plan reviews approved with changes; reconciled below)* · *Owner: Game Director* · *Date: 22 Nov 2026*
 
 **Mode: REDUCE.** The owner asked: "Cover mode? Protect a military convoy." I'm building the smallest version that tests whether a convoy plays differently from Escort. That means one recon template: 3–5 fictional ground-team trucks drive in on one main road and out on another, they **stop for anything on the road ahead**, and they lose health while they're stopped. There are no new guns or enemies, the trucks don't shoot back, the player can't choose the route, and there's no pickup stop. **It's an Escort variant, not a fourth mission type.** **Likely class C:** it's a new mission variant, and the look of the vehicles and the "military" framing are taste calls. Run `npm run -s classify` to confirm. It needs the owner's yes before `/build`. *(Working title: the Story Writer names it, see open question 4.)*
 
@@ -465,3 +465,22 @@ Two facts drive most of what follows:
 - **Tone:** pass. There are no explosions when a truck goes out, the trucks are unmarked, and "buttoned up" is the right register.
 
 **Verdict: APPROVED WITH CHANGES.** M1 to M6 go into the build. M1's moving-truck test and M3's in-phase strobes must pass the flash meter and `/playtest` before release. The S items can follow in the same build, or the Chief can log them as a backlog item before merge.
+
+
+## Chief's reconciliation of the two reviews (22 Nov 2026)
+
+Both reviews were **approved with changes**. They agree with each other. Where both name the same thing, the Tech Lead's numbers and the Feel review's presentation rules apply together.
+
+| Topic | Decision |
+|---|---|
+| **Danger close** (Feel M1, Tech 3) | One rule, kept in the sim. It measures to the truck's outline along the stretch the truck drives while the round is in the air. Ranges: 25 mm 10 m, 40 mm 20 m, 105 35 m. The HUD, bot, near-miss event, Training and the briefing all use it. The briefing states the exact numbers and the plain rule "near the trucks, use the 25". |
+| **Truck labels** (Feel M2) | In v1: `T1`…`T5` with the states `!`, `OUT` and `▼`, never flashing. The full friendly boxes stay backlog 3.33. |
+| **Strobes** (Feel M3, Tech 10) | All in phase, one shared 1 Hz blink. |
+| **Camera** (Feel M4, Tech 5) | The sim orbit stays fixed on the centre of the route's bounding box. The aim never follows the convoy by itself. The briefing tour follows `wantsStill()`. |
+| **Radio and captions** (Feel M5) | Trucks get their own text. A survivor or Escort clip plays only where its words are true for a truck. Any new recordings go through `/story` and then `/sound`. |
+| **Minimap** (Feel M6) | Shows the route, the exit and one dot per truck. |
+| **Route length** (Tech 2) | Replaces the spec's 900–1,500 m band. The floor is 850 m; the target is 900 + 100×(d−1) m, capped at what the map allows. On a map that can't reach the floor, the mode isn't offered. |
+| **School gap** (Tech 1, 9) | The route stays 74 m from child places, with a 65 m no-go area for zombies. The gap is never shrunk. West Hobart therefore gets no convoy, which is accepted. |
+| **Trucks already out of action** (Feel S5) | Hitting one still counts as friendly fire, because the crew are inside. The briefing says so. This is the Chief's call within approved scope; the owner may overrule it. |
+| **Test change under rule 8** | The `tests/templates.test.ts` assertion "every non-clear template has a safehouse" is changed in its own commit, named in the PR. |
+| **Order** | Commit 1 (headless route finder, tests 1–3 and the snapshot test 4) can start now. Commit 2 onwards waits for Horde Night to merge. |
