@@ -3212,17 +3212,18 @@ function crowdDensest(page, doors, clear = 45, skip = 0) {
 }
 
 /** Open a crowd night and fast-forward (sim only matters) to game time `t`, then back to 60 fps game time. */
-async function crowdAt(browser, size, t, viewport, extra = {}) {
+async function crowdAt(browser, size, t, viewport, extra = {}, shell = true) {
   const { page, errs } = await gamePage(browser, `mode=crowd&size=${size}&seed=1&autostart=1&fps=1`, { viewport, ...extra });
   page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
   const doors = (await info(page)).aim;
   // Nobody shooting, the streets empty onto the doors and the cap drops the surge: keep the doors' pile down
   // (105 and 40 at it), so the streams stay packed. Fast-forwarded in a tiny window (software rendering is slow).
   await page.setViewportSize({ width: 320, height: 200 });
-  await crowdFireLoop(page, doors, ['105', '40'], false, -45);
+  // (shell = false: nobody fires, so the crowd is at its size's cap when the scenario starts.)
+  if (shell) await crowdFireLoop(page, doors, ['105', '40'], false, -45);
   await fixedStep(page, 1);
   await untilGameTime(page, t - 6, 1800000);
-  await stopCrowdFire(page);
+  if (shell) await stopCrowdFire(page);
   await untilGameTime(page, t, 1800000); // the 105 reloads, so scenarios start with every gun loaded
   await fixedStep(page, 1 / 60);
   await page.setViewportSize(viewport);
@@ -3326,8 +3327,11 @@ async function crowdFlashChecks(browser) {
   //    of 150+ kills, so the opening burst is covered too. The spec's 50/s dates from the 1,200/2,000-alive drafts:
   //    Huge at 800 alive can supply about 37 kills a second over 10 s (a probe's best single second was 265).
   {
-    const { page, errs, doors } = await crowdAt(browser, 'huge', SURGE, { width: 640, height: 360 });
+    // Hold fire until the crowd is at Huge's cap (800 alive, from t = 200), then open with the 105 on the densest
+    // cell and bring the 40 and the 25 into the same spot as it lands: the worst burst the meter can see.
+    const { page, errs, doors } = await crowdAt(browser, 'huge', 200, { width: 640, height: 360 }, {}, false);
     await untilGameTime(page, (await gameTime(page)) + 1, 600000);
+    const alive0 = (await page.evaluate(() => window.__spooky.state())).zombiesAlive;
     const k0 = (await page.evaluate(() => window.__spooky.state())).kills;
     await startMeter(page, 'canvas.game-canvas');
     const t0 = await gameTime(page);
@@ -3343,7 +3347,14 @@ async function crowdFlashChecks(browser) {
       };
       requestAnimationFrame(loop);
     });
-    await crowdFireLoop(page, doors, ['105', '40', '25'], true);
+    const spot = await crowdDensest(page, doors, 0);
+    await page.evaluate(([x, z]) => {
+      window.__spooky.aimAt(x, z);
+      window.__spooky.fireAt('105', x, z);
+    }, [spot.x, spot.z]);
+    // The 105 flies ~3.6 s, the 40 ~2 s and the 25 ~1.7 s: start them so their first rounds land with the 105.
+    await untilGameTime(page, t0 + 1.6, 600000);
+    await crowdFireLoop(page, doors, ['40', '25', '105'], false, 0);
     await untilGameTime(page, t0 + 10, 1800000);
     await stopCrowdFire(page);
     const frames = await stopMeter(page);
@@ -3358,7 +3369,7 @@ async function crowdFlashChecks(browser) {
       while (log[i][0] - log[j][0] > 1) j++;
       bestSecond = Math.max(bestSecond, log[i][1] - log[j][1]);
     }
-    const r = judge('crowd B: 10 s of mass kills (105, 40 and 25 into the three densest cells), white-hot, huge', frames, { kills, killsPerSec: Number((kills / 10).toFixed(1)), bestSecond });
+    const r = judge('crowd B: 10 s of mass kills (105, 40 and 25 into the three densest cells), white-hot, huge', frames, { kills, killsPerSec: Number((kills / 10).toFixed(1)), bestSecond, aliveAtStart: alive0, firstCell: spot.n });
     if (kills < 350) r.errors.push(`${(kills / 10).toFixed(1)} kills a second over 10 s: the scenario needs 35 or more (not a flash failure; the crowd wasn't dense enough)`);
     if (bestSecond < 150) r.errors.push(`best 1-second window ${bestSecond} kills: the scenario needs a burst of 150 or more`);
     r.errors.push(...errs);
