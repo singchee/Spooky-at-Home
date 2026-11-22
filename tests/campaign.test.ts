@@ -6,11 +6,11 @@ import { CHILD_CATEGORIES, MISSION_TEMPLATES, nearChildPlace } from '../src/map/
 import { generateMission, type MissionOptions } from '../src/sim/missions';
 import { createSim } from '../src/sim/setup';
 import { hashString } from '../src/util/rng';
-import type { MapData } from '../src/map/types';
+import type { Feature, MapData, V2 } from '../src/map/types';
 import {
   LEVELS, MAX_GENERATOR_CALLS, NIGHT_BASE, NIGHT_PREFERENCES, NIGHT_SUBSTITUTES, NIGHTS,
   applyRun, betterRun, emptyRecord, firstUnwon, mapFingerprint, missionFingerprint, nightDifficulty, nightOpen, nightSeed, planCampaign,
-  reconcile, runFrom, type CampaignPlan, type Generator, type Level, type NightPlan, type Run,
+  placeKey, reconcile, runFrom, type CampaignPlan, type Generator, type Level, type NightPlan, type Run,
 } from '../src/sim/campaign';
 import { gradeMission, scoreInput } from '../src/sim/score';
 import { Bot, SKILL } from '../src/sim/bot';
@@ -361,4 +361,116 @@ describe('campaign record reducer (numbers only)', () => {
       friendlyHits: s.friendlyHits, kills: s.kills, integrity: s.integrity,
     });
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------------------
+// Review round 1 (spec 001 build): truth of anchored nights, fingerprints, seeds, call budget.
+// ---------------------------------------------------------------------------------------
+
+const square = (cx: number, cz: number, h: number): V2[] => [
+  { x: cx - h, z: cz - h }, { x: cx + h, z: cz - h }, { x: cx + h, z: cz + h }, { x: cx - h, z: cz + h },
+];
+/**
+ * The sample town without its tennis club, parks or woods, plus a 52 x 52 m wood at (-300, 100) with a
+ * playground 58 m east of its centre: the wood is a legal anchor (50 m from child places) but no horde may
+ * gather in it (hordes keep 80 m), so a forest sweep there builds with its hordes out on the streets.
+ */
+function smallWoodMap(): MapData {
+  const base = makeSampleTown();
+  const wood = square(-300, 100, 26);
+  return {
+    ...base,
+    name: 'Small wood',
+    areas: [...base.areas.filter((a) => a.kind !== 'wood'), { id: 'tiny-wood', kind: 'wood', name: 'Tiny Wood', pts: wood }],
+    features: [
+      ...base.features!.filter((f) => !['tennis', 'park', 'forest'].includes(f.category)),
+      { id: 'f-tiny-wood', category: 'forest', name: 'Tiny Wood', p: { x: -300, z: 100 }, pts: wood },
+      { id: 'f-test-pg', category: 'playground', name: 'Test Playground', p: { x: -242, z: 100 }, pts: square(-242, 100, 6) },
+    ],
+  };
+}
+
+describe('campaign: anchored nights are true to their place (rule 9, campaign §9)', () => {
+  it('every planned forest-sweep night has at least one horde labelled with the forest whose cold > 0', () => {
+    const m = smallWoodMap();
+    // The generator alone builds this forest sweep with no horde in the wood (that's the trap).
+    const raw = generateMission(m, buildRoadGraph(m), new WalkGrid(m), { type: 'clear', difficulty: 1, seed: nightSeed(1, 1), template: 'forest-sweep' });
+    expect(raw.ok && raw.mission.hordes.some((h) => h.label === raw.mission.anchor!.name)).toBe(false);
+    let forests = 0;
+    for (const S of [1, 2, 3, 4]) {
+      const ns = nights(plan(m, S, 1));
+      expect(ns[0].template, `S${S}`).not.toBe('forest-sweep');
+      expect(ns[0].template).toBe('classic-clear');
+      for (const x of [...ns, ...nights(plan(map, S, 1))]) {
+        if (x.template !== 'forest-sweep') continue;
+        forests++;
+        expect(x.mission.hordes.some((h) => h.label === x.mission.anchor!.name && h.cold > 0)).toBe(true);
+      }
+    }
+    // On a forest that can hold a horde, the sweep is still planned (and true).
+    const woods = nights(plan(map, 1, 1, counting((o) => o.template === 'clear-tennis' || o.template === 'clear-park')));
+    expect(woods[0].template).toBe('forest-sweep');
+    expect(woods[0].mission.hordes.some((h) => h.label === woods[0].mission.anchor!.name && h.cold > 0)).toBe(true);
+    expect(forests).toBeGreaterThanOrEqual(0);
+  }, 120_000);
+
+  it('every planned anchored clear night has a horde at its place', () => {
+    for (const B of LEVELS) {
+      for (const S of [1, 2, 3]) {
+        for (const x of [...nights(plan(map, S, B)), ...nights(plan(map, S, B, counting((o) => o.type === 'escort')))]) {
+          if (x.mission.type !== 'clear' || !x.mission.anchor) continue;
+          expect(x.mission.hordes.some((h) => h.label === x.mission.anchor!.name), `${x.template} B${B} S${S}`).toBe(true);
+        }
+      }
+    }
+  }, 120_000);
+});
+
+describe('campaign: fingerprints cover where things are (review)', () => {
+  it('missionFingerprint changes when a horde, a survivor start or the wave kinds change', () => {
+    const [c, e, d] = nights(plan(map, 1, 2));
+    const fp = (m: typeof c.mission) => missionFingerprint(m);
+    const moved = { ...c.mission, hordes: c.mission.hordes.map((h, i) => (i === 0 ? { ...h, centre: { x: h.centre.x + 5, z: h.centre.z } } : h)) };
+    expect(fp(moved)).not.toBe(c.fp);
+    expect(fp({ ...c.mission, hordes: c.mission.hordes.map((h, i) => (i === 0 ? { ...h, count: h.count + 1 } : h)) })).not.toBe(c.fp);
+    expect(fp({ ...c.mission, hordes: c.mission.hordes.map((h, i) => (i === 0 ? { ...h, cold: h.cold + 1 } : h)) })).not.toBe(c.fp);
+    expect(fp({ ...c.mission, survivors: c.mission.survivors.map((v) => ({ ...v, start: { x: v.start.x + 9, z: v.start.z } })) })).not.toBe(c.fp);
+    expect(fp({ ...d.mission, waves: { ...d.mission.waves!, kinds: [...d.mission.waves!.kinds!].reverse() } })).not.toBe(d.fp);
+    expect(fp({ ...e.mission, title: 'Reworded', briefing: [] })).toBe(e.fp);
+  });
+});
+
+describe('campaign: any seed gives a usable place key (review)', () => {
+  it('placeKey hashes S, so huge, odd or long seeds still give a valid, distinct key', () => {
+    const seeds = [1, 2, 1e21, Infinity, -Infinity, NaN, 12345678901234567890, -7, 0.5];
+    const keys = seeds.map((S) => placeKey(S, map));
+    for (const k of keys) expect(k).toMatch(/^[0-9a-f]{8}:[0-9a-f]{8}$/);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(placeKey(1, map)).toBe(placeKey(1, makeSampleTown()));
+    for (const S of [1e21, Infinity]) expect(nights(plan(map, S, 2))).toHaveLength(3);
+  }, 60_000);
+});
+
+describe('campaign: the call budget never starves a night of its own classic (review)', () => {
+  it("with places everywhere and nothing anchored building, each night still reaches its classics and reports its own reason", () => {
+    // Three of every anchored place, so each anchored template burns three calls.
+    const base = makeSampleTown();
+    const extra: Feature[] = base.features!.flatMap((f) => [1, 2].map((k) => ({ ...f, id: `${f.id}-copy${k}` })));
+    const m: MapData = { ...base, name: 'Busy town', features: [...base.features!, ...extra] };
+    const [s1, s2, s3] = [nightSeed(1, 1), nightSeed(1, 2), nightSeed(1, 3)];
+    const allow = (o: MissionOptions) =>
+      (o.seed === s1 && o.template === 'classic-defend') || (o.seed === s2 && o.template === 'classic-clear') || (o.seed === s3 && o.template === 'classic-defend');
+    const gen = counting((o) => !allow(o));
+    const p = plan(m, 1, 2, gen);
+    expect(gen.calls).toBeLessThanOrEqual(MAX_GENERATOR_CALLS);
+    const ns = nights(p);
+    expect(ns.map((x) => x.template)).toEqual(['classic-defend', 'classic-clear', 'classic-defend']);
+    // Nothing builds on night three: the reason is its own classic's, not an anchored template's.
+    const none = plan(m, 1, 2, counting((o) => !allow(o) || o.seed === s3));
+    expect(none.ok).toBe(false);
+    if (!none.ok) {
+      expect(none.night).toBe(3);
+      expect(none.reason).toBe('Test: no classic-defend here.');
+    }
+  }, 120_000);
 });

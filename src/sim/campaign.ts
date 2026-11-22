@@ -45,7 +45,10 @@ export const NIGHT_SUBSTITUTES: Record<Night, readonly TemplateId[]> = {
 export const PLACES_PER_TEMPLATE = 3;
 /** A whole plan never calls the mission generator more than this (spec 001 §5: pinned by a counter). */
 export const MAX_GENERATOR_CALLS = 30;
-/** Calls held back for each later night, so its own classic and a classic substitute always get a try. */
+/**
+ * Calls held back for each later night, so its own classic and a classic substitute always get a try. Within
+ * a night, once the calls left only cover its untried classic templates, its anchored ones are skipped.
+ */
 const RESERVE_PER_NIGHT = 2;
 
 /** Night n runs at difficulty B + n − 1: it always rises and never passes 5. */
@@ -90,12 +93,16 @@ const r1 = (v: number) => Math.round(v);
 
 /**
  * A short hash of what makes a mission the same mission: type, template, anchor, seed, difficulty, time
- * limit, the safehouse and home (to the metre) and how many people there are. Text isn't in it.
+ * limit; where things are, to the metre (safehouse, home, every horde with its size and cold count, every
+ * survivor's start); and the wave kinds in order. Text isn't in it.
  */
 export function missionFingerprint(m: Mission): string {
   const at = (p?: { x: number; z: number }) => (p ? [r1(p.x), r1(p.z)] : null);
   return fnv(
-    JSON.stringify([m.type, m.template ?? '', m.anchor?.id ?? '', m.seed, m.difficulty, m.timeLimit, at(m.safehouse?.centre), at(m.home?.centre), m.survivors.length]),
+    JSON.stringify([
+      m.type, m.template ?? '', m.anchor?.id ?? '', m.seed, m.difficulty, m.timeLimit, at(m.safehouse?.centre), at(m.home?.centre),
+      m.hordes.map((h) => [at(h.centre), h.count, h.cold]), m.survivors.map((v) => at(v.start)), m.waves?.kinds ?? null,
+    ]),
   );
 }
 
@@ -105,9 +112,27 @@ export function mapFingerprint(map: MapData): string {
   return fnv(JSON.stringify([map.half, map.buildings.length, map.roads.length, mapFeatures(map).length, p ? [r1(p.x), r1(p.z)] : null]));
 }
 
-/** Where a campaign is kept on the device: the campaign seed plus the map's shape (S alone isn't unique). */
+/**
+ * Where a campaign is kept on the device: the campaign seed plus the map's shape (S alone isn't unique).
+ * S is hashed, so any seed (1e21, Infinity, a long typed number) gives a valid key.
+ */
 export function placeKey(S: number, map: MapData): string {
-  return `${S}:${mapFingerprint(map)}`;
+  return `${fnv(`seed|${String(S)}`)}:${mapFingerprint(map)}`;
+}
+
+/**
+ * Rule 9: a night built around a place really happens there. An anchored clear has a horde labelled with
+ * its place (for a forest sweep, one with cold-blooded zombies, as `forest-open` and the briefing say);
+ * an anchored escort or hold uses the place itself as its safehouse. Classic templates have no place.
+ */
+export function placeIsTrue(template: TemplateId, m: Mission): boolean {
+  const t = MISSION_TEMPLATES[template];
+  if (!t.anchors.length) return true;
+  const a = m.anchor;
+  if (!a || m.type !== t.base) return false;
+  if (t.base !== 'clear') return m.safehouse?.name === a.name;
+  const here = m.hordes.filter((h) => h.label === a.name);
+  return template === 'forest-sweep' ? here.some((h) => h.cold > 0) : here.length > 0;
 }
 
 export function hadCold(m: Mission): boolean {
@@ -144,10 +169,7 @@ export function planCampaign(
         .filter((id) => !MISSION_TEMPLATES[id].anchors.length || !usedTemplates.has(id))
         .map((id): [TemplateId, boolean] => [id, true]),
     ];
-    let found: NightPlan | null = null;
-    let ownReason: string | null = null;
-    let lastReason: string | null = null;
-    search: for (const [template, substitute] of candidates) {
+    const attempts = candidates.flatMap(([template, substitute]) => {
       const t = MISSION_TEMPLATES[template];
       const places: (string | undefined)[] = t.anchors.length
         ? templateAnchors(map, template, seed)
@@ -155,22 +177,36 @@ export function planCampaign(
             .slice(0, PLACES_PER_TEMPLATE)
             .map((f) => f.id)
         : [undefined];
-      for (const anchor of places) {
-        if (calls >= MAX_GENERATOR_CALLS - reserve) break search;
-        const options: MissionOptions = { type: t.base, difficulty: d, seed, template, ...(anchor !== undefined ? { anchor } : {}) };
-        calls++;
-        const r = generate(map, g, grid, options);
-        if (r.ok) {
-          found = {
-            night, level, difficulty: d, seed, template, substitute,
-            ...(anchor !== undefined ? { anchorId: anchor } : {}),
-            options, mission: r.mission, fp: missionFingerprint(r.mission), hadCold: hadCold(r.mission),
-          };
-          break search;
-        }
+      return places.map((anchor) => ({ template, substitute, anchor }));
+    });
+    let found: NightPlan | null = null;
+    let ownReason: string | null = null;
+    let lastReason: string | null = null;
+    for (let i = 0; i < attempts.length && !found; i++) {
+      const { template, substitute, anchor } = attempts[i];
+      const t = MISSION_TEMPLATES[template];
+      const left = MAX_GENERATOR_CALLS - reserve - calls;
+      if (left <= 0) break;
+      // Never let places starve the night's classic templates (its own first): skip to them when the calls left only cover them.
+      const classicsLeft = attempts.slice(i).filter((a) => a.anchor === undefined).length;
+      if (anchor !== undefined && left <= classicsLeft) continue;
+      const options: MissionOptions = { type: t.base, difficulty: d, seed, template, ...(anchor !== undefined ? { anchor } : {}) };
+      calls++;
+      const r = generate(map, g, grid, options);
+      if (!r.ok) {
         lastReason = r.reason;
         if (!t.anchors.length && t.base === NIGHT_BASE[night]) ownReason = r.reason;
+        continue;
       }
+      if (!placeIsTrue(template, r.mission)) {
+        lastReason = `The hordes can't gather at ${r.mission.anchor?.name ?? 'that place'} here, so "${t.name}" wouldn't be true.`;
+        continue;
+      }
+      found = {
+        night, level, difficulty: d, seed, template, substitute,
+        ...(anchor !== undefined ? { anchorId: anchor } : {}),
+        options, mission: r.mission, fp: missionFingerprint(r.mission), hadCold: hadCold(r.mission),
+      };
     }
     if (!found) {
       const reason = ownReason ?? lastReason ?? 'There is no room to plan a campaign on this map.';

@@ -136,10 +136,10 @@ describe('campaign store (this device only)', () => {
     ];
     for (const bad of bads) {
       const store = fakeStore();
-      store.data.set(CAMPAIGN_KEY, JSON.stringify({ v: 1, places: { [place]: bad, '2:0000abcd': good } }));
+      store.data.set(CAMPAIGN_KEY, JSON.stringify({ v: 1, places: { [place]: bad, '00000002:0000abcd': good } }));
       const s = new CampaignStore(store, clock());
       expect(s.get(place, 2), JSON.stringify(bad)).toEqual(emptyRecord());
-      expect(s.get('2:0000abcd', 2).nights[0]).toEqual({ fp: ns[0].fp, tries: 2 });
+      expect(s.get('00000002:0000abcd', 2).nights[0]).toEqual({ fp: ns[0].fp, tries: 2 });
     }
     // A key that isn't a place key is dropped.
     const store = fakeStore();
@@ -167,7 +167,7 @@ describe('campaign store (this device only)', () => {
     const store = fakeStore();
     const s = new CampaignStore(store, clock());
     const fp = plan(1)[0].fp;
-    const key = (i: number) => `${i}:${(0x1000 + i).toString(16).padStart(8, '0')}`;
+    const key = (i: number) => `${i.toString(16).padStart(8, '0')}:${(0x1000 + i).toString(16).padStart(8, '0')}`;
     for (let i = 0; i < MAX_PLACES; i++) s.record(key(i), 1, 1, fp, win());
     s.record(key(0), 1, 1, fp, loss()); // place 0 is touched again, so place 1 is now the oldest
     s.record(key(99), 1, 1, fp, win());
@@ -184,14 +184,14 @@ describe('campaign store (this device only)', () => {
     const store = fakeStore();
     const s = new CampaignStore(store, clock());
     for (const B of [1, 2, 3] as Level[]) s.record(place, B, 1, plan(B)[0].fp, win());
-    s.record('9:0000abcd', 2, 1, plan(2)[0].fp, win());
+    s.record('00000009:0000abcd', 2, 1, plan(2)[0].fp, win());
     expect(s.levels(place)).toEqual([1, 2, 3]);
     s.forget(place);
     expect(s.levels(place)).toEqual([]);
     for (const B of [1, 2, 3] as Level[]) expect(s.get(place, B)).toEqual(emptyRecord());
     const again = new CampaignStore(store, clock());
     expect(again.levels(place)).toEqual([]);
-    expect(again.levels('9:0000abcd')).toEqual([2]);
+    expect(again.levels('00000009:0000abcd')).toEqual([2]);
   });
 
   it('the stored JSON contains no feature names, street names, coordinates or map.name', () => {
@@ -228,6 +228,46 @@ describe('campaign store (this device only)', () => {
     };
     walk(JSON.parse(json), '');
     // No coordinates: no number in the record looks like a map position (every stored number is listed above).
-    expect(key).toMatch(/^1:[0-9a-f]{8}$/);
+    expect(key).toMatch(/^[0-9a-f]{8}:[0-9a-f]{8}$/);
   }, 60_000);
+
+  it('a key storage would reject keeps progress in memory and says so (no silent soft-lock)', () => {
+    const store = fakeStore();
+    const s = new CampaignStore(store, clock());
+    const ns = plan(2);
+    const odd = '1e+21:not-a-key';
+    s.record(odd, 2, 1, ns[0].fp, win());
+    expect(s.get(odd, 2).nights[0]!.best).toBeDefined();
+    expect(s.levels(odd)).toEqual([2]);
+    expect(s.warning).toBe(NOT_KEPT);
+    // Night two is open for that campaign this session.
+    expect(s.record(odd, 2, 2, ns[1].fp, win()).record.nights[1]!.best).toBeDefined();
+    // It never reaches storage, and good places still do.
+    s.record(place, 2, 1, ns[0].fp, win());
+    const json = store.data.get(CAMPAIGN_KEY)!;
+    expect(json).not.toContain(odd);
+    expect(new CampaignStore(store, clock()).levels(place)).toEqual([2]);
+  });
+
+  it('a stale tab never erases a win another tab saved', () => {
+    const store = fakeStore();
+    const ns = plan(2);
+    const n1 = plan(1);
+    const stale = new CampaignStore(store, clock(1));
+    expect(stale.get(place, 2)).toEqual(emptyRecord()); // this tab read storage before the win
+    const other = new CampaignStore(store, clock(100));
+    other.record(place, 2, 1, ns[0].fp, win('A'));
+    // The stale tab records a different difficulty, then a loss on the same night.
+    stale.record(place, 1, 1, n1[0].fp, loss());
+    stale.record(place, 2, 1, ns[0].fp, loss());
+    const now = new CampaignStore(store, clock(200));
+    expect(now.get(place, 2).nights[0]).toMatchObject({ tries: 2, best: { grade: 'A' } });
+    expect(now.get(place, 1).nights[0]).toMatchObject({ tries: 1 });
+    // put() also merges with what is stored now, so a direct put of another difficulty keeps the win too.
+    const stale2 = new CampaignStore(store, clock(300));
+    stale2.get(place, 3);
+    new CampaignStore(store, clock(400)).record(place, 2, 2, ns[1].fp, win('B'));
+    stale2.put(place, 3, emptyRecord());
+    expect(new CampaignStore(store, clock()).get(place, 2).nights[1]).toMatchObject({ best: { grade: 'B' } });
+  });
 });

@@ -179,6 +179,33 @@ describe('which lines play (radio script rules, feel S1 and S7)', () => {
     expect(ids(startLines({ night: 1, nights: plain, record: emptyRecord() }))).toEqual(['first-cold']);
   }, 60_000);
 
+  it('first-cold plays only on the first attempt of its night', () => {
+    const ns = plan(map, 1, 1);
+    let r = applyRun(emptyRecord(), 1, ns[0].fp, winOf(ns[0])).record;
+    expect(ids(startLines({ night: 2, nights: ns, record: r }))).toEqual(['first-cold']);
+    r = applyRun(r, 2, ns[1].fp, { ...winOf(ns[1]), won: false }).record;
+    expect(r.nights[1]!.tries).toBe(1);
+    expect(ids(startLines({ night: 2, nights: ns, record: r }))).not.toContain('first-cold');
+  });
+
+  it('a flavour line plays only when the mission makes it true (rule 9)', () => {
+    const ns = plan(map, 1, 1);
+    const x = ns[0];
+    expect(x.template).toBe('clear-tennis');
+    expect(ids(startLines({ night: 1, nights: ns, record: emptyRecord() }))).toEqual(['tennis-open']);
+    // The same night with no horde on the courts: "Tennis club's overrun" would be false.
+    const away = { ...x, mission: { ...x.mission, hordes: x.mission.hordes.map((h) => ({ ...h, label: 'Elsewhere Street' })) } };
+    expect(ids(startLines({ night: 1, nights: [away, ns[1], ns[2]], record: emptyRecord() }))).toEqual([]);
+    // A forest sweep whose forest hordes have no cold ones: "running cold" would be false.
+    const forest = {
+      ...x, template: 'forest-sweep' as const,
+      mission: { ...x.mission, template: 'forest-sweep' as const, hordes: x.mission.hordes.map((h) => ({ ...h, label: x.mission.anchor!.name, cold: 0 })) },
+    };
+    expect(ids(startLines({ night: 1, nights: [forest, ns[1], ns[2]], record: emptyRecord() }))).toEqual([]);
+    const coldForest = { ...forest, mission: { ...forest.mission, hordes: forest.mission.hordes.map((h) => ({ ...h, cold: 2 })) } };
+    expect(ids(startLines({ night: 1, nights: [coldForest, ns[1], ns[2]], record: emptyRecord() }))).toEqual(['forest-open']);
+  });
+
   it('end lines: night-lost on every loss; on a win, at most two, the close only the first time', () => {
     const ns = plan(map, 1, 2);
     const [x1, x2, x3] = ns;
