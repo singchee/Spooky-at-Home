@@ -129,3 +129,22 @@ export function schoolHeavyTown(opts: { playgroundBesideSafehouse?: boolean } = 
   }
   return { name: 'Gridville (school heavy)', half: 550, buildings, roads, areas, pois, features, attribution: 'test' };
 }
+
+/**
+ * Spec 004 (Convoy): the school-heavy town with three main roads, for the convoy route finder and its guardrail
+ * (the spec's `schoolHeavyTown({ mainRoads: true })`, kept as its own function so the stock fixture is untouched).
+ * Street 2 (x = −400) and Street 10 (x = 400) become primary, Avenue 2 (z = −400) secondary. Two more schools
+ * (points) sit beside them: one 60 m from Street 2, inside the convoy's 74 m gap, so that stretch is never on a
+ * route; one 80 m from Street 10, outside the gap, so that stretch may be.
+ */
+export function schoolHeavyTownMainRoads(): MapData {
+  const map = schoolHeavyTown();
+  const kinds: Record<string, string> = { 'ns-4': 'primary', ns4: 'primary', 'ew-4': 'secondary' };
+  const roads = map.roads.map((r) => (kinds[r.id] ? { ...r, kind: kinds[r.id], width: kinds[r.id] === 'primary' ? 10 : 9 } : r));
+  const features: Feature[] = [
+    ...(map.features ?? []),
+    { id: 'f-s60', category: 'school', name: 'Gridville West School', p: { x: -340, z: 0 } },
+    { id: 'f-s80', category: 'school', name: 'Gridville East School', p: { x: 320, z: 100 } },
+  ];
+  return { ...map, name: 'Gridville (school heavy, main roads)', roads, features };
+}
