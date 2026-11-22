@@ -222,6 +222,30 @@ export class PlaceCache {
     }
   }
 
+  /**
+   * Replaces the map kept for a place that is still saved (the extras arrived after the core,
+   * BACKLOG 3.23). Does nothing if the place was forgotten meanwhile, so Forget always wins.
+   * Keeps its download time and searches. Returns whether it was stored. Never throws.
+   */
+  async update(lat: number, lon: number, json: OverpassJson): Promise<boolean> {
+    if (!this.store) return false;
+    try {
+      const id = placeId(lat, lon);
+      const index = await this.readIndex();
+      const info = index.find((i) => i.id === id);
+      if (!info || this.expired(info)) return false;
+      const text = JSON.stringify(json);
+      if (text.length > this.maxBytes) return false;
+      const others = index.filter((i) => i.id !== id).reduce((s, i) => s + i.bytes, 0);
+      if (others + text.length > this.maxBytes) return false; // keep the core-only copy rather than evict others
+      await this.store.set(placeKey(id), text);
+      await this.writeIndex(index.map((i) => (i.id === id ? { ...i, bytes: text.length } : i)));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** Forgets one place. Returns whether storage accepted it. */
   async forget(id: string): Promise<boolean> {
     try {

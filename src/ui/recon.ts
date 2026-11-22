@@ -32,12 +32,25 @@ export interface SavedNote {
 
 const BASE_LABEL = { clear: 'CLEAR', escort: 'ESCORT', defend: 'HOLD' } as const;
 
-export function showRecon(parent: HTMLElement, map: MapData, start: { seed: number; difficulty: number }, h: ReconHandlers, saved?: SavedNote): () => void {
+/** The recon screen, with hooks for the map's extras arriving later (BACKLOG 3.23). */
+export interface ReconView {
+  close(): void;
+  /**
+   * The extras (trees, lamps, bus routes): 'pending' says they're on the way; 'added' redraws the
+   * tactical map and the counts from the (updated) map; 'failed' quietly drops the note.
+   * Suggested missions never change: they don't use the extras.
+   */
+  extras(state: 'pending' | 'added' | 'failed'): void;
+  /** A small line for the owner: how long the load took (in memory only, BACKLOG 3.22). */
+  timing(text: string): void;
+}
+
+export function showRecon(parent: HTMLElement, map: MapData, start: { seed: number; difficulty: number }, h: ReconHandlers, saved?: SavedNote): ReconView {
   const root = el('div', 'card wide recon', undefined, parent);
-  const report = reconMap(map);
+  let report = reconMap(map);
   el('div', 'card-kicker', report.empty ? 'RECON · NOTHING NOTABLE' : 'RECON COMPLETE', root);
   el('h2', undefined, map.name, root);
-  el('p', 'status', report.message, root);
+  const statusLine = el('p', 'status', report.message, root);
   if (saved) savedLine(root, saved);
 
   const grid = el('div', 'recon-grid', undefined, root);
@@ -48,27 +61,12 @@ export function showRecon(parent: HTMLElement, map: MapData, start: { seed: numb
 
   const side = el('div', 'recon-side', undefined, grid);
   el('h3', undefined, 'Found in the area', side);
-  const list = el('ul', 'recon-list', undefined, side);
-  if (!report.categories.length) el('li', 'small', 'No schools, sports grounds, parks, shops or stations are mapped here.', list);
-  for (const c of report.categories) {
-    const li = el('li', undefined, undefined, list);
-    el('span', `recon-code fam-${familyOf(c.category)}`, CATEGORY_INFO[c.category].code, li);
-    const txt = el('span', 'recon-text', undefined, li);
-    el('span', 'recon-count', c.text, txt);
-    if (c.names.length) el('span', 'recon-names', c.names.join(' · '), txt);
-  }
-  if (report.busRoutes.length) {
-    const li = el('li', undefined, undefined, list);
-    el('span', 'recon-code fam-transport', 'BUS', li);
-    const txt = el('span', 'recon-text', undefined, li);
-    el('span', 'recon-count', `${report.busRoutes.length} bus route${report.busRoutes.length === 1 ? '' : 's'}`, txt);
-    const refs = report.busRoutes.map((r) => r.ref).filter((r): r is string => !!r).slice(0, 6);
-    if (refs.length) el('span', 'recon-names', `${refs.length === 1 ? 'Route' : 'Routes'} ${refs.join(', ')}`, txt);
-  }
-  const extras: string[] = [`${report.buildings} buildings`, `${report.roads} roads`];
-  if (report.trees) extras.push(`${report.trees} mapped trees`);
-  if (report.lamps) extras.push(`${report.lamps} street lamps`);
-  el('p', 'small', extras.join(' · '), side);
+  const found = el('div', 'recon-found', undefined, side);
+  const extrasNote = el('p', 'small recon-extras', undefined, side);
+  extrasNote.hidden = true;
+  const timingNote = el('p', 'small recon-timing', undefined, side);
+  timingNote.hidden = true;
+  drawFound(found, report);
 
   el('h3', undefined, 'Suggested missions', root);
   const ctrl = el('div', 'row', undefined, root);
@@ -146,7 +144,54 @@ export function showRecon(parent: HTMLElement, map: MapData, start: { seed: numb
   el('button', 'recon-custom', 'Custom mission', foot).addEventListener('click', () => h.onCustom());
   el('button', 'recon-change', 'Scout another place', foot).addEventListener('click', () => h.onBack());
   el('p', 'attrib', map.attribution, root);
-  return () => root.remove();
+  return {
+    close: () => root.remove(),
+    extras(state) {
+      if (state === 'pending') {
+        extrasNote.hidden = false;
+        extrasNote.textContent = 'Trees, street lamps and bus routes are still on their way. Missions are ready now.';
+      } else if (state === 'added') {
+        report = reconMap(map);
+        statusLine.textContent = report.message;
+        drawFound(found, report);
+        tm.redraw();
+        extrasNote.hidden = false;
+        extrasNote.textContent = 'Trees, street lamps and bus routes added.';
+      } else {
+        extrasNote.hidden = true; // the game is the same without them: nothing to worry the player with
+      }
+    },
+    timing(text) {
+      timingNote.hidden = false;
+      timingNote.textContent = text;
+    },
+  };
+}
+
+/** "Found in the area": the places, bus routes, and the counts. Drawn again when the extras arrive. */
+function drawFound(box: HTMLElement, report: ReturnType<typeof reconMap>): void {
+  box.replaceChildren();
+  const list = el('ul', 'recon-list', undefined, box);
+  if (!report.categories.length) el('li', 'small', 'No schools, sports grounds, parks, shops or stations are mapped here.', list);
+  for (const c of report.categories) {
+    const li = el('li', undefined, undefined, list);
+    el('span', `recon-code fam-${familyOf(c.category)}`, CATEGORY_INFO[c.category].code, li);
+    const txt = el('span', 'recon-text', undefined, li);
+    el('span', 'recon-count', c.text, txt);
+    if (c.names.length) el('span', 'recon-names', c.names.join(' · '), txt);
+  }
+  if (report.busRoutes.length) {
+    const li = el('li', undefined, undefined, list);
+    el('span', 'recon-code fam-transport', 'BUS', li);
+    const txt = el('span', 'recon-text', undefined, li);
+    el('span', 'recon-count', `${report.busRoutes.length} bus route${report.busRoutes.length === 1 ? '' : 's'}`, txt);
+    const refs = report.busRoutes.map((r) => r.ref).filter((r): r is string => !!r).slice(0, 6);
+    if (refs.length) el('span', 'recon-names', `${refs.length === 1 ? 'Route' : 'Routes'} ${refs.join(', ')}`, txt);
+  }
+  const extras: string[] = [`${report.buildings} buildings`, `${report.roads} roads`];
+  if (report.trees) extras.push(`${report.trees} mapped trees`);
+  if (report.lamps) extras.push(`${report.lamps} street lamps`);
+  el('p', 'small recon-counts', extras.join(' · '), box);
 }
 
 /** "Loaded from this device · downloaded 3 days ago · Refresh · Forget this place", and a plain privacy note. */
