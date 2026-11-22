@@ -40,15 +40,15 @@ export interface Zombie {
 /** Spec 002 (Balance Analyst's numbers). A 105 scatters surviving horde zombies within this multiple of its lethal radius. */
 export const SCATTER_REACH = 2;
 /** Fleeing: this multiple of a zombie's walking speed, for FLEE_S plus up to FLEE_JITTER seconds. */
-export const FLEE_MUL = 2.2;
+export const FLEE_MUL = 3.2;
 export const FLEE_S = 3;
 export const FLEE_JITTER = 1;
 /** Up to this many radians either side of straight away from the impact. */
 export const SCATTER_WOBBLE = 0.5;
 /** Seconds from the hit to heading back: REGROUP_S + REGROUP_PER_D per difficulty above 1, plus up to REGROUP_JITTER. */
-export const REGROUP_S = 15;
-export const REGROUP_PER_D = 1.5;
-export const REGROUP_JITTER = 4;
+export const REGROUP_S = 20;
+export const REGROUP_PER_D = 3;
+export const REGROUP_JITTER = 6;
 /** Forest sweep regroups sooner (cold runners under trees are the hardest to find; spec 002 pillar 3). */
 export const FOREST_REGROUP = 0.8;
 /** Walking back: this multiple of a zombie's walking speed (lurking uses the idle shamble, 0.45). */
