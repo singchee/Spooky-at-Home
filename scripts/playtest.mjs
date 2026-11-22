@@ -2346,11 +2346,13 @@ async function controlsChecks(browser) {
   // briefing's "Start mission" tapped with a finger, real CDP touch sequences on the stick (centre, each edge,
   // drags in small steps past the ring, a pointercancel mid-drag, with FIRE held), a tap on the picture, and
   // all of it again after turning the tablet round.
-  for (const deviceName of ['Galaxy Tab S4 landscape', 'Galaxy Tab S4']) {
+  // Each profile as loaded, then the portrait one started and turned to landscape mid-mission. That is a fresh
+  // mission, because a long first round of checks can end an escort mission, and then the game clock stops.
+  for (const [deviceName, turn] of [['Galaxy Tab S4 landscape', false], ['Galaxy Tab S4', false], ['Galaxy Tab S4', true]]) {
     const device = devices[deviceName];
     const { page, errs } = await gamePage(browser, 'autostart=1&brief=1&gfx=low&type=escort&difficulty=1&seed=3', { ...device });
     page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
-    const out_ = { type: `controls: thumb stick and tap on ${deviceName} (Android Chrome, via the briefing)`, errors: errs, shots: {} };
+    const out_ = { type: `controls: thumb stick and tap on ${deviceName}${turn ? ', turned round after starting' : ''} (Android Chrome, via the briefing)`, errors: errs, shots: {} };
     try {
       const cdp = await page.context().newCDPSession(page);
       const finger = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y, id = 1]) => ({ x, y, id, radiusX: 12, radiusY: 12, force: 1 })) });
@@ -2530,7 +2532,7 @@ async function controlsChecks(browser) {
         await centreAim();
         const target = await page.evaluate(() => {
           const a = window.__spooky.info().aim;
-          for (const [ox, oz] of [[30, 0], [0, 30], [-30, 0], [0, -30], [20, 20], [-20, -20]]) {
+          for (const [ox, oz] of [[30, 0], [0, 30], [-30, 0], [0, -30], [15, 0], [0, 15], [-15, 0], [0, -15], [10, 10], [-10, -10]]) {
             const [x, y] = window.__spooky.screenOf(a.x + ox, a.z + oz);
             if (document.elementFromPoint(x, y)?.classList.contains('game-canvas')) return { x: a.x + ox, z: a.z + oz, at: [x, y] };
           }
@@ -2548,16 +2550,16 @@ async function controlsChecks(browser) {
         if ((await info(page)).screen !== 'playing') errs.push(`${view}: the mission stopped playing during the stick checks`);
       };
 
-      await checks('as loaded');
-      out_.shots.asLoaded = `${out}/controls-stick-${deviceName.replace(/\W+/g, '-')}.png`;
-      await page.screenshot({ path: out_.shots.asLoaded });
-      // Turn the tablet round and check again (layout, ring position and the picture all change).
-      const vp = page.viewportSize();
-      await page.setViewportSize({ width: vp.height, height: vp.width });
-      await page.waitForTimeout(600);
-      await checks('turned round');
-      out_.shots.turned = `${out}/controls-stick-${deviceName.replace(/\W+/g, '-')}-turned.png`;
-      await page.screenshot({ path: out_.shots.turned });
+      const shotName = `${out}/controls-stick-${deviceName.replace(/\W+/g, '-')}${turn ? '-turned' : ''}.png`;
+      if (turn) {
+        // Turn the tablet round mid-mission: layout, ring position and the picture all change.
+        const vp = page.viewportSize();
+        await page.setViewportSize({ width: vp.height, height: vp.width });
+        await page.waitForTimeout(600);
+      }
+      await checks(turn ? 'turned round' : 'as loaded');
+      out_.shots.stick = shotName;
+      await page.screenshot({ path: shotName });
     } catch (e) {
       errs.push(String(e));
     }
