@@ -61,6 +61,8 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 
 **Owner, 22 Nov (map source):** Overpass stays the only map source. The OpenFreeMap hybrid is dropped (research kept in docs/research/openfreemap-trial.md); no new host for the game.
 
+| 3.28 | Upgrade path (owner idea, later): rate of fire, ammunition, damage, splash; tougher zombies as difficulty rises. Chief's note: prefer upgrades that are trade-off choices (e.g. faster 25 mm but overheats) and difficulty from count, speed and types rather than hit points (sponges undercut the one-shot 105 and can't be read in thermal); earned in the campaign and Horde Night only. Decide after human playtests (spec 001 already defers upgrades). | pitch, balance, player-test | later |
+
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game
