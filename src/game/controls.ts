@@ -94,6 +94,11 @@ export function viewLabel(v: View): string {
   return v.sensor === 'night' ? 'NV' : v.polarity >= 0.5 ? 'BH' : 'WH';
 }
 
+/** The HUD's cold-blooded count, with a hint naming the control the player really has (spec 002 feel M2). */
+export function coldHint(n: number, sensor: string, touch: boolean): string {
+  return `COLD-BLOODED ${n}${sensor === 'night' ? '' : touch ? ' (VIEW: NIGHT VISION)' : ' (V: NIGHT VISION)'}`;
+}
+
 /** The permanent strip on the desktop HUD (static text we wrote). */
 export const HOTKEY_STRIP: readonly [string, string][] = [
   ['Hold LMB', 'fire'],
