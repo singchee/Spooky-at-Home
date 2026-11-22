@@ -77,6 +77,23 @@ No gore: zombies fall and cool down. No blood, no dismemberment.
 - Model files: under 1.5 MB together (now 0.36 MB).
 - Visual-only randomness hashes the agent id; no `Math.random` in `src/game`, `src/map`, `src/sim`.
 
-## 6. Checking the look
+## 6. The intro ("The Late Bulletin")
+
+Script and shot list: `docs/story/intro.md`. Code: `src/ui/intro.ts` (picture), `src/ui/introScript.ts` (timeline, captions). One WebGL context, everything drawn live; no video.
+
+| Layer | Look |
+|---|---|
+| Command room | The briefing diorama's language: display colours (not sensor values), blocky flat-shaded boxes, light baked into vertex colours (monitor glow from the wall, a little from above and from the map table), far things darker. Near-black greens (`#0b0d0c`–`#2b3631`), accents from the UI palette: `--accent` green for safehouses and routes, `#5aa9ff` friendlies. |
+| Commander Quill | Low-poly, plain dark green-grey jumper, grey hair in a bun, mug of tea, TV remote. No badges, flags, rank or insignia. The only lit (Lambert) figure, because she turns. |
+| TV studio | Flat, invented channel: deep blue set, pale desk with a red stripe, bug **LATE**. Pruett is flat-shaded quads, mouth moves ~2.4 times a second while he talks (a small patch, not a flash). |
+| Footage | Sensor values through the game's own shader: the sample town's sim and figures (never a real place), white-hot; the second feed crossfades to night vision over 1 s. |
+| Sky | Sensor values, white-hot, from a camera on the street: cold sky black, roofs 0.23, walls 0.3, lit windows 0.44, chimneys 0.5, airframe 0.36–0.42, engines 0.8, exhausts **0.98** (the hottest thing up there). No strobes, no nav lights. |
+| Text | HTML via textContent: lower third, ticker (≤ 60 px/s on screen), captions (always on, speaker in `--accent`), title in the landing page's type. TV graphics are mapped onto the TV with a CSS `matrix3d` and fade out as it shrinks, so no text is ever under 14 px. |
+
+Timing rules: fade up 0.8 s; the dolly back is 5 s, ease-out; Quill's turn 1.6 s; every screen change is a crossfade ≥ 0.6 s; shot 3 → 4 is a 0.8 s dissolve (the last frame held under the new one); the title fades in over 0.8 s; the end fades out over 0.7 s. Reduced motion or "reduce flicker": no camera moves, five still slides (bulletin, room, Quill, mug down, sky) that dissolve over 0.7 s, same audio and captions.
+
+Budget: under 20 draw calls a frame (room ≈ 10, footage ≈ 8 when it refreshes at 30 fps, sky 4); render targets: footage 480×320, studio 768×432, screen at ≤ 1.5× pixel ratio. The intro chunk loads only when played (≈ 13 KB gzipped).
+
+## 7. Checking the look
 
 `node scripts/look-figures.mjs --out reports/figures/<name>` (dev-only figure lab, `tools/figure-lab.html`): every pose at a 35° oblique view in white-hot, black-hot and night vision, zoomed views, a crowd, the real sample-town sim, and `scene=perf` for frame cost with 300 zombies. `models=0` shows the fallback figures.
