@@ -343,7 +343,8 @@ export function tourTimeline(stops: Pick<TourStop, 'weight'>[]): TourTimeline {
     segs.push({ t0: t, move, hold: slot - move });
     t += slot;
   });
-  return { segs, settleAt: t, total: t + SETTLE };
+  // Use the planned total, not the running sum: adding many slot lengths drifts past TOUR_MAX by float error.
+  return { segs, settleAt: total - SETTLE, total };
 }
 
 /** Which stop is on at time t (its move or hold), or -1 once settling. */
