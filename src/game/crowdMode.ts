@@ -84,7 +84,8 @@ export class CrowdMode {
   }
 
   /** The end card (feel: it leads with the people), then score, kills, best shot, best multiplier and the personal best. */
-  endCard(card: HTMLElement, reason: string, map: MapData): void {
+  /** `record`: false for bot, autoplay and practice runs, which never set a personal best. */
+  endCard(card: HTMLElement, reason: string, map: MapData, record = true): void {
     const s = this.sim.state().crowd as CrowdStats;
     el('h2', undefined, reason, card);
     const list = el('ul', 'result-stats crowd-result', undefined, card);
@@ -95,8 +96,13 @@ export class CrowdMode {
     el('li', undefined, `Best multiplier ×${s.bestMultiplier}`, list);
     el('li', undefined, `Crowd size ${SIZE_WORD[this.size]}`, list);
     const key = crowdBestKey(mapFingerprint(map), this.size);
-    const r = crowdBests().record(key, { score: s.score, kills: s.kills, shot: s.best?.kills ?? 0 });
-    el('p', r.isNew ? 'best new-best' : 'best', r.isNew ? (r.previous ? `NEW BEST · was ${r.previous.score.toLocaleString('en-AU')}` : 'NEW BEST') : `Best on ${SIZE_WORD[this.size]}: ${r.previous!.score.toLocaleString('en-AU')}`, card);
+    if (!record) {
+      const b = crowdBests().get(key);
+      el('p', 'best', b ? `Best on ${SIZE_WORD[this.size]}: ${b.score.toLocaleString('en-AU')} (this run isn't counted: autoplay)` : "This run isn't counted: autoplay", card);
+    } else {
+      const r = crowdBests().record(key, { score: s.score, kills: s.kills, shot: s.best?.kills ?? 0 });
+      el('p', r.isNew ? 'best new-best' : 'best', r.isNew ? (r.previous ? `NEW BEST · was ${r.previous.score.toLocaleString('en-AU')}` : 'NEW BEST') : `Best on ${SIZE_WORD[this.size]}: ${r.previous!.score.toLocaleString('en-AU')}`, card);
+    }
     // No silent downgrade mid-run: if it struggled, say so here, in words, and suggest the next size down.
     const f = this.frames.get();
     if (this.size === 'huge' && f.frames > 300 && (f.medianFps < 40 || f.worst1sFps < 24)) {

@@ -394,7 +394,8 @@ export class Game {
     this.overlay.replaceChildren();
     const card = el('div', `card result ${won ? 'won' : 'lost'}`, undefined, this.overlay);
     el('div', 'card-kicker', won ? 'MISSION COMPLETE' : 'MISSION FAILED', card);
-    if (this.crowd) this.crowd.endCard(card, reason, this.map);
+    // A crowd night's personal best counts only for a person playing (not the bot, autoplay or practice).
+    if (this.crowd) this.crowd.endCard(card, reason, this.map, !this.bot && !this.opts.practice && !/[?&]autostart=1\b/.test(location.search));
     else {
       const practice = this.opts.practice ?? m.briefing.length === 0;
       if (!practice) {
