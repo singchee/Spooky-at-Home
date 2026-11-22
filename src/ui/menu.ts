@@ -91,7 +91,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   file.type = 'file';
   file.accept = '.json,application/json';
   el('p', 'small', 'Your search goes straight from your browser to OpenStreetMap. This game has no server. Places you scout are kept in this browser for 30 days so they open instantly next time; they are never sent anywhere. Saved map files stay on your computer.', scout);
-  el('p', 'small', 'Best with a mouse and keyboard.', scout);
+  el('p', 'small', 'Plays with a mouse and keyboard, or with on-screen touch controls.', scout);
   el('p', 'attrib', 'Map data © OpenStreetMap contributors (ODbL) when a real place is used.', scout);
 
   // ---------- custom mission (the manual form) ----------
