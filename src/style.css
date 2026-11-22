@@ -613,6 +613,7 @@ button:disabled { opacity: 0.5; }
 .intro-skip:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .intro-hud { position: absolute; inset: 0; pointer-events: none; color: rgba(231, 239, 233, 0.75); visibility: hidden; }
 .ih-read { position: absolute; left: 60px; top: 24px; font-family: var(--mono); font-size: 14px; letter-spacing: 0.12em; }
+@media (max-width: 600px) { .ih-read { left: 24px; top: 80px; } }
 .intro-radio { position: absolute; left: 20px; bottom: max(110px, 18vh); display: flex; flex-direction: column; gap: 6px; pointer-events: none; visibility: hidden;
   background: rgba(0, 0, 0, 0.55); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(184, 255, 138, 0.35); }
 .ir-label { font-family: var(--mono); font-size: 14px; color: var(--accent); letter-spacing: 0.12em; }

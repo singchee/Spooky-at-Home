@@ -1,12 +1,12 @@
 // Headless browser playtest (gates G7, G8 and visual evidence).
-// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls]
+// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls|intro]
 // Starts `vite preview`, loads each mission type with the bot playing, switches cameras,
 // takes screenshots, and records console errors and draw calls. Chromium is preinstalled.
 // It also runs the photosensitivity flash checks and survivor-kit screenshots (`--only safety`
 // runs just those), and the way in from the front page with OpenStreetMap stubbed out
 // (`--only wayin` runs just that).
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -141,6 +141,13 @@ try {
   }
   if (!only || only === 'controls') {
     for (const r of await controlsChecks(browser)) {
+      results.push(r);
+      if (r.errors.length) exitCode = 1;
+    }
+  }
+  // The intro ("The Late Bulletin"): plays through on a controlled clock, captions, skip, flashes, reduced motion, leaks.
+  if (!only || only === 'intro') {
+    for (const r of await introChecks(browser)) {
       results.push(r);
       if (r.errors.length) exitCode = 1;
     }
@@ -369,7 +376,7 @@ async function startMeter(page, selector, clock = 'game') {
           }
         }
         const n = G.sub * G.sub;
-        const t = clk === 'game' ? window.__spooky.state().t * 1000 : performance.now();
+        const t = clk === 'game' ? window.__spooky.state().t * 1000 : clk === 'intro' ? (window.__spooky.intro?.state().t ?? 0) * 1000 : performance.now();
         const kick = clk === 'game' ? window.__spooky.aimOffset?.() ?? null : null;
         m.frames.push([t, L.map((v) => Math.round((v / n) * 1000) / 1000), performance.now(), kick]);
       }
@@ -2300,4 +2307,253 @@ async function controlsChecks(browser) {
     await page.close();
   }
   return res;
+}
+
+// ---------- The intro: "The Late Bulletin" (src/ui/intro.ts, docs/story/intro.md) ----------
+// Runs on the intro's own clock (test hook window.__spooky.intro: fixedStep / seek / state), so a slow
+// machine still sees every frame a 60 fps player sees. Checks: started from a click on the front page
+// (first visit offers it; afterwards a "Watch intro" link), every caption matches the script in
+// docs/story/intro.md at each line's middle, each line's recording was started, the flash meter over
+// the whole 44 s, skip from the first second (button >= 48 px, Esc, Space, Enter, a tap) back to the
+// front page with the WebGL context freed and "seen" remembered, the reduced-motion slideshow (no
+// camera moves: the picture holds still within a slide), draw calls, no console errors, and 10 start
+// → skip cycles without leaking WebGL contexts. Screenshots of every shot at 1280x720 and 390x844.
+function introScript() {
+  const md = readFileSync('docs/story/intro.md', 'utf8');
+  return md
+    .split('\n')
+    .filter((l) => /^\| \d+ \| `voice\/intro-/.test(l))
+    .map((l) => {
+      const c = l.split('|').map((x) => x.trim());
+      return { id: /voice\/(intro-[a-z0-9-]+)\.mp3/.exec(c[2])[1], speaker: c[3], text: c[5], start: Number(c[6]), length: parseFloat(c[7]) };
+    });
+}
+
+async function introPage(browser, viewport, extra = {}) {
+  const page = await browser.newPage({ viewport, deviceScaleFactor: scale, ...extra });
+  const errs = [];
+  page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+  page.on('pageerror', (e) => errs.push(String(e)));
+  await page.addInitScript(keepDrawingBuffers);
+  await page.addInitScript(() => {
+    window.__ctx = { made: 0, lost: 0 };
+    const orig = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      const c = orig.call(this, type, attrs);
+      if (c && /webgl/.test(type) && !this.__counted) {
+        this.__counted = true;
+        window.__ctx.made++;
+        this.addEventListener('webglcontextlost', () => window.__ctx.lost++);
+      }
+      return c;
+    };
+  });
+  return { page, errs };
+}
+
+function introState(page) {
+  return page.evaluate(() => window.__spooky.intro?.state() ?? null);
+}
+/** Run the intro's clock (seconds per rendered frame) until it reaches t, then hold it. */
+async function introRunTo(page, t, step = 1 / 30) {
+  await page.evaluate((s) => window.__spooky.intro.fixedStep(s), step);
+  await page.waitForFunction((tt) => (window.__spooky.intro?.state().t ?? 1e9) >= tt, t, { timeout: 300000, polling: 30 });
+  await page.evaluate(() => window.__spooky.intro?.fixedStep(0));
+}
+
+async function introChecks(browser) {
+  const res = [];
+  try {
+    await introCheckRuns(browser, res);
+  } catch (e) {
+    res.push({ type: 'intro: checks stopped', errors: [String(e).split('\n')[0]], shots: {} });
+  }
+  return res;
+}
+
+async function introCheckRuns(browser, res) {
+  const script = introScript();
+  const SHOT_TIMES = { '1-bulletin': 4, '2-pullback': 13.2, '3a-order-turn': 17.2, '3b-order-markers': 23, '3c-order-guns': 28.5, '3d-order-night': 33.6, '4-radio': 40, '5-title': 43 };
+
+  // 1. From a click on the first visit's offer: captions, recordings, flash meter (desktop), shots, draw calls.
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+    const { page, errs } = await introPage(browser, viewport);
+    const shots = {};
+    const tag = viewport.width;
+    await page.goto(`http://localhost:${PORT}/`);
+    await page.waitForSelector('.landing h1');
+    if (!(await page.$('.landing-intro-offer .la-intro'))) errs.push('first visit: the front page does not offer the intro');
+    if (await page.$('.intro')) errs.push('the intro started without a click');
+    shots.offer = `${out}/intro-${tag}-0-offer.png`;
+    await page.screenshot({ path: shots.offer });
+    await page.click('.landing-intro-offer .la-intro');
+    await page.waitForFunction(() => window.__spooky.intro?.state().started, null, { timeout: 15000 });
+    await page.evaluate(() => window.__spooky.intro.fixedStep(0));
+    const after = await page.evaluate(() => [...document.querySelectorAll('canvas')].map((c) => c.className));
+    if (after.length !== 1 || after[0] !== 'intro-canvas') errs.push(`one WebGL canvas at a time: ${after.join(', ')}`);
+    const skipBox = await page.$eval('.intro-skip', (b) => {
+      const r = b.getBoundingClientRect();
+      return { w: r.width, h: r.height };
+    });
+    if (skipBox.w < 48 || skipBox.h < 48) errs.push(`Skip button ${skipBox.w}x${skipBox.h} px (min 48)`);
+    if (tag === 1280) await startMeter(page, '.intro-canvas', 'intro');
+    let maxCalls = 0;
+    // The flash meter needs every frame (1/30 s steps); the phone run only checks captions and pictures.
+    const step = tag === 1280 ? 1 / 30 : 1 / 10;
+    const marks = [...script.map((l) => ({ t: l.start + l.length / 2, line: l })), ...Object.entries(SHOT_TIMES).map(([name, t]) => ({ t, shot: name }))].sort((a, b) => a.t - b.t);
+    for (const m of marks) {
+      await introRunTo(page, m.t, step);
+      const st = await introState(page);
+      maxCalls = Math.max(maxCalls, st.drawCalls);
+      if (m.line) {
+        if (st.caption !== m.line.text || st.speaker !== m.line.speaker) errs.push(`at ${m.t.toFixed(1)} s caption "${st.speaker}: ${st.caption}", script "${m.line.speaker}: ${m.line.text}"`);
+      } else {
+        await page.waitForTimeout(250);
+        shots[m.shot] = `${out}/intro-${tag}-${m.shot}.png`;
+        await page.screenshot({ path: shots[m.shot] });
+      }
+    }
+    if (tag === 1280) {
+      await introRunTo(page, 43.9);
+      const frames = (await stopMeter(page)).filter((f) => f[0] > 0);
+      res.push(judge('intro, the whole 44 s (1/30 s steps)', frames));
+    }
+    // The cues: [TV muted] and [radio click].
+    for (const [t, text] of [[15.35, '[TV muted]'], [38.5, '[radio click]']]) {
+      await page.evaluate((tt) => window.__spooky.intro.seek(tt), t);
+      await page.waitForTimeout(200);
+      const st = await introState(page);
+      if (st.caption !== text) errs.push(`at ${t} s caption "${st.caption}", wanted ${text}`);
+    }
+    // The voice: every line's recording was started (sound was unlocked by the click).
+    const aud = await page.evaluate(() => window.__spooky.audio?.() ?? null);
+    const started = new Set((aud?.clips ?? []).map((c) => c.id));
+    const missing = script.filter((l) => !started.has(`voice/${l.id}`)).map((l) => l.id);
+    if (!aud) errs.push('no audio engine after the click');
+    else if (missing.length) errs.push(`recordings not started: ${missing.join(', ')}`);
+    if (maxCalls > 150) errs.push(`draw calls ${maxCalls} > 150`);
+    // The end: back to the front page, which now has "Watch intro" instead of the offer.
+    await page.evaluate(() => window.__spooky.intro.seek(43.6));
+    await page.evaluate(() => window.__spooky.intro?.fixedStep(1 / 30));
+    await page.waitForSelector('.landing h1', { timeout: 30000 });
+    const end = await page.evaluate(() => ({ seen: localStorage.getItem('spooky.intro'), link: !!document.querySelector('.la-intro-link'), offer: !!document.querySelector('.landing-intro-offer'), intro: !!document.querySelector('.intro'), ctx: window.__ctx }));
+    if (end.seen !== 'seen') errs.push(`"seen" not remembered: ${end.seen}`);
+    if (!end.link || end.offer) errs.push('after the intro the front page should show "Watch intro", not the offer');
+    if (end.intro) errs.push('the intro is still in the page after it ended');
+    if (end.ctx.made - end.ctx.lost > 1) errs.push(`${end.ctx.made - end.ctx.lost} WebGL contexts alive after the intro (want 1: the front page)`);
+    await page.waitForTimeout(1200);
+    shots.after = `${out}/intro-${tag}-6-front-page.png`;
+    await page.screenshot({ path: shots.after });
+    res.push({ type: `intro: play through (${tag} px)`, maxDrawCalls: maxCalls, captionsChecked: script.length, clips: aud?.clips?.length ?? 0, errors: errs, shots });
+    await page.close();
+  }
+
+  // 2. Skip from the first second: the button, Esc, Space, Enter and a tap; then "Watch intro" plays it again.
+  {
+    const errs = [];
+    for (const how of ['button', 'Escape', 'Space', 'Enter', 'tap']) {
+      const touch = how === 'tap';
+      const { page, errs: e } = await introPage(browser, touch ? { width: 390, height: 844 } : { width: 1280, height: 720 }, touch ? { hasTouch: true, isMobile: true } : {});
+      await page.goto(`http://localhost:${PORT}/`);
+      await page.waitForSelector('.landing-intro-offer .la-intro');
+      if (touch) await page.tap('.landing-intro-offer .la-intro');
+      else await page.click('.landing-intro-offer .la-intro');
+      await page.waitForSelector('.intro');
+      await page.waitForTimeout(500);
+      const t0 = (await introState(page))?.t ?? 0;
+      if (how === 'button') await page.click('.intro-skip');
+      else if (touch) await page.tap('.intro-canvas');
+      else await page.keyboard.press(how);
+      try {
+        await page.waitForSelector('.landing h1', { timeout: 10000 });
+      } catch {
+        errs.push(`${how}: did not skip`);
+      }
+      const st = await page.evaluate(() => ({ intro: !!document.querySelector('.intro'), seen: localStorage.getItem('spooky.intro'), ctx: window.__ctx }));
+      if (st.intro) errs.push(`${how}: intro still in the page`);
+      if (st.seen !== 'seen') errs.push(`${how}: "seen" not remembered`);
+      if (st.ctx.made - st.ctx.lost > 1) errs.push(`${how}: ${st.ctx.made - st.ctx.lost} WebGL contexts alive`);
+      if (t0 > 1) errs.push(`${how}: skipped at ${t0.toFixed(2)} s (should work from the first second)`);
+      if (how === 'Escape') {
+        await page.click('.la-intro-link');
+        await page.waitForSelector('.intro');
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.landing h1');
+      }
+      errs.push(...e.map((x) => `${how}: ${x}`));
+      await page.close();
+    }
+    res.push({ type: 'intro: skip from the first second (button, Esc, Space, Enter, tap) and Watch intro', errors: errs, shots: {} });
+  }
+
+  // 3. Reduced motion: a still slideshow (no camera moves), the same captions; flash meter over all of it.
+  {
+    const { page, errs } = await introPage(browser, { width: 1280, height: 720 }, { reducedMotion: 'reduce' });
+    const shots = {};
+    await page.goto(`http://localhost:${PORT}/`);
+    await page.click('.landing-intro-offer .la-intro');
+    await page.waitForFunction(() => window.__spooky.intro?.state().started, null, { timeout: 15000 });
+    await page.evaluate(() => window.__spooky.intro.fixedStep(0));
+    if (!(await introState(page)).still) errs.push('reduced motion: the intro is not in still (slideshow) mode');
+    await startMeter(page, '.intro-canvas', 'intro');
+    const grid = () => page.evaluate(() => window.__meter.frames[window.__meter.frames.length - 1][1]);
+    for (const [a, b] of [[2.5, 9.5], [11.5, 15], [17, 34.5], [39.5, 42]]) {
+      await introRunTo(page, a, 1 / 15);
+      await page.waitForTimeout(200);
+      const ga = await grid();
+      shots[`slide-${a}`] = `${out}/intro-reduced-${String(a).replace('.', '_')}s.png`;
+      await page.screenshot({ path: shots[`slide-${a}`] });
+      await introRunTo(page, b, 1 / 15);
+      await page.waitForTimeout(200);
+      const gb = await grid();
+      // Within a slide only screen contents crossfade (monitors following the words); the camera never moves.
+      let moved = 0;
+      for (let i = 0; i < ga.length; i++) if (Math.abs(ga[i] - gb[i]) > 0.02) moved++;
+      const share = moved / ga.length;
+      if (share > 0.12) errs.push(`reduced motion: ${Math.round(share * 100)}% of the picture changed between ${a} s and ${b} s (camera moved?)`);
+      const st = await introState(page);
+      const line = script.find((l) => b >= l.start && b < l.start + l.length);
+      if (line && st.caption !== line.text) errs.push(`reduced motion: caption at ${b} s is "${st.caption}"`);
+    }
+    await introRunTo(page, 43.9, 1 / 15);
+    const frames = (await stopMeter(page)).filter((f) => f[0] > 0);
+    res.push(judge('intro, reduced motion (slideshow, 1/15 s steps)', frames));
+    res.push({ type: 'intro: reduced motion slideshow', errors: errs, shots });
+    await page.close();
+  }
+
+  // 4. Leaks: 10 × (Watch intro → 2 s → Skip). One WebGL context at a time, nothing left behind.
+  {
+    const { page, errs } = await introPage(browser, { width: 1280, height: 720 });
+    await page.goto(`http://localhost:${PORT}/`);
+    await page.click('.landing-intro-offer .la-intro');
+    await page.waitForSelector('.intro');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.landing h1');
+    const snap = () => page.evaluate(() => ({ ...window.__ctx, canvases: document.querySelectorAll('canvas').length, intros: document.querySelectorAll('.intro').length, nodes: document.getElementsByTagName('*').length, heapMB: Math.round((performance.memory?.usedJSHeapSize ?? 0) / 1e5) / 10 }));
+    const before = await snap();
+    let cycles = 0;
+    try {
+      for (let i = 0; i < 10; i++) {
+        await page.click('.la-intro-link');
+        await page.waitForFunction(() => window.__spooky.intro?.state().started, null, { timeout: 15000 });
+        await introRunTo(page, 2, 1 / 15);
+        const alive = await page.evaluate(() => window.__ctx.made - window.__ctx.lost);
+        if (alive > 1) errs.push(`cycle ${i + 1}: ${alive} WebGL contexts alive during the intro`);
+        await page.click('.intro-skip');
+        await page.waitForSelector('.landing h1');
+        cycles++;
+      }
+    } catch (e) {
+      errs.push(`cycle ${cycles + 1}: ${String(e).split('\n')[0]}`);
+    }
+    await page.waitForTimeout(800);
+    const after = await snap();
+    const alive = (s) => s.made - s.lost;
+    if (alive(after) > alive(before)) errs.push(`WebGL contexts alive grew from ${alive(before)} to ${alive(after)}`);
+    if (after.intros || after.canvases !== 1) errs.push(`after 10 cycles: ${after.intros} intros, ${after.canvases} canvases`);
+    if (after.nodes > before.nodes * 1.2 + 50) errs.push(`DOM grew from ${before.nodes} to ${after.nodes} nodes`);
+    res.push({ type: 'intro: 10 start → skip cycles', cycles, before, after, errors: errs, shots: {} });
+    await page.close();
+  }
 }
