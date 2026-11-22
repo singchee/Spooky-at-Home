@@ -1,6 +1,6 @@
 # 003 — Horde Night: a crowd mode for the joy of the big gun
 
-*Status: draft* · *Owner: Game Director* · *Date: 22 Nov 2026*
+*Status: approved, awaiting /plan* · *Owner: Game Director* · *Date: 22 Nov 2026*
 
 **Mode: REDUCE.** The owner asked for "a mode where there are just insane numbers of zombies just for the satisfaction of shooting them down." I'm building the smallest version that tests whether **density** is the satisfaction. That means one five-minute run where your street floods with zombies towards a real landmark and you hold them off until dawn, with a kill counter, a multiplier and a "best shot". There are no new guns, enemies, upgrades or explosions, and the mode is not endless. **Class C:** it's a new mode, it adds a performance budget to QUALITY §2, and it's a taste call. It needs the owner's yes before `/build`. *(Working title: the Story Writer names it; see open question 5.)*
 
@@ -193,3 +193,6 @@ A dev-only frame-time readout (or `window.__spooky` stats) shows median and wors
 ## Technical design  *(added by tech-lead)*
 
 ## Feel & access  *(added by feel-designer)*
+
+## Owner decision (22 Nov 2026)
+Approved, with **a maximum of 1,200 zombies on screen** ("max 1200 size"). The sizes become Big (600 at once, tablet default) and Huge (1,200 at once, desktop default); Insane (2,000) is dropped. Fixed-length runs, normal ammo, the performance budget and the menu placement below Three Nights are approved as recommended. The Story Writer proposes the name.

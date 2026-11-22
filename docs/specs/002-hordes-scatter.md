@@ -1,6 +1,6 @@
 # 002 — Shelled hordes scatter, then regroup (Clear missions)
 
-*Status: draft* · *Owner: Game Director* · *Date: 22 Nov 2026*
+*Status: approved, awaiting /plan* · *Owner: Game Director* · *Date: 22 Nov 2026*
 
 **Mode: HOLD, with tight edges.** Build the owner's idea as asked: in Clear missions, a 105 round that lands on a horde sends the survivors running, and later they drift back to where the horde gathered. I'm adding three rules that the idea needs to stay fair, and leaving out everything that would spread it beyond Clear. **Class C:** it's a new enemy behaviour and a balance change well over 15%, and it widens the school guardrail gap. It needs the owner's yes before `/build`.
 
@@ -123,3 +123,6 @@ If the d5 band can't be reached without regroup delays so long that the end turn
 ## Technical design  *(added by tech-lead)*
 
 ## Feel & access  *(added by feel-designer)*
+
+## Owner decision (22 Nov 2026)
+Approved ("scatter ok"), with the four recommended answers: runners may scatter toward friendlies if shelled from the wrong side; Training night keeps today's hordes for now; the Balance Analyst may retune Clear's time limits; the recorded `few-left` and `cold-leftovers` lines are wired in.
