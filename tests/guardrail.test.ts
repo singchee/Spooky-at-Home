@@ -8,7 +8,8 @@ import { nearChildPlace, childZones, TEMPLATE_IDS } from '../src/map/recon';
 import { parseOverpass, featureCategory, type OverpassJson } from '../src/map/overpass';
 import { KILL_REACH, WEAPONS } from '../src/sim/weapons';
 import { Sim, WAVE_SPREAD, noWaveSpawn } from '../src/sim/sim';
-import type { Building, Feature, MapData, Road, V2 } from '../src/map/types';
+import type { MapData, V2 } from '../src/map/types';
+import { schoolHeavyTown } from './worldFixture';
 
 /**
  * Guardrail (PLAN §9, issue #11, pending the owner's decision): no part of a mission is placed in or near
@@ -245,68 +246,6 @@ describe('item 3.8: school guardrail gaps', () => {
 });
 
 const dist = (a: V2, b: V2) => Math.hypot(a.x - b.x, a.z - b.z);
-const rect = (x0: number, z0: number, x1: number, z1: number): V2[] => [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }];
-
-/**
- * A synthetic grid town (local metres only, 100 m blocks) crowded with schools, a kindergarten and a playground
- * around a hospital that serves as the safehouse. One school's grounds sit 21 m from the junction at (100, -100),
- * 200 m by road from the safehouse: where defend stragglers start, and on the shortest way to many homes.
- */
-function schoolHeavyTown(opts: { playgroundBesideSafehouse?: boolean } = {}): MapData {
-  const roads: Road[] = [];
-  const buildings: Building[] = [];
-  for (let i = -5; i <= 5; i++) {
-    const ns: V2[] = [];
-    const ew: V2[] = [];
-    for (let j = -5; j <= 5; j++) {
-      ns.push({ x: i * 100, z: j * 100 });
-      ew.push({ x: j * 100, z: i * 100 });
-    }
-    roads.push({ id: `ns${i}`, pts: ns, kind: 'residential', width: 7, name: `Street ${i + 6}` });
-    roads.push({ id: `ew${i}`, pts: ew, kind: 'residential', width: 7, name: `Avenue ${i + 6}` });
-  }
-  const features: Feature[] = [];
-  const pois: MapData['pois'] = [];
-  const used = new Set<string>(['0,0']);
-  const school = (id: string, bx: number, bz: number, name: string) => {
-    const x0 = bx * 100;
-    const z0 = bz * 100;
-    buildings.push({ id: `${id}-hall`, pts: rect(x0 + 30, z0 + 35, x0 + 70, z0 + 65), height: 9, kind: 'school', name });
-    pois.push({ id, p: { x: x0 + 50, z: z0 + 50 }, kind: 'school', name });
-    features.push({ id: `f-${id}`, category: 'school', name, p: { x: x0 + 50, z: z0 + 50 }, pts: rect(x0 + 15, z0 + 15, x0 + 85, z0 + 85) });
-    used.add(`${bx},${bz}`);
-  };
-  school('s1', 1, -2, 'Gridville Primary School');
-  school('s2', -3, 1, 'Gridville High School');
-  school('s3', 2, 2, 'Saint Gridley College');
-  pois.push({ id: 'k1', p: { x: -145, z: -245 }, kind: 'kindergarten', name: 'Little Squares Kindergarten' });
-  features.push({ id: 'f-k1', category: 'kindergarten', name: 'Little Squares Kindergarten', p: { x: -145, z: -245 } });
-  features.push({ id: 'f-play', category: 'playground', name: 'Grid Playground', p: { x: -50, z: 340 }, pts: rect(-70, 320, -30, 360) });
-  if (opts.playgroundBesideSafehouse) features.push({ id: 'f-play2', category: 'playground', name: 'Corner Playground', p: { x: -10, z: -10 } });
-  // The hospital (safehouse), its centre nearest the junction at (0, 0).
-  buildings.push({ id: 'hosp', pts: rect(25, 25, 55, 55), height: 12, kind: 'hospital', name: 'Gridville Hospital' });
-  pois.push({ id: 'hosp', p: { x: 40, z: 40 }, kind: 'hospital', name: 'Gridville Hospital' });
-  features.push({ id: 'f-hosp', category: 'hospital', name: 'Gridville Hospital', p: { x: 40, z: 40 } });
-  // Parks, for clear missions.
-  const areas: MapData['areas'] = [];
-  for (const [bx, bz, name] of [[-2, -1, 'West Green'], [2, -1, 'East Green'], [-1, 2, 'North Green'], [0, -3, 'South Green']] as const) {
-    const pts = rect(bx * 100 + 5, bz * 100 + 5, bx * 100 + 95, bz * 100 + 95);
-    areas.push({ id: `a${bx},${bz}`, pts, kind: 'park', name });
-    features.push({ id: `f-p${bx},${bz}`, category: 'park', name, p: { x: bx * 100 + 50, z: bz * 100 + 50 }, pts });
-    used.add(`${bx},${bz}`);
-  }
-  let id = 0;
-  for (let bx = -5; bx < 5; bx++) {
-    for (let bz = -5; bz < 5; bz++) {
-      if (used.has(`${bx},${bz}`)) continue;
-      const x0 = bx * 100;
-      const z0 = bz * 100;
-      for (const [dx, dz] of [[20, 15], [60, 15], [20, 75], [60, 75]]) buildings.push({ id: `h${id++}`, pts: rect(x0 + dx, z0 + dz, x0 + dx + 12, z0 + dz + 10), height: 6, kind: 'house' });
-    }
-  }
-  return { name: 'Gridville (school heavy)', half: 550, buildings, roads, areas, pois, features, attribution: 'test' };
-}
-
 /** Schools, kindergartens, childcare and playgrounds, worked out here independently of the code under test. */
 function childPlaces(town: MapData): { p: V2; pts?: V2[] }[] {
   const out: { p: V2; pts?: V2[] }[] = [];
