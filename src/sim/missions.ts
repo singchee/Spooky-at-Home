@@ -668,6 +668,12 @@ function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'c
     const here = isHere(p);
     return { centre: p, count: per, cold: Math.round(per * (here ? coldHere : coldShare)), label: here ? name : placeLabel(map, p) };
   });
+  // The briefing names the place, so a horde must really be there (the campaign's placeIsTrue rule, BACKLOG 3.24).
+  // The place itself can be refused a horde (a building, a playground within the child-place gap).
+  const atPlace = hordes.filter((h) => h.label === name);
+  if (!atPlace.length || (forest && !atPlace.some((h) => h.cold > 0))) {
+    return { ok: false, reason: `The hordes can't gather at ${name} here, so this mission wouldn't be true. Pick another mission.` };
+  }
   const shelterAt = hordes[Math.floor(rng() * hordes.length)];
   const shelterSpot = shelterSpotFor(grid, map, hordes, shelterAt, rng);
   if (!shelterSpot) return { ok: false, reason: noShelterReason };
