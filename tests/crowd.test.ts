@@ -129,6 +129,22 @@ describe('crowd night: the child guardrail, every step (test 2)', () => {
   });
 });
 
+describe('crowd night: where it is not offered, the reason is true', () => {
+  it('a landmark at the end of one long road: too few ways in, and the reason says that (not schools)', () => {
+    const rect = (x0: number, z0: number, x1: number, z1: number) => [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }];
+    const road = (id: string, pts: V2[]) => ({ id, pts, kind: 'residential', width: 7, name: `Long ${id}` });
+    const town: MapData = {
+      name: 'One road town', half: 550, attribution: 'test', areas: [], features: [],
+      roads: [road('a', Array.from({ length: 11 }, (_, i) => ({ x: -40 + i * 45, z: 0 }))), road('b', [{ x: -40, z: -40 }, { x: -40, z: 0 }, { x: -40, z: 40 }])],
+      buildings: [{ id: 'h', pts: rect(-30, 10, 10, 40), height: 10, kind: 'hospital', name: 'End Hospital' }],
+      pois: [{ id: 'h', p: { x: -10, z: 25 }, kind: 'hospital', name: 'End Hospital' }],
+    } as unknown as MapData;
+    const r = generateCrowd(town, buildRoadGraph(town), new WalkGrid(town), { seed: 1, size: 'big' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/from enough directions before dawn/);
+  });
+});
+
 describe('crowd night: intel is true (test 3)', () => {
   it('every zombie spawns at a named stream; all warm; nobody out there but them; the briefing says so', () => {
     for (const size of CROWD_SIZE_IDS) {

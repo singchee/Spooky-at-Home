@@ -133,6 +133,13 @@ export function crowdNoGo(map: MapData, grid: WalkGrid): Uint8Array {
 }
 
 const noWayIn = (place: string) => `There's no way in to ${place} that keeps clear of schools and playgrounds, so there's no Horde Night here.`;
+const tooFewWays = (place: string) => `Zombies can't reach ${place} from enough directions before dawn, so there's no Horde Night here.`;
+/** Why an anchor can't hold a crowd night: the child gap (doors, or approaches it closes), or too few roads in. */
+function whyNot(map: MapData, g: RoadGraph, grid: WalkGrid, noGo: Uint8Array, sh: NonNullable<Mission['safehouse']>, seed: number, id: string): 'child' | 'roads' {
+  const doors = crowdDoors(grid, sh.poly, noGo);
+  if (doors.length < grid.perimeterCells(sh.poly).length) return 'child';
+  return planStreams(map, g, grid, new Uint8Array(noGo.length), sh, seed, id) ? 'child' : 'roads';
+}
 
 /**
  * Build a crowd night: the first anchor (sports centre or stadium, then police, fire station or hospital, then the
@@ -164,7 +171,9 @@ export function generateCrowd(map: MapData, g: RoadGraph, grid: WalkGrid, opts: 
     if (!streams) continue;
     return { ok: true, mission: crowdMission(map, opts, c.safehouse, streams, c.anchor) };
   }
-  return { ok: false, reason: noWayIn(cands[0].name) };
+  // Every anchor failed: say why for the first (best) one, in the generator's own words. The gap is never shrunk.
+  const c = cands[0];
+  return { ok: false, reason: whyNot(map, g, grid, noGo, c.safehouse, opts.seed, c.id) === 'child' ? noWayIn(c.name) : tooFewWays(c.name) };
 }
 
 /** 3-4 streams on real roads, in sectors at least two apart, each able to walk in before dawn. Null if fewer than 3. */
