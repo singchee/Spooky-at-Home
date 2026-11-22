@@ -8,6 +8,7 @@ import { GeoBuilder, type Sig } from './geo';
 import { placeDetail, type Detail } from './placement';
 import { patchMaterial } from './shading';
 import { Occupancy } from './spatial';
+import { applyLampFalloff, applySurfaceTexture } from '../render/groundShader';
 
 /**
  * Turns MapData into 3D meshes. Colours are not colours: each surface stores three
@@ -67,7 +68,10 @@ export function buildWorld(map: MapData, seed: number): World {
   groundGeo.deleteAttribute('uv');
   colorAttr(groundGeo, SIG.ground);
   disposables.push(groundGeo);
-  const ground = add(new THREE.Mesh(groundGeo, basic({}, { noise: true })), 'ground');
+  // Procedural surface texture (shader only, src/render/groundShader.ts): seams on bare ground, a faint
+  // mottle on grass, worn cracks on roads.
+  const groundMat = applySurfaceTexture(basic({}, { noise: true }), 'ground');
+  const ground = add(new THREE.Mesh(groundGeo, groundMat), 'ground');
 
   // Parks, woods, water
   const areas = new GeoBuilder();
@@ -82,7 +86,7 @@ export function buildWorld(map: MapData, seed: number): World {
     const y = a.kind === 'water' ? 0.6 : 0.4;
     for (const [i, j, k] of faces) upFlat(areas, a.pts[i], a.pts[j], a.pts[k], y, SIG[a.kind]);
   }
-  fromBuilder(areas, flat, 'areas');
+  fromBuilder(areas, applySurfaceTexture(basic(), 'grass'), 'areas');
 
   // Roads as flat ribbons
   const roads = new GeoBuilder();
@@ -99,7 +103,7 @@ export function buildWorld(map: MapData, seed: number): World {
       roads.quad([a.x + nx, y, a.z + nz], [a.x - nx, y, a.z - nz], [b.x - nx, y, b.z - nz], [b.x + nx, y, b.z + nz], SIG.road, true);
     }
   }
-  fromBuilder(roads, basic({ side: THREE.DoubleSide }), 'roads');
+  fromBuilder(roads, applySurfaceTexture(basic({ side: THREE.DoubleSide }), 'asphalt'), 'roads');
 
   // Detail placement (pure, seeded): trees, cars, pools, lines, fences.
   const detail = placeDetail(map, seed);
@@ -156,6 +160,7 @@ export function buildWorld(map: MapData, seed: number): World {
   if (lamps.length) {
     const lg = new THREE.CircleGeometry(11, 18).rotateX(-Math.PI / 2);
     const lm = patchMaterial(new THREE.MeshBasicMaterial({ color: new THREE.Color(0, 0.085, 0), blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }), { half, to: [0, 0, 0] });
+    applyLampFalloff(lm, 11);
     const pools = add(new THREE.InstancedMesh(lg, lm, lamps.length), 'lamp-pools');
     const m = new THREE.Matrix4();
     lamps.forEach((p, i) => pools.setMatrixAt(i, m.makeTranslation(p.x, 1.6, p.z)));

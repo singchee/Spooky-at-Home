@@ -1,13 +1,10 @@
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { makeSampleTown } from '../map/sample';
 import type { MapData } from '../map/types';
 import { createSim } from '../sim/setup';
 import type { Sim } from '../sim/sim';
 import { buildWorld, type World } from '../world/buildWorld';
-import { SensorShader } from '../render/sensors';
+import { SensorPost } from '../render/sensorPost';
 import { AgentsView } from '../game/agentsView';
 import { Effects } from '../game/effects';
 import { el } from './dom';
@@ -18,13 +15,17 @@ import { audio } from '../audio/engine';
  * three steps that explain the idea, and three ways in. Render-only, no HUD. The menu theme starts
  * on the first click or key press (browsers need a gesture) and carries on into the menu.
  */
-export type LandingChoice = 'scout' | 'sample' | 'training';
+export type LandingChoice = 'scout' | 'sample' | 'training' | 'intro';
 
 export interface LandingOptions {
   /** A one-line notice above the title (e.g. after finishing training). Static text only. */
   notice?: string;
   /** Has the player finished Training night before? (Skipping it doesn't count.) */
   trained?: boolean;
+  /** The 44 s intro: offered up top (first visit), or a quiet "Watch intro" link (afterwards). */
+  intro?: 'offer' | 'link';
+  /** Fade in (coming from the intro's fade to black). */
+  enter?: boolean;
 }
 
 export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) => void, opts: LandingOptions = {}): () => void {
@@ -38,8 +39,16 @@ export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) =>
   el('div', 'landing-shade', undefined, root);
   decor(root);
 
+  if (opts.enter) root.classList.add('landing-enter');
   const main = el('main', 'landing-content', undefined, root);
   if (opts.notice) el('p', 'landing-notice', opts.notice, main);
+  // The intro never starts by itself (sound needs a click): first time, it's offered here.
+  let introBtn: HTMLButtonElement | null = null;
+  if (opts.intro === 'offer') {
+    const offer = el('div', 'landing-intro-offer', undefined, main);
+    el('span', 'lio-text', 'First time here? There’s a 44-second intro.', offer);
+    introBtn = el('button', 'primary la-intro', '▶ Play intro', offer);
+  }
   el('div', 'landing-kicker', 'GUNSHIP · NIGHT SHIFT', main);
   const h1 = el('h1', 'landing-title', undefined, main);
   el('span', 'lt-1', 'SPOOKY', h1);
@@ -67,6 +76,8 @@ export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) =>
   // Shown only on touch screens (CSS: pointer: coarse): missions bring up on-screen controls there (3.11).
   el('p', 'landing-touch', 'On a touch screen, missions show a thumb stick and FIRE, GUN and VIEW buttons.', main);
 
+  if (opts.intro === 'link') introBtn = el('button', 'la-intro la-intro-link', '▶ Watch intro (44 s)', main);
+
   el('p', 'landing-privacy', 'Your search goes straight from your browser to OpenStreetMap. Nothing is stored.', main);
   el('p', 'landing-credit', 'Map data © OpenStreetMap contributors (ODbL)', main);
 
@@ -83,6 +94,10 @@ export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) =>
   scout.addEventListener('click', choose('scout'));
   sample.addEventListener('click', choose('sample'));
   training.addEventListener('click', choose('training'));
+  introBtn?.addEventListener('click', () => {
+    audio.unlock(); // the click is the gesture sound needs
+    choose('intro')();
+  });
 
   return () => {
     window.removeEventListener('keydown', unlock);
@@ -112,8 +127,7 @@ class Backdrop {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(9, 1, 200, 6000);
-  private composer: EffectComposer;
-  private sensorPass: ShaderPass;
+  private post: SensorPost;
   private world: World;
   private agents = new AgentsView();
   private effects = new Effects();
@@ -139,9 +153,8 @@ class Backdrop {
   private onResize = () => this.resize();
 
   constructor(private container: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'low-power' });
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-    this.renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio));
     this.renderer.domElement.className = 'landing-canvas';
     this.renderer.domElement.setAttribute('aria-hidden', 'true');
     container.appendChild(this.renderer.domElement);
@@ -156,10 +169,8 @@ class Backdrop {
     this.world = buildWorld(this.map, 1);
     this.scene.add(this.world.group, this.agents.group, this.effects.group);
 
-    this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.sensorPass = new ShaderPass(SensorShader);
-    this.composer.addPass(this.sensorPass);
+    // The same sensor picture as the game, at up to 1.5x resolution (it's a background).
+    this.post = new SensorPost(this.renderer, 'high', 1.5);
 
     this.reduced = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
     window.addEventListener('resize', this.onResize);
@@ -244,13 +255,14 @@ class Backdrop {
     this.camera.lookAt(c.x, 0, c.z);
     this.agents.update(this.sim, this.clock);
     this.effects.update(this.clock, dt);
-    const u = this.sensorPass.uniforms;
+    const u = this.post.uniforms;
+    u.calm.value = this.still ? 1 : 0;
     u.time.value = this.clock;
     u.mode.value = 0;
     u.polarity.value = 0;
     u.washout.value = 0;
     u.blank.value = this.still ? 0 : this.boot;
-    this.composer.render();
+    this.post.render(this.scene, this.camera);
   }
 
   /** Ease the view toward the horde with the most zombies still standing, so there's always something shambling. */
@@ -280,10 +292,7 @@ class Backdrop {
   private resize(): void {
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
-    this.renderer.setSize(w, h);
-    this.composer.setSize(w, h);
-    const pr = this.renderer.getPixelRatio();
-    (this.sensorPass.uniforms.res.value as THREE.Vector2).set(w * pr, h * pr);
+    this.post.setSize(w, h);
     this.camera.aspect = w / h;
     // Portrait screens are narrow: widen the lens so the town still reads.
     this.camera.fov = w / h < 1 ? 15 : 9;
@@ -301,8 +310,7 @@ class Backdrop {
     this.world.dispose();
     this.agents.dispose();
     this.effects.dispose();
-    this.sensorPass.dispose?.();
-    this.composer.dispose();
+    this.post.dispose();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
     this.renderer.domElement.remove();

@@ -14,7 +14,7 @@ import { Kit } from './kit';
 import { AssetBank, MUSIC, SFX, VOICE_LINES, voiceAsset, type AssetStats, type VoiceLine } from './assets';
 import { BED_IDS, playRecordedSting, RecordedBed, RecordedScore, trackIds } from './recorded';
 import { SamplePlayer } from './samples';
-import { VoiceChannel, type VoiceLogEntry } from './voice';
+import { DUCK_VOICE, SQUELCH, VoiceChannel, type VoiceLogEntry } from './voice';
 
 /** What sound effects need: the context, where to plug in, and the extras the engine offers. */
 export interface SfxOutput {
@@ -35,6 +35,15 @@ export interface SfxOutput {
 const RELEASE_GRACE = 400;
 const TICK_MS = 50;
 
+/** How a one-off recorded clip is heard (the intro): through a TV's speaker, in the room, or over the radio. */
+export type ClipVoice = 'tv' | 'room' | 'radio' | 'squelch';
+export interface ClipHandle {
+  /** Audio-clock time the clip ends. */
+  end: number;
+  /** Stop it now with a short fade (no click). Safe to call twice. */
+  stop(fade?: number): void;
+}
+
 export interface AudioDebug {
   contexts: number;
   state: string;
@@ -50,6 +59,8 @@ export interface AudioDebug {
   recorded: { score: boolean; bed: boolean };
   assets: AssetStats | null;
   voice: { said: number; overlaps: number; onAir: VoiceLine | null; waiting: number; log: VoiceLogEntry[] } | null;
+  /** One-off clips (the intro): id, audio-clock start and end (end = when it really stopped). */
+  clips: { id: string; start: number; end: number }[];
 }
 
 export class AudioEngine {
@@ -64,6 +75,7 @@ export class AudioEngine {
   private samples: SamplePlayer | null = null;
   private voice: VoiceChannel | null = null;
   private fadingOut: { tick(now: number): void; done: boolean }[] = [];
+  private clipLog: { id: string; start: number; end: number }[] = [];
   private scene: ScoreMode = 'menu';
   private intensity = 0;
   private releaseTimer: ReturnType<typeof setTimeout> | undefined;
@@ -184,6 +196,81 @@ export class AudioEngine {
     this.voice?.say(line);
   }
 
+  /** Fetch these recorded files ahead of everything else waiting (e.g. the intro's voice). */
+  preload(ids: readonly string[]): Promise<void> {
+    return this.bank?.request(ids, true) ?? Promise.resolve();
+  }
+
+  /** Is this recorded file loaded (false: still loading, failed, or no sound at all)? */
+  has(id: string): boolean {
+    return !!this.bank?.get(id);
+  }
+
+  /** Has this file failed to load (or is there no sound)? Then nobody should wait for it. */
+  unavailable(id: string): boolean {
+    return !this.ctx || !this.bank || this.bank.status(id) === 'failed';
+  }
+
+  /**
+   * Play a recorded file once, now, on the voice (radio volume) bus: 'tv' through a small
+   * speaker's band, 'room' clean, 'radio' through the radio band, 'squelch' as the radio click.
+   * Music ducks under it. Null if sound is off or the file isn't loaded: the caller carries on
+   * (captions say the same thing).
+   */
+  clip(id: string, voice: ClipVoice): ClipHandle | null {
+    const { ctx, mixer, bank, sfxKit } = this;
+    const buf = bank?.get(id);
+    if (!ctx || !mixer || !sfxKit || !buf) return null;
+    const chain: AudioNode[] = [];
+    const band = (hp: number, lp: number) => {
+      const h = ctx.createBiquadFilter();
+      h.type = 'highpass';
+      h.frequency.value = hp;
+      const l = ctx.createBiquadFilter();
+      l.type = 'lowpass';
+      l.frequency.value = lp;
+      chain.push(h, l);
+    };
+    if (voice === 'tv') band(320, 5200);
+    else if (voice === 'radio') band(260, 4200);
+    const g = ctx.createGain();
+    g.gain.value = voice === 'squelch' ? SQUELCH.gain : voice === 'tv' ? 0.75 : 0.9;
+    chain.push(g);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    let node: AudioNode = src;
+    for (const n of chain) node = node.connect(n);
+    node.connect(mixer.radio);
+    if (!sfxKit.adopt(src, ...chain)) return null;
+    const t = ctx.currentTime + 0.02;
+    const [offset, length] = voice === 'squelch' ? [SQUELCH.offset, SQUELCH.length] : [0, buf.duration];
+    const entry = { id, start: t, end: t + length };
+    src.start(t, offset, length);
+    src.stop(entry.end + 0.02);
+    this.clipLog.push(entry);
+    if (this.clipLog.length > 40) this.clipLog.shift();
+    if (voice !== 'squelch') mixer.duck(DUCK_VOICE, length + 0.2);
+    let stopped = false;
+    return {
+      end: entry.end,
+      stop: (fade = 0.08) => {
+        if (stopped) return;
+        stopped = true;
+        const now = ctx.currentTime;
+        if (now >= entry.end) return;
+        entry.end = Math.max(entry.start, now + fade);
+        try {
+          g.gain.cancelScheduledValues(now);
+          g.gain.setValueAtTime(g.gain.value, now);
+          g.gain.linearRampToValueAtTime(0, now + fade);
+          src.stop(now + fade + 0.01);
+        } catch {
+          /* already ended */
+        }
+      },
+    };
+  }
+
   /** The buses for sound effects (unlocks the context). Null if Web Audio is unavailable. */
   output(): SfxOutput | null {
     if (!this.unlock() || !this.ctx || !this.mixer || !this.noise || !this.sfxKit) return null;
@@ -298,6 +385,7 @@ export class AudioEngine {
       voice: this.voice
         ? { said: this.voice.said, overlaps: this.voice.overlaps(), onAir: this.voice.queue.current?.line ?? null, waiting: this.voice.queue.waiting, log: this.voice.log.slice(-12) }
         : null,
+      clips: this.clipLog.slice(-12),
     };
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AssetBank, MUSIC, SFX, VOICE_LINES, voiceAsset, type Fetcher, type VoiceLine } from '../src/audio/assets';
+import { AssetBank, INTRO_VOICE, MUSIC, SFX, VOICE_LINES, voiceAsset, type Fetcher, type VoiceLine } from '../src/audio/assets';
 import { curve, fadeIn, fadeOut, LOOP_OVERLAP, loopTiming, passGain } from '../src/audio/loop';
 import { RecordedScore, stemWeights, TRACKS } from '../src/audio/recorded';
 import { vary, VoiceLimiter } from '../src/audio/samples';
@@ -75,11 +75,10 @@ describe('asset loader', () => {
   });
 
   it('every file the game asks for exists in public/audio (and no file goes unused)', () => {
-    const want = [...Object.values(MUSIC), ...Object.values(SFX), ...VOICE_LINES.map(voiceAsset)].map((id) => `${id}.mp3`).sort();
+    const want = [...Object.values(MUSIC), ...Object.values(SFX), ...VOICE_LINES.map(voiceAsset), ...INTRO_VOICE.map((id) => `voice/${id}`)].map((id) => `${id}.mp3`).sort();
     const have = ['music', 'sfx', 'voice'].flatMap((d) => readdirSync(`public/audio/${d}`).map((f) => `${d}/${f}`)).sort();
     // Recorded for the Three Nights campaign (docs/specs/001); spec 001's build wires them and must empty this list.
-    // Recorded for the intro (docs/story/intro.md); the intro build wires them and must empty AWAITING_INTRO.
-    const awaitingCampaign = [...AWAITING_CAMPAIGN, ...AWAITING_INTRO].map((id) => `voice/${id}.mp3`);
+    const awaitingCampaign = AWAITING_CAMPAIGN.map((id) => `voice/${id}.mp3`);
     for (const f of awaitingCampaign) expect(have).toContain(f);
     expect(have.filter((f) => !awaitingCampaign.includes(f))).toEqual(want);
   });
@@ -93,11 +92,6 @@ const AWAITING_CAMPAIGN = [
   'one-minute', 'doors-failing', 'idle',
 ];
 
-/** Intro voiceover recorded ahead of the intro build (docs/story/intro.md, script table). */
-const AWAITING_INTRO = [
-  'intro-news-1', 'intro-news-2', 'intro-news-3', 'intro-cmd-1', 'intro-cmd-2', 'intro-cmd-3', 'intro-cmd-4',
-  'intro-cmd-5', 'intro-cmd-6', 'intro-ground',
-];
 
 describe('crossfaded loops', () => {
   it('mission layers (70 BPM, 60 s files) loop on whole bars with at least 1.5 s of crossfade', () => {
