@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ANIM, HEAT, RUN_SPEED, bodyHeat, gaitAmp, gaitRate, hash01, survivorAnimState, zombieAnimState } from '../src/game/agentAnim';
+import { ANIM, HEAT, REACT_TIME, RUN_SPEED, ZOMBIE_RUN_SPEED, bodyHeat, gaitAmp, gaitRate, hash01, poseWeights, reactEnvelope, reactStrength, survivorAnimState, zombieAnimState } from '../src/game/agentAnim';
 import { AgentsView } from '../src/game/agentsView';
 import { FigureBatch, PART, buildFigureGeometry } from '../src/render/figureShader';
 import { makeSampleTown } from '../src/map/sample';
@@ -70,7 +70,7 @@ describe('body heat', () => {
     expect(bodyHeat(true, true, 0)).toEqual([HEAT.cold, HEAT.cold]);
     expect(bodyHeat(false, true, 5)).toEqual([HEAT.cold, HEAT.cold]);
   });
-  it('bodies cool over ~40 s to near ground heat, limbs first', () => {
+  it('bodies cool to near ground heat, limbs first', () => {
     const fresh = bodyHeat(false, false, 0);
     const mid = bodyHeat(false, false, 20);
     const old = bodyHeat(false, false, 60);
@@ -127,3 +127,101 @@ describe('figure geometry', () => {
     b.dispose();
   });
 });
+
+describe('figure rework (3.10): states, hit reactions, ducking', () => {
+  it('fast zombies (rush waves, fast chasers) run; survivors standing under threat crouch', () => {
+    expect(zombieAnimState(z({ vx: ZOMBIE_RUN_SPEED + 0.1 }))).toBe(ANIM.run);
+    expect(zombieAnimState(z({ vx: 2.2, speed: 1.5 }))).toBe(ANIM.lunge);
+    expect(survivorAnimState(true, 0, true)).toBe(ANIM.crouch);
+    expect(survivorAnimState(true, 0, false)).toBe(ANIM.idle);
+    expect(survivorAnimState(true, 3.2, true)).toBe(ANIM.run); // running beats cowering
+    expect(gaitRate(ANIM.crouch, 0)).toBe(0);
+  });
+
+  it('pose weights: lunge is half a run, attack and crouch are their own blends', () => {
+    expect(poseWeights(ANIM.run).run).toBe(1);
+    expect(poseWeights(ANIM.lunge).run).toBeGreaterThan(0);
+    expect(poseWeights(ANIM.lunge).run).toBeLessThan(1);
+    expect(poseWeights(ANIM.attack)).toEqual({ run: 0, attack: 1, crouch: 0 });
+    expect(poseWeights(ANIM.crouch).crouch).toBe(1);
+  });
+
+  it('a near miss makes zombies flinch: full strength close in, none beyond 3.5x the lethal radius', () => {
+    expect(reactStrength(0, 7)).toBe(1);
+    expect(reactStrength(7 * 1.2, 7)).toBe(1);
+    expect(reactStrength(7 * 2.3, 7)).toBeGreaterThan(0);
+    expect(reactStrength(7 * 3.5, 7)).toBe(0);
+    // A sharp jolt that eases back and is over within REACT_TIME.
+    expect(reactEnvelope(0)).toBe(0);
+    expect(reactEnvelope(0.07)).toBeCloseTo(1);
+    expect(reactEnvelope(0.4)).toBeLessThan(0.3);
+    expect(reactEnvelope(REACT_TIME)).toBe(0);
+  });
+
+  it('bodies cool to near ground heat in about 20 s', () => {
+    expect(HEAT.coolSeconds).toBe(20);
+    expect(bodyHeat(false, false, 20)[0]).toBeCloseTo(HEAT.bodyEnd);
+    expect(bodyHeat(false, false, 10)[0]).toBeGreaterThan(HEAT.bodyEnd + 0.1);
+  });
+
+  it('the view: blasts make nearby zombies flinch, bodies fall away from the blast, survivors duck', () => {
+    const view = new AgentsView({ models: false });
+    const mk = (id: number, x: number) => ({ id, x, z: 0, vx: 1, vz: 0, speed: 1.5, cold: false, alive: true, diedAt: -1, home: null, goal: null });
+    const zombies = [mk(0, 10), mk(1, 100), mk(2, 1)];
+    const survivors = [{ id: 0, x: -20, z: 0, alive: true, home: false, diedAt: -1 }]; // 20 m from the blast, 30 m from any zombie
+    const sim = { zombies, survivors, t: 1 };
+    view.update(sim as never, 0.9);
+    Object.assign(zombies[2], { alive: false, diedAt: 1 }); // killed by the blast that lands now
+    view.impact(0, 0, 7, 1);
+    view.update(sim as never, 1.07);
+    const batch = (view as unknown as { zombies: { c: Float32Array; b: Float32Array; a: Float32Array } }).zombies;
+    expect(batch.c[0 * 4 + 3]).toBeGreaterThan(0.5); // zombie 0 (10 m away): flinching
+    expect(batch.c[1 * 4 + 3]).toBe(0); // zombie 1 (100 m away): untouched
+    // Zombie 2 died in the blast at x = 1: it falls toward +x (away), relative to its heading.
+    const fallWorld = batch.b[2 * 4 + 3] + batch.a[2 * 4 + 2];
+    expect(Math.sin(fallWorld)).toBeGreaterThan(0.9);
+    const sb = (view as unknown as { survivors: { d: Float32Array } }).survivors;
+    for (let f = 0; f < 10; f++) view.update(sim as never, 1.07 + f * 0.05);
+    expect(sb.d[2]).toBeGreaterThan(0.9); // the survivor 20 m from a 40 mm blast is ducking
+    for (let f = 0; f < 60; f++) view.update(sim as never, 1.6 + 1.5 + f * 0.05);
+    expect(sb.d[2]).toBeLessThan(0.1); // and stands again once it has passed
+    view.dispose();
+  });
+
+  it('frame-rate independent: the same game time gives the same pose at 30 and 144 fps', () => {
+    const run = (fps: number) => {
+      const view = new AgentsView({ models: false });
+      const sim = { zombies: [{ id: 5, x: 0, z: 0, vx: 1.2, vz: 0, speed: 1.5, cold: false, alive: true, diedAt: -1, home: null, goal: null }], survivors: [], t: 0 };
+      for (let f = 0; f <= 2 * fps; f++) view.update(sim as never, f / fps);
+      const b = (view as unknown as { zombies: { a: Float32Array; b: Float32Array } }).zombies;
+      const out = [b.a[3], b.b[1]];
+      view.dispose();
+      return out;
+    };
+    const [p30, amp30] = run(30);
+    const [p144, amp144] = run(144);
+    expect(p144).toBeCloseTo(p30, 3); // gait phase
+    expect(amp144).toBeCloseTo(amp30, 2); // eased amplitude
+  });
+
+  it('bodies never lie inside a building, whichever way they would have fallen', () => {
+    // A building from x = 1 to 12 m; zombies on its doorstep facing it, dying with and without a blast.
+    const map = { buildings: [{ pts: [{ x: 1, z: -6 }, { x: 12, z: -6 }, { x: 12, z: 6 }, { x: 1, z: 6 }] }] };
+    const inside = (x: number, z: number) => x > 1 && x < 12 && z > -6 && z < 6;
+    for (let id = 0; id < 40; id++) {
+      const view = new AgentsView({ models: false });
+      const zz = { id, x: 0.5, z: (id % 9) - 4, vx: 1, vz: 0, speed: 1.5, cold: false, alive: true, diedAt: -1, home: null, goal: null };
+      const sim = { zombies: [zz], survivors: [], t: 1, map };
+      view.update(sim as never, 0.5);
+      view.update(sim as never, 0.9);
+      Object.assign(zz, { alive: false, diedAt: 1 });
+      if (id % 2) view.impact(-1, zz.z, 3, 1); // blast behind it: "away" points into the wall
+      view.update(sim as never, 1);
+      const b = (view as unknown as { zombies: { a: Float32Array; b: Float32Array } }).zombies;
+      const dir = b.a[2] + b.b[3];
+      for (const t of [0.5, 1]) expect(inside(zz.x + Math.sin(dir) * 2.6 * t, zz.z + Math.cos(dir) * 2.6 * t)).toBe(false);
+      view.dispose();
+    }
+  });
+});
+
