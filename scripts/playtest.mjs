@@ -1,5 +1,5 @@
 // Headless browser playtest (gates G7, G8 and visual evidence).
-// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls|scatter|intro|landmarks]
+// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls|scatter|intro|landmarks|highrise]
 // Starts `vite preview`, loads each mission type with the bot playing, switches cameras,
 // takes screenshots, and records console errors and draw calls. Chromium is preinstalled.
 // It also runs the photosensitivity flash checks and survivor-kit screenshots (`--only safety`
@@ -169,6 +169,13 @@ try {
   // 3.19: landmark markers in white hot and night vision, on a desktop and a phone, clear of the HUD and touch controls.
   if (!only || only === 'landmarks') {
     for (const r of await landmarkChecks(browser)) {
+      results.push(r);
+      if (r.errors.length) exitCode = 1;
+    }
+  }
+  // 3.39: high-rise visibility in New York and the sample town: the steeper orbit, the cut-away, MASKED, flashes.
+  if (!only || only === 'highrise') {
+    for (const r of await highriseChecks(browser)) {
       results.push(r);
       if (r.errors.length) exitCode = 1;
     }
@@ -3113,6 +3120,209 @@ async function landmarkChecks(browser) {
       errs.push(String(e));
     }
     res.push(out_);
+    await page.close();
+  }
+  return res;
+}
+
+// ---------- 3.39: high-rise visibility ----------
+// Street-level aim points: two Midtown canyons (6th Avenue by Times Square, a cross street) and a
+// plaza, and the sample town's centre. Through the test hooks only (window.__spooky.orbit / sight):
+//  - the orbit: Midtown flies the tighter, steeper orbit (moderate: 20-30° off vertical), the sample
+//    town keeps the sim's own orbit;
+//  - around a whole circle: each canyon point is clear of buildings (not MASKED) from some part of the
+//    orbit, and is never covered by anything drawn solid (the cut-away keeps the aim point in sight);
+//  - MASKED shows on the reticle whenever a building is on the line of fire (screenshot);
+//  - flashes: sweeping and jumping the aim across Midtown in white hot and night vision.
+async function highriseChecks(browser) {
+  const res = [];
+  const NY = 'preset=new-york-midtown&autostart=1&type=clear&difficulty=1&seed=3';
+  const TOWN = 'autostart=1&type=clear&difficulty=1&seed=3';
+  const canyons = [[-93, 59], [-78, 163]];
+  const advance = async (page, sec, step = 0.05) => {
+    const t1 = await gameTime(page);
+    await fixedStep(page, step);
+    // Until the clock gets there, or the mission ends (its clock stops).
+    await page.waitForFunction((tt) => window.__spooky.state().t >= tt || window.__spooky.info()?.screen !== 'playing', t1 + sec, { timeout: 240000, polling: 50 });
+    await fixedStep(page, 0);
+  };
+  // 1. Orbits and lines of sight round a whole circle (120 s of game time, sampled every 10 s), a fresh
+  //    mission per point (a whole orbit is half the mission's clock). If the mission ends early (the
+  //    horde wins in the sample town), the samples so far count; at least 6 are needed.
+  for (const [name, query, points] of [['new york', NY, canyons], ['sample town', TOWN, [[0, 0]]]]) {
+    const r = { type: `highrise: orbit and lines of sight (${name})`, errors: [], points: [] };
+    for (const [x, z] of points) {
+      const { page, errs } = await gamePage(browser, query);
+      try {
+        await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [x, z]);
+        await advance(page, 8, 0.1); // the orbit eases over a few seconds
+        const o = await page.evaluate(() => window.__spooky.orbit());
+        const pt = { x, z, radius: Math.round(o.r), offVertical: Number(o.offVertical.toFixed(1)), tallness: Number(o.tallness.toFixed(1)), clearAt: 0, maskedAt: 0, coveredAt: 0, samples: 0 };
+        if (name === 'new york') {
+          if (o.r > 800) r.errors.push(`(${x}, ${z}): Midtown should fly the tight orbit (radius ${o.r.toFixed(0)} m)`);
+          if (o.offVertical < 20 || o.offVertical > 30) r.errors.push(`(${x}, ${z}): ${o.offVertical.toFixed(1)}° off vertical (moderate: 20-30°)`);
+        } else if (Math.abs(o.r - 1000) > 1) r.errors.push(`sample town should keep the sim's orbit (radius ${o.r.toFixed(1)} m)`);
+        for (let i = 0; i < 12; i++) {
+          if ((await info(page)).screen !== 'playing') break;
+          await advance(page, 10, 1);
+          await advance(page, 0.4, 0.05); // fades settle (0.25 s)
+          const s = await page.evaluate(([x, z]) => window.__spooky.sight(x, z), [x, z]);
+          pt.samples++;
+          if (s.masked) pt.maskedAt++;
+          else pt.clearAt++;
+          if (s.covered) pt.coveredAt++;
+        }
+        if (pt.samples < 6) r.errors.push(`(${x}, ${z}): only ${pt.samples} samples round the orbit`);
+        if (!pt.clearAt) r.errors.push(`(${x}, ${z}): masked all the way round the orbit`);
+        if (pt.coveredAt) r.errors.push(`(${x}, ${z}): covered by a solid building ${pt.coveredAt}/${pt.samples} times (the cut-away should keep the aim point in sight)`);
+        r.points.push(pt);
+      } catch (e) {
+        r.errors.push(`(${x}, ${z}): ${e}`);
+      }
+      r.errors.push(...errs);
+      await page.close();
+    }
+    res.push(r);
+  }
+  // 2. Screenshots at street level: three sensors and the 25 mm, a MASKED example (New York), and the town.
+  for (const [name, query, aims] of [['ny', NY, [[-93, 59], [228, -223]]], ['town', TOWN, [[0, 0]]]]) {
+    for (const [ai, [x, z]] of aims.entries()) {
+      const { page, errs } = await gamePage(browser, query, { viewport: { width: 1280, height: 720 }, deviceScaleFactor: scale });
+      const r = { type: `highrise: screenshots (${name} ${x}, ${z})`, errors: errs, shots: {} };
+      try {
+        await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [x, z]);
+        await advance(page, 8, 0.1);
+        const shot = async (k) => {
+          await page.waitForTimeout(250);
+          r.shots[k] = `${out}/highrise-${name}${ai}-${k}.png`;
+          await page.screenshot({ path: r.shots[k] });
+        };
+        // MASKED example: wait (up to one orbit) for a moment a building is on the line of fire.
+        if (name === 'ny' && ai === 0) {
+          let masked = false;
+          for (let i = 0; i < 40 && !masked; i++) {
+            masked = (await page.evaluate(() => window.__spooky.orbit().masked));
+            if (!masked) await advance(page, 3, 0.5);
+          }
+          await advance(page, 0.4);
+          if (!masked) r.errors.push('no MASKED moment in a whole orbit over a Midtown canyon');
+          else {
+            const tag = await page.evaluate(() => {
+              const c = document.querySelector('.hud-cross');
+              return { cls: c?.classList.contains('masked'), text: c?.dataset.mask };
+            });
+            if (!tag.cls || tag.text !== 'MASKED') r.errors.push(`the reticle doesn't show MASKED: ${JSON.stringify(tag)}`);
+            r.cut = (await page.evaluate(([x, z]) => window.__spooky.sight(x, z), [x, z])).cut;
+            await shot('masked');
+            // The same moment without the cut-away, for comparison.
+            await page.evaluate(() => window.__spooky.cutaway(false));
+            await advance(page, 0.4);
+            await shot('masked-no-cutaway');
+            await page.evaluate(() => window.__spooky.cutaway(true));
+            await advance(page, 0.4);
+          }
+        }
+        r.drawCalls = (await info(page)).drawCalls;
+        if (r.drawCalls > 40) r.errors.push(`${r.drawCalls} draw calls (aim ≤ 40)`);
+        await shot('whitehot');
+        await page.evaluate(() => window.__spooky.setSensor('night'));
+        await advance(page, 1.2);
+        await shot('night');
+        await page.evaluate(() => window.__spooky.setSensor('thermal'));
+        await advance(page, 1.2);
+        await page.keyboard.press('1');
+        await advance(page, 0.6);
+        await shot('25mm');
+        await page.keyboard.press('2');
+        await page.keyboard.press('h');
+        await advance(page, 0.8);
+        await shot('blackhot');
+        // A zombie in a Midtown street: aim at the live one nearest this point; it must not be covered
+        // by anything drawn solid (its pixel is not under an opaque building), at 40 mm and 25 mm.
+        if (name === 'ny') {
+          await page.keyboard.press('h');
+          await advance(page, 0.8);
+          const zs = await page.evaluate(() => window.__spooky.zombies());
+          const zb = zs.sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z))[0];
+          if (!zb) r.errors.push('no live zombie to look at');
+          else {
+            r.zombie = { x: Math.round(zb.x), z: Math.round(zb.z), cold: zb.cold, samples: 0, covered: 0 };
+            await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [zb.x, zb.z]);
+            for (const [gun, k] of [['2', 'zombie-40mm'], ['1', 'zombie-25mm']]) {
+              await page.keyboard.press(gun);
+              await advance(page, 0.6, 1 / 60);
+              const near = await page.evaluate(() => window.__spooky.zombies());
+              const zz = near.sort((a, b) => Math.hypot(a.x - zb.x, a.z - zb.z) - Math.hypot(b.x - zb.x, b.z - zb.z))[0] ?? zb;
+              await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [zz.x, zz.z]);
+              await advance(page, 0.4, 1 / 60);
+              const sg = await page.evaluate(([x, z]) => window.__spooky.sight(x, z), [zz.x, zz.z]);
+              r.zombie.samples++;
+              if (sg.covered) r.zombie.covered++;
+              r.zombie[k === 'zombie-40mm' ? 'masked40' : 'masked25'] = sg.masked;
+              await shot(k);
+            }
+            if (r.zombie.covered) r.errors.push(`the zombie in the street is covered by a solid building (${r.zombie.covered}/${r.zombie.samples})`);
+          }
+        }
+      } catch (e) {
+        r.errors.push(String(e));
+      }
+      res.push(r);
+      await page.close();
+    }
+  }
+  // 3. Flashes while the aim sweeps across Midtown at 70 m/s (the keyboard nudge, 400 px/s, at this
+  //    640 x 360 window and the 40 mm lens) and then jumps between canyons once a second (fast taps):
+  //    buildings cut and come back all the time. Measured on 22 Nov, night vision, cut-away on / off:
+  //    a 150 m/s sweep fails the cell-area check either way (30% / 29%: Midtown's lit windows scrolling
+  //    past, not the cut-away), and so do jumps every 0.4 s (34% / 56%: the whole scene changing).
+  //    Both are pre-existing, reported as follow-ups.
+  for (const sensor of ['thermal', 'night']) {
+    const { page, errs } = await gamePage(browser, NY);
+    try {
+      if (sensor === 'night') await page.evaluate(() => window.__spooky.setSensor('night'));
+      await advance(page, 1.5);
+      await page.evaluate(() => {
+        const path = [[-250, -150], [250, 150], [-200, 200], [200, -200]];
+        const jumps = [[-93, 59], [228, -223], [-78, 163], [74, 53], [-245, 63], [234, -40]];
+        const t0 = window.__spooky.state().t;
+        const loop = () => {
+          if (window.__sweepStop) return;
+          const t = window.__spooky.state().t - t0;
+          if (t < 6) {
+            const d = t * 70;
+            let k = 0;
+            let left = d;
+            while (k < path.length - 2) {
+              const L = Math.hypot(path[k + 1][0] - path[k][0], path[k + 1][1] - path[k][1]);
+              if (left <= L) break;
+              left -= L;
+              k++;
+            }
+            const [a, b] = [path[k], path[k + 1]];
+            const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+            const u = Math.min(1, left / L);
+            window.__spooky.aimAt(a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u);
+          } else {
+            const j = jumps[Math.floor(t - 6) % jumps.length];
+            window.__spooky.aimAt(j[0], j[1]);
+          }
+          requestAnimationFrame(loop);
+        };
+        requestAnimationFrame(loop);
+      });
+      await fixedStep(page, 1 / 60);
+      await startMeter(page, 'canvas.game-canvas');
+      const t0 = await gameTime(page);
+      await untilGameTime(page, t0 + 11);
+      const frames = await stopMeter(page);
+      await page.evaluate(() => (window.__sweepStop = true));
+      const r = judge(`highrise: aim sweeping and jumping across Midtown, ${sensor === 'night' ? 'night vision' : 'white-hot'}`, frames);
+      r.errors.push(...errs);
+      res.push(r);
+    } catch (e) {
+      res.push({ type: `highrise: sweep (${sensor})`, errors: [String(e), ...errs] });
+    }
     await page.close();
   }
   return res;
