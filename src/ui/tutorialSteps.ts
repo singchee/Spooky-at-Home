@@ -28,8 +28,11 @@ export type TutorialInput =
   | { type: 'friendlyHit' }
   | { type: 'tick'; dt: number };
 
-/** How far the aim must travel to finish "look around" (metres on the ground). */
-export const AIM_METRES = 90;
+/**
+ * How far the aim must travel to finish "look around" (metres on the ground). About 40% of the 40 mm's view
+ * height (63 m since the 3.9 camera; it was 90 m when the default view covered ~300 m).
+ */
+export const AIM_METRES = 25;
 /** 25 mm rounds to fire (one second of trigger at 12 rounds a second). At least one must also hit. */
 export const ROUNDS_25 = 12;
 /** Seconds the crosshair must rest on the cold one / the friendlies. */
@@ -38,8 +41,8 @@ export const DANGER_TIME = 1;
 /** Seconds on thermal with the crosshair on the friendlies, looking at their ID panel. */
 export const PANEL_TIME = 1;
 /**
- * The widest view (degrees) that counts as a "narrow lens". Only the 25 mm zoomed in (2.5 degrees) is
- * this narrow: at the 105's 22 degrees, a zombie or a strobe is a pixel or two across.
+ * The widest view (degrees, at the game's LENS_RANGE) that counts as a "narrow lens": the 25 mm (1.6
+ * degrees) and 40 mm (2.0) lenses, zoomed or not. At the 105's 6 degrees a strobe is only a few pixels across.
  */
 export const NARROW_FOV = 3;
 /**

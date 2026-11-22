@@ -65,7 +65,7 @@ export class Hud {
     if (this.lines.length > 5) this.lines.shift();
   }
 
-  update(s: SimState, m: Mission, weapon: string, sensor: string, polarity: number, zoom: boolean, switching: boolean, now: number, danger = false, touch = false): void {
+  update(s: SimState, m: Mission, weapon: string, sensor: string, polarity: number, zoom: number, switching: boolean, now: number, danger = false, touch = false): void {
     // Weapons
     this.weapons.replaceChildren();
     for (const w of WEAPONS) {
@@ -99,7 +99,7 @@ export class Hud {
     this.lines = this.lines.filter((l) => now - l.t < 12);
     this.radio.replaceChildren(...this.lines.map((l) => el('div', l.alarm ? 'alarm' : undefined, l.text)));
     // Sensor and crosshair
-    this.sensor.textContent = `${sensor === 'thermal' ? (polarity ? 'IR  BLACK HOT' : 'IR  WHITE HOT') : 'NIGHT VISION'}${zoom ? '  ×2' : ''}`;
+    this.sensor.textContent = `${sensor === 'thermal' ? (polarity ? 'IR  BLACK HOT' : 'IR  WHITE HOT') : 'NIGHT VISION'}${Math.abs(zoom - 1) > 0.01 ? `  ×${zoom.toFixed(1)}` : ''}`;
     this.root.dataset.sensor = sensor;
     if (weapon !== this.lastWeapon) {
       this.cross.innerHTML = CROSSHAIRS[weapon] ?? ''; // static artwork constant, safe

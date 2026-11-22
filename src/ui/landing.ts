@@ -1,13 +1,10 @@
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { makeSampleTown } from '../map/sample';
 import type { MapData } from '../map/types';
 import { createSim } from '../sim/setup';
 import type { Sim } from '../sim/sim';
 import { buildWorld, type World } from '../world/buildWorld';
-import { SensorShader } from '../render/sensors';
+import { SensorPost } from '../render/sensorPost';
 import { AgentsView } from '../game/agentsView';
 import { Effects } from '../game/effects';
 import { el } from './dom';
@@ -130,8 +127,7 @@ class Backdrop {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(9, 1, 200, 6000);
-  private composer: EffectComposer;
-  private sensorPass: ShaderPass;
+  private post: SensorPost;
   private world: World;
   private agents = new AgentsView();
   private effects = new Effects();
@@ -157,9 +153,8 @@ class Backdrop {
   private onResize = () => this.resize();
 
   constructor(private container: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'low-power' });
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-    this.renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio));
     this.renderer.domElement.className = 'landing-canvas';
     this.renderer.domElement.setAttribute('aria-hidden', 'true');
     container.appendChild(this.renderer.domElement);
@@ -174,10 +169,8 @@ class Backdrop {
     this.world = buildWorld(this.map, 1);
     this.scene.add(this.world.group, this.agents.group, this.effects.group);
 
-    this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.sensorPass = new ShaderPass(SensorShader);
-    this.composer.addPass(this.sensorPass);
+    // The same sensor picture as the game, at up to 1.5x resolution (it's a background).
+    this.post = new SensorPost(this.renderer, 'high', 1.5);
 
     this.reduced = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
     window.addEventListener('resize', this.onResize);
@@ -262,13 +255,14 @@ class Backdrop {
     this.camera.lookAt(c.x, 0, c.z);
     this.agents.update(this.sim, this.clock);
     this.effects.update(this.clock, dt);
-    const u = this.sensorPass.uniforms;
+    const u = this.post.uniforms;
+    u.calm.value = this.still ? 1 : 0;
     u.time.value = this.clock;
     u.mode.value = 0;
     u.polarity.value = 0;
     u.washout.value = 0;
     u.blank.value = this.still ? 0 : this.boot;
-    this.composer.render();
+    this.post.render(this.scene, this.camera);
   }
 
   /** Ease the view toward the horde with the most zombies still standing, so there's always something shambling. */
@@ -298,10 +292,7 @@ class Backdrop {
   private resize(): void {
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
-    this.renderer.setSize(w, h);
-    this.composer.setSize(w, h);
-    const pr = this.renderer.getPixelRatio();
-    (this.sensorPass.uniforms.res.value as THREE.Vector2).set(w * pr, h * pr);
+    this.post.setSize(w, h);
     this.camera.aspect = w / h;
     // Portrait screens are narrow: widen the lens so the town still reads.
     this.camera.fov = w / h < 1 ? 15 : 9;
@@ -319,8 +310,7 @@ class Backdrop {
     this.world.dispose();
     this.agents.dispose();
     this.effects.dispose();
-    this.sensorPass.dispose?.();
-    this.composer.dispose();
+    this.post.dispose();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
     this.renderer.domElement.remove();
