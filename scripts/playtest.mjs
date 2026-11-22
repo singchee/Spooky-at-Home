@@ -3316,6 +3316,7 @@ async function crowdFlashChecks(browser) {
       const r = judge(`crowd A: surge, all three guns into the densest stream 10 s, ${label}, ${size} ${viewport.width}x${viewport.height}`, frames, { kills: st.kills - k0, rounds: st.shots, alive: st.zombiesAlive });
       if (st.kills - k0 < 50) r.errors.push(`only ${st.kills - k0} kills in 10 s: was the gun firing into the crowd?`);
       r.errors.push(...errs);
+      r.ok = !r.errors.length;
       res.push(r);
       await page.close();
     }
@@ -3335,6 +3336,7 @@ async function crowdFlashChecks(browser) {
     const r = judge('crowd B: 10 s of mass kills (105, 40 and 25 into the three densest cells), white-hot, huge', frames, { kills, killsPerSec: Number((kills / 10).toFixed(1)) });
     if (kills < 500) r.errors.push(`${(kills / 10).toFixed(1)} kills a second: the scenario needs over 50 (not a flash failure; the crowd wasn't dense enough)`);
     r.errors.push(...errs);
+    r.ok = !r.errors.length;
     res.push(r);
     await page.close();
   }
@@ -3363,6 +3365,7 @@ async function crowdFlashChecks(browser) {
     if (!fired) r.errors.push('the 105 did not fire');
     if (zl < 2) r.errors.push(`zoom only x${zl}`);
     r.errors.push(...errs);
+    r.ok = !r.errors.length;
     res.push(r);
     await page.close();
   }
