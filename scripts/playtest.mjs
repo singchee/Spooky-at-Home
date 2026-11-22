@@ -1036,6 +1036,7 @@ async function wayInChecks(browser) {
       const host = m[1];
       const part = host.startsWith('nominatim') ? 'geocode' : String(init.body ?? '').includes('street_lamp') ? 'extras' : 'core';
       window.__osm.push({ host, part, at: Date.now() });
+      init.signal?.addEventListener('abort', () => window.__osm.push({ host, part, at: Date.now(), aborted: true }));
       const signal = init.signal;
       if (part === 'geocode') return new Response(JSON.stringify(geocode), { headers: { 'content-type': 'application/json' } });
       const how = plan[part]?.[host] ?? plan[part]?.any ?? 'fail';
@@ -1487,13 +1488,76 @@ async function wayInChecks(browser) {
     await page.screenshot({ path: shot });
     await page.waitForSelector('.menu .recon .recon-cards > *', { timeout: 20000 });
     await extrasSettled(page).catch(() => errs.push('extras never settled after a fallback'));
-    const calls = await page.evaluate(() => window.__osm.filter((c) => c.part !== 'geocode'));
+    const calls = await page.evaluate(() => window.__osm.filter((c) => c.part !== 'geocode' && !c.aborted));
     const order = calls.map((c) => `${c.part}@${c.host}`).join(', ');
     if (order !== 'core@overpass-api.de, core@overpass.kumi.systems, extras@overpass.kumi.systems') errs.push(`servers asked: ${order}`);
     if (calls.length >= 2 && calls[1].at - calls[0].at < 45000) errs.push(`the second server was asked before the first one's 45 s were up (${calls[1].at - calls[0].at} ms)`);
     const timing = await page.textContent('.recon .recon-timing');
     if (!/^Loaded in [\d:.]+(?: s)? \(server 4\d s, .* from overpass\.kumi\.systems/.test(timing ?? '')) errs.push(`timing line after a fallback: ${timing}`);
     res.push({ type: 'way in: first server times out, the other answers', errors: errs, order, timing, shots: { fallback: shot } });
+    await page.close();
+  }
+
+  // 8e. Still nothing at 2:00: nothing is stopped; the player is asked (Keep waiting, the default; the sample
+  //     town; Cancel). Keep waiting and a late answer still loads the map; if nobody ever answers, the busy
+  //     message comes at the final limit (45 s + 300 s). The page clock is fast-forwarded.
+  for (const ending of ['late answer', 'never answers', 'sample town']) {
+    const { page, errs } = await wayInPage(browser, desktop, OSM.none(), null);
+    await page.clock.install();
+    const kumi = ending === 'late answer' ? { delay: 150_000, chunks: 3, gap: 200, length: true } : 'hang';
+    await page.addInitScript(slowOsm, slowPlan({ core: { 'overpass-api.de': 'hang', 'overpass.kumi.systems': kumi }, extras: { any: { delay: 200, chunks: 1, gap: 0, length: true } } }));
+    await page.goto(`http://localhost:${PORT}/?screen=scout`);
+    await scoutFor(page, 'Test Reef');
+    await page.waitForFunction((w) => document.querySelector('.scout-load-text')?.textContent === w, WAITING, { timeout: 10000 });
+    await page.clock.fastForward('01:50');
+    if (await page.$('.scout-ask:not([hidden])')) errs.push('asked before 2:00');
+    await page.clock.fastForward('00:11');
+    await page.waitForSelector('.scout-ask:not([hidden])', { timeout: 5000 }).catch(() => errs.push('no choice at 2:00'));
+    const askSt = await page.evaluate(() => ({
+      text: document.querySelector('.scout-ask-text')?.textContent ?? '',
+      buttons: [...document.querySelectorAll('.scout-ask button')].map((b) => [b.textContent, Math.round(b.getBoundingClientRect().height)]),
+      focused: document.activeElement?.textContent ?? '',
+      aborted: window.__osm.filter((c) => c.aborted).map((c) => c.host),
+      plainCancel: !document.querySelector('.scout-cancel')?.hidden,
+    }));
+    if (!/^Still waiting for OpenStreetMap \(2:0\d\)\.$/.test(askSt.text)) errs.push(`choice text: ${askSt.text}`);
+    if (JSON.stringify(askSt.buttons.map((b) => b[0])) !== '["Keep waiting","Try the sample town","Cancel"]' || askSt.buttons.some((b) => b[1] < 48)) errs.push(`choice buttons: ${JSON.stringify(askSt.buttons)}`);
+    if (askSt.focused !== 'Keep waiting') errs.push(`Keep waiting isn't the default: focus on "${askSt.focused}"`);
+    if (askSt.aborted.join() !== 'overpass-api.de') errs.push(`at 2:00 only the first server's 45 s wait should have been stopped: ${askSt.aborted.join()}`);
+    if (askSt.plainCancel) errs.push('two Cancel buttons while asking');
+    const shots = {};
+    if (ending === 'late answer') {
+      shots.ask = `${out}/wayin-progress-still-waiting-desktop.png`;
+      await page.screenshot({ path: shots.ask });
+    }
+    if (ending === 'sample town') {
+      await page.click('.scout-ask-sample');
+      await page.waitForSelector('.menu .recon .mission-card', { timeout: 10000 });
+      const name = await page.textContent('.recon h2');
+      if (/Test Reef/.test(name ?? '')) errs.push('"Try the sample town" opened the typed place');
+      const stopped = await page.evaluate(() => window.__osm.filter((c) => c.aborted && c.host === 'overpass.kumi.systems').length);
+      if (stopped !== 1) errs.push('"Try the sample town" left the download running');
+    } else {
+      await page.click('.scout-keep');
+      const after = await page.evaluate(() => ({ ask: !document.querySelector('.scout-ask')?.hidden, cancel: !document.querySelector('.scout-cancel')?.hidden, loading: !document.querySelector('.scout-progress')?.hidden }));
+      if (after.ask || !after.cancel || !after.loading) errs.push(`after Keep waiting: ${JSON.stringify(after)}`);
+      if (ending === 'late answer') {
+        await page.clock.fastForward('02:30'); // kumi answers 150 s after it was asked (asked once the jump past 45 s fired)
+        await page.waitForSelector('.menu .recon .recon-cards > *', { timeout: 20000 }).catch(() => errs.push('a late answer after Keep waiting did not load the map'));
+        const timing = await page.textContent('.recon .recon-timing').catch(() => '');
+        if (!/^Loaded in [3-5]:\d\d \(server [3-5]:\d\d, /.test(timing ?? '')) errs.push(`timing after a long wait: ${timing}`);
+      } else {
+        await page.clock.fastForward('03:40'); // to 5:41: still within the final limit
+        if (await page.$('.scout-msg:not([hidden])')) errs.push('gave up before the final limit');
+        await page.clock.fastForward('00:10');
+        await page.waitForSelector('.scout-msg:not([hidden])', { timeout: 10000 }).catch(() => undefined);
+        const st = await scoutState(page);
+        if (!MSG.busy.test(st.msg ?? '') || st.role !== 'alert' || st.recon) errs.push(`final limit: ${JSON.stringify(st)}`);
+        shots.busy = `${out}/wayin-progress-final-busy-desktop.png`;
+        await page.screenshot({ path: shots.busy });
+      }
+    }
+    res.push({ type: `way in: still waiting at 2:00 (${ending})`, errors: errs, shots });
     await page.close();
   }
 

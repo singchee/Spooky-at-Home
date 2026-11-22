@@ -89,6 +89,17 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   const spoken = el('p', 'sr-only scout-spoken', undefined, progress);
   const cancel = el('button', 'scout-cancel', 'Cancel', progress);
   cancel.type = 'button';
+  // Still no answer after 2 minutes: offer a choice. The download carries on unless the player says otherwise.
+  const ask = el('div', 'scout-ask', undefined, progress);
+  ask.hidden = true;
+  const askText = el('p', 'scout-ask-text', undefined, ask);
+  const askRow = el('div', 'row scout-ask-row', undefined, ask);
+  const keepWaiting = el('button', 'primary scout-keep', 'Keep waiting', askRow);
+  keepWaiting.type = 'button';
+  const askSample = el('button', 'scout-ask-sample', 'Try the sample town', askRow);
+  askSample.type = 'button';
+  const askCancel = el('button', 'scout-ask-cancel', 'Cancel', askRow);
+  askCancel.type = 'button';
 
   const msg = el('div', 'scout-msg', undefined, scout);
   msg.hidden = true;
@@ -229,7 +240,25 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
       showDetail(null);
       clock = setInterval(tick, 1000);
     }
+    showAsk(null);
   };
+  /** The 2-minute choice (waitedMs), or (null) put it away and bring back the plain Cancel. */
+  const showAsk = (waitedMs: number | null) => {
+    const on = waitedMs !== null;
+    if (ask.hidden === !on) return;
+    ask.hidden = !on;
+    cancel.hidden = on;
+    if (on) {
+      askText.textContent = `Still waiting for OpenStreetMap (${formatClock(waitedMs)}).`;
+      spoken.textContent = `Still waiting for OpenStreetMap after ${Math.round(waitedMs / 60000)} minutes. Keep waiting, try the sample town, or cancel.`;
+      keepWaiting.focus({ preventScroll: true });
+    } else if (document.activeElement && ask.contains(document.activeElement) && !progress.hidden) {
+      cancel.focus({ preventScroll: true });
+    }
+  };
+  keepWaiting.addEventListener('click', () => showAsk(null));
+  askCancel.addEventListener('click', () => cancel.click());
+  askSample.addEventListener('click', () => sample());
 
   // ----- the extras (trees, lamps, bus routes): fetched after recon shows, merged when they arrive -----
   let extrasCtrl: AbortController | null = null;
@@ -313,7 +342,15 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
         setStage(1);
         placeLine.textContent = `${place.label}.`;
         // The core only: what missions and recon need. The extras follow once recon is showing.
-        const got = await fetchOverpassTimed(place, HALF, signal, { part: 'core', onProgress: (p) => id === run && showDetail(p) });
+        const got = await fetchOverpassTimed(place, HALF, signal, {
+          part: 'core',
+          onProgress: (p) => {
+            if (id !== run) return;
+            showDetail(p);
+            if (p.stage === 'downloading') showAsk(null); // it's arriving: no need to ask
+          },
+          onLongWait: (ms) => id === run && showAsk(ms),
+        });
         json = { ...got.json, parts: ['core'] };
         stats = got.stats;
       }

@@ -16,13 +16,17 @@ export const OVERPASS_ENDPOINTS = ['https://overpass-api.de/api/interpreter', 'h
  * saying so; past these limits the game moves on, one server at a time (never both at once:
  * Overpass is a shared service).
  * - firstAnswerMs: the first server gets this long to start answering, then the next one is asked.
+ * - askAtMs: still no answer after this long: the player is offered a choice (keep waiting, the
+ *   sample town, or cancel). Nothing is stopped: a busy server often does answer, minutes later.
+ * - serverMaxMs: the most any one server is waited for, and its own [timeout:], so the server
+ *   doesn't give up on the query before the game does.
  * - overallWaitMs: total time spent waiting for any server to start answering; then "busy".
  * - stallMs: once an answer is arriving, how long it may go without sending a single byte.
  * A download that keeps arriving is never cut off: a slow home connection still gets its map.
  */
-export const LOAD_LIMITS = { firstAnswerMs: 45_000, overallWaitMs: 120_000, stallMs: 30_000 };
-/** The extras are only looks: wait less for them, and say nothing if they never come. */
-export const EXTRAS_LIMITS = { firstAnswerMs: 60_000, overallWaitMs: 90_000, stallMs: 30_000 };
+export const LOAD_LIMITS = { firstAnswerMs: 45_000, askAtMs: 120_000, serverMaxMs: 300_000, overallWaitMs: 345_000, stallMs: 30_000 };
+/** The extras are only looks: wait less for them, never ask, and say nothing if they never come. */
+export const EXTRAS_LIMITS = { firstAnswerMs: 60_000, askAtMs: Infinity, serverMaxMs: 90_000, overallWaitMs: 90_000, stallMs: 30_000 };
 
 const ROAD_WIDTHS: Record<string, number> = {
   motorway: 14, trunk: 12, primary: 10, secondary: 9, tertiary: 8, unclassified: 6, residential: 7,
@@ -248,6 +252,8 @@ export interface FetchOptions {
   limits?: Partial<typeof LOAD_LIMITS>;
   /** Ask this server first (the extras go to whichever server just answered the core). */
   preferHost?: string;
+  /** Called once if no server has started answering after limits.askAtMs. The request carries on. */
+  onLongWait?: (waitedMs: number) => void;
 }
 
 const hostOf = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
@@ -299,65 +305,75 @@ export async function fetchOverpassTimed(origin: LatLon, half: number, signal?: 
   let movedOn: string | undefined;
   let waited = 0;
   const kinds: MapErrorKind[] = [];
-  for (let attempt = 0; attempt < urls.length; attempt++) {
-    const url = urls[attempt];
-    const host = hostOf(url);
-    // The first server gets firstAnswerMs; the next one whatever is left of overallWaitMs.
-    const limit = attempt === 0 ? Math.min(limits.firstAnswerMs, limits.overallWaitMs) : limits.overallWaitMs - waited;
-    if (limit < 5_000) break;
-    const ctrl = new AbortController();
-    const cancel = () => ctrl.abort();
-    signal?.addEventListener('abort', cancel);
-    let gaveUp: 'wait' | 'stall' | null = null;
-    let timer = setTimeout(() => ((gaveUp = 'wait'), ctrl.abort()), limit);
-    const t0 = now();
-    let tFirst = 0;
-    let bytes = 0;
-    let total: number | null = null;
-    try {
-      if (signal?.aborted) throw new DOMException('cancelled', 'AbortError');
-      o.onProgress?.({ stage: 'waiting', host, attempt, bytes: 0, total: null, movedOn });
-      const res = await fetchOrOffline(url, {
-        method: 'POST',
-        body: 'data=' + encodeURIComponent(buildQuery(origin, half, o.part ?? 'core', limit / 1000)),
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        signal: ctrl.signal,
-      }, 'the map server');
-      tFirst = now();
-      if (!res.ok) throw new MapLoadError(BUSY_STATUS.has(res.status) ? 'busy' : 'other', `${url} answered ${res.status}`);
-      total = announcedLength(res);
-      const stall = () => {
-        clearTimeout(timer);
-        timer = setTimeout(() => ((gaveUp = 'stall'), ctrl.abort()), limits.stallMs);
-      };
-      stall();
-      o.onProgress?.({ stage: 'downloading', host, attempt, bytes: 0, total, movedOn });
-      const json = await readBody(res, (n) => {
-        bytes = n;
+  const started = now();
+  let answering = false;
+  const ask = Number.isFinite(limits.askAtMs) && o.onLongWait
+    ? setTimeout(() => !answering && !signal?.aborted && o.onLongWait?.(now() - started), limits.askAtMs)
+    : null;
+  try {
+    for (let attempt = 0; attempt < urls.length; attempt++) {
+      const url = urls[attempt];
+      const host = hostOf(url);
+      // The first server gets firstAnswerMs; the next one what's left of overallWaitMs, up to serverMaxMs.
+      const limit = Math.min(attempt === 0 ? limits.firstAnswerMs : Infinity, limits.serverMaxMs, limits.overallWaitMs - waited);
+      if (limit < 5_000) break;
+      const ctrl = new AbortController();
+      const cancel = () => ctrl.abort();
+      signal?.addEventListener('abort', cancel);
+      let gaveUp: 'wait' | 'stall' | null = null;
+      let timer = setTimeout(() => ((gaveUp = 'wait'), ctrl.abort()), limit);
+      const t0 = now();
+      let tFirst = 0;
+      let bytes = 0;
+      let total: number | null = null;
+      try {
+        if (signal?.aborted) throw new DOMException('cancelled', 'AbortError');
+        o.onProgress?.({ stage: 'waiting', host, attempt, bytes: 0, total: null, movedOn });
+        const res = await fetchOrOffline(url, {
+          method: 'POST',
+          body: 'data=' + encodeURIComponent(buildQuery(origin, half, o.part ?? 'core', limit / 1000)),
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          signal: ctrl.signal,
+        }, 'the map server');
+        tFirst = now();
+        answering = res.ok;
+        if (!res.ok) throw new MapLoadError(BUSY_STATUS.has(res.status) ? 'busy' : 'other', `${url} answered ${res.status}`);
+        total = announcedLength(res);
+        const stall = () => {
+          clearTimeout(timer);
+          timer = setTimeout(() => ((gaveUp = 'stall'), ctrl.abort()), limits.stallMs);
+        };
         stall();
-        o.onProgress?.({ stage: 'downloading', host, attempt, bytes, total, movedOn });
-      });
-      // A timed-out or failed query still answers 200; try the next server instead.
-      const ok = checkOverpassAnswer(json as OverpassJson, url);
-      return { json: ok, stats: { host, waitMs: waited + (tFirst - t0), downloadMs: now() - tFirst, bytes, attempts: attempt + 1 } };
-    } catch (e) {
-      if (signal?.aborted) throw isAbort(e) ? e : new DOMException('cancelled', 'AbortError');
-      const err = gaveUp === 'wait'
-        ? new MapLoadError('busy', `${host} didn't start answering within ${Math.round(limit / 1000)} s`)
-        : gaveUp === 'stall'
-          ? new MapLoadError('busy', `${host} stopped sending for ${Math.round(limits.stallMs / 1000)} s`)
-          : e;
-      lastErr = err;
-      const kind = classifyMapError(err);
-      kinds.push(kind);
-      movedOn = gaveUp === 'wait'
-        ? `no answer from ${host} within ${Math.round(limit / 1000)} seconds`
-        : kind === 'offline' ? `couldn't reach ${host}` : `the server at ${host} was too busy`;
-    } finally {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', cancel);
-      waited += (tFirst || now()) - t0;
+        o.onProgress?.({ stage: 'downloading', host, attempt, bytes: 0, total, movedOn });
+        const json = await readBody(res, (n) => {
+          bytes = n;
+          stall();
+          o.onProgress?.({ stage: 'downloading', host, attempt, bytes, total, movedOn });
+        });
+        // A timed-out or failed query still answers 200; try the next server instead.
+        const ok = checkOverpassAnswer(json as OverpassJson, url);
+        return { json: ok, stats: { host, waitMs: waited + (tFirst - t0), downloadMs: now() - tFirst, bytes, attempts: attempt + 1 } };
+      } catch (e) {
+        if (signal?.aborted) throw isAbort(e) ? e : new DOMException('cancelled', 'AbortError');
+        const err = gaveUp === 'wait'
+          ? new MapLoadError('busy', `${host} didn't start answering within ${Math.round(limit / 1000)} s`)
+          : gaveUp === 'stall'
+            ? new MapLoadError('busy', `${host} stopped sending for ${Math.round(limits.stallMs / 1000)} s`)
+            : e;
+        lastErr = err;
+        const kind = classifyMapError(err);
+        kinds.push(kind);
+        movedOn = gaveUp === 'wait'
+          ? `no answer from ${host} within ${Math.round(limit / 1000)} seconds`
+          : kind === 'offline' ? `couldn't reach ${host}` : `the server at ${host} was too busy`;
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', cancel);
+        waited += (tFirst || now()) - t0;
+      }
     }
+  } finally {
+    if (ask) clearTimeout(ask);
   }
   // Busy anywhere (or out of time): worth another go soon. Unreachable everywhere: a connection problem.
   const kind: MapErrorKind = kinds.includes('busy') || !kinds.length ? 'busy' : kinds.every((k) => k === 'offline') ? 'offline' : 'other';

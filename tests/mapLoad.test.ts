@@ -142,31 +142,76 @@ describe('per-server time limits (3.20)', () => {
     expect(json.elements).toHaveLength(1);
     expect(calls.map((c) => c.host)).toEqual(HOSTS);
     expect(calls[1].at - t0).toBe(LOAD_LIMITS.firstAnswerMs);
-    // Overpass's own limit matches the wait: 45 s, then what's left of the 2 minutes.
-    expect(calls.map((c) => c.timeout)).toEqual([45, 75]);
+    // Overpass's own limit matches the wait: 45 s, then up to 300 s so the server doesn't give up first.
+    expect(calls.map((c) => c.timeout)).toEqual([45, 300]);
     expect(stats).toMatchObject({ host: HOSTS[1], attempts: 2 });
     expect(stats.waitMs).toBeGreaterThanOrEqual(45_000);
     expect(seen.find((s) => s.attempt === 1)?.movedOn).toBe('no answer from overpass-api.de within 45 seconds');
   });
 
-  it('when nobody answers, gives up after the overall limit with the plain-English "busy"', async () => {
+  it('at 2:00 nothing is stopped: the player is asked once, and the request carries on', async () => {
+    const signals: AbortSignal[] = [];
+    const calls = stubFetch((_h, signal) => (signals.push(signal), hang(signal)));
+    const asked: number[] = [];
+    const p = fetchOverpass(origin, 500, undefined, { onLongWait: (ms) => asked.push(ms) }).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(LOAD_LIMITS.askAtMs - 1_000);
+    expect(asked).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(asked).toEqual([120_000]);
+    expect(calls).toHaveLength(2);
+    expect(signals[1].aborted).toBe(false); // the second server is still being waited for
+    // "Keep waiting" is simply not cancelling: a late answer still loads the map.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(signals[1].aborted).toBe(false);
+    expect(asked).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(LOAD_LIMITS.overallWaitMs);
+    expect(classifyMapError(await p)).toBe('busy');
+  });
+
+  it('a late answer after the 2-minute question still loads the map', async () => {
+    const calls = stubFetch((host, signal) =>
+      host === HOSTS[0] ? hang(signal) : new Promise<Response>((res) => setTimeout(() => res(streamed(JSON.stringify(ok), 2, 100, signal)), 200_000)));
+    const asked: number[] = [];
+    const p = fetchOverpassTimed(origin, 500, undefined, { onLongWait: (ms) => asked.push(ms) });
+    await vi.advanceTimersByTimeAsync(246_000);
+    const { json, stats } = await p;
+    expect(json.elements).toHaveLength(1);
+    expect(asked).toEqual([120_000]);
+    expect(stats.waitMs).toBeGreaterThanOrEqual(245_000);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('no question once the answer is arriving', async () => {
+    stubFetch((_h, signal) => new Promise<Response>((res) => setTimeout(() => res(streamed(JSON.stringify({ ...ok, pad: 'x'.repeat(500) }), 10, 20_000, signal)), 30_000)));
+    const asked: number[] = [];
+    const p = fetchOverpassTimed(origin, 500, undefined, { onLongWait: (ms) => asked.push(ms) });
+    await vi.advanceTimersByTimeAsync(300_000);
+    await p;
+    expect(asked).toEqual([]);
+  });
+
+  it('when nobody answers, gives up at the final limit (45 s + 300 s) with the plain-English "busy"', async () => {
     const t0 = Date.now();
     const calls = stubFetch((_h, signal) => hang(signal));
-    const p = fetchOverpass(origin, 500).catch((e) => e);
-    await vi.advanceTimersByTimeAsync(LOAD_LIMITS.overallWaitMs + 1_000);
+    let settled = false;
+    const p = fetchOverpass(origin, 500).catch((e) => e).finally(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(LOAD_LIMITS.overallWaitMs - 1_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(2_000);
     const e = await p;
     expect(classifyMapError(e)).toBe('busy');
     expect(mapErrorMessage(e)).toMatch(/busy right now\. Try again in a minute/);
     expect(calls).toHaveLength(2);
+    expect(calls[1].timeout).toBe(300);
     expect(Date.now() - t0).toBeLessThanOrEqual(LOAD_LIMITS.overallWaitMs + 1_000);
   });
 
-  it('a quick failure on the first server gives the second the rest of the budget', async () => {
+  it('a quick failure on the first server gives the second the server maximum', async () => {
     const calls = stubFetch((host, signal) => (host === HOSTS[0] ? Promise.reject(new TypeError('Failed to fetch')) : hang(signal)));
     const p = fetchOverpass(origin, 500).catch((e) => e);
     await vi.advanceTimersByTimeAsync(LOAD_LIMITS.overallWaitMs + 1_000);
     expect(classifyMapError(await p)).toBe('busy');
-    expect(calls[1].timeout).toBe(120);
+    expect(calls[1].timeout).toBe(LOAD_LIMITS.serverMaxMs / 1000);
   });
 
   it('a slow download that keeps arriving is never cut off (a slow home connection still gets its map)', async () => {
