@@ -27,7 +27,8 @@ interface PlaceEntry {
   levels: Partial<Record<Level, CampaignRecord>>;
 }
 
-const PLACE_KEY = /^-?\d{1,16}:[0-9a-f]{8}$/;
+/** placeKey(): hashed seed, then the map's shape. Anything else is kept in memory only, never stored. */
+const PLACE_KEY = /^[0-9a-f]{8}:[0-9a-f]{8}$/;
 const FP = /^[0-9a-f]{8}$/;
 const BEST_KEYS = ['grade', 'time', 'survivorsTotal', 'survivorsSaved', 'friendlyHits', 'kills', 'integrity'] as const;
 const NIGHT_KEYS = ['fp', 'tries', 'best'];
@@ -76,6 +77,8 @@ export class CampaignStore {
   private cache: Record<string, PlaceEntry> | null = null;
   /** False once storage is missing or has refused a read or a write: progress is kept for this session only. */
   private persistent: boolean;
+  /** Places whose key storage would reject: kept for this session, never written. */
+  private memoryOnly = new Set<string>();
 
   constructor(
     private store: KeyValueStore | null,
@@ -86,18 +89,21 @@ export class CampaignStore {
 
   /** One line for the campaign screen when progress won't survive this session, else null. */
   get warning(): string | null {
-    return this.persistent ? null : NOT_KEPT;
+    return this.persistent && !this.memoryOnly.size ? null : NOT_KEPT;
   }
 
-  private load(): Record<string, PlaceEntry> {
-    if (this.cache) return this.cache;
+  /** What storage holds now, validated; null when it can't be read (then nothing is persistent). */
+  private read(): Record<string, PlaceEntry> | null {
     let raw: unknown = null;
     try {
       const text = this.store?.getItem(CAMPAIGN_KEY) ?? null;
       if (text !== null && text.length <= MAX_STORED_CHARS) raw = JSON.parse(text);
     } catch (e) {
       // A corrupt value starts fresh; a read that throws means the browser won't keep anything.
-      if (!(e instanceof SyntaxError)) this.persistent = false;
+      if (!(e instanceof SyntaxError)) {
+        this.persistent = false;
+        return null;
+      }
     }
     const out: Record<string, PlaceEntry> = {};
     if (isObj(raw) && raw.v === VERSION && isObj(raw.places)) {
@@ -105,16 +111,35 @@ export class CampaignStore {
         if (PLACE_KEY.test(k) && validPlace(p)) out[k] = { updated: p.updated, levels: Object.fromEntries(Object.entries(p.levels).map(([b, r]) => [b, clean(r!)])) };
       }
     }
-    this.cache = out;
     return out;
+  }
+
+  private load(): Record<string, PlaceEntry> {
+    this.cache ??= this.read() ?? {};
+    return this.cache;
+  }
+
+  /**
+   * Re-reads storage before a write, so a tab opened earlier never overwrites what another tab saved since.
+   * While storage works it is the truth (plus this session's memory-only places); once it doesn't, memory is.
+   */
+  private refresh(): Record<string, PlaceEntry> {
+    const mem = this.load();
+    const fresh = this.persistent ? this.read() : null;
+    if (fresh) {
+      for (const k of this.memoryOnly) if (mem[k]) fresh[k] = mem[k];
+      this.cache = fresh;
+    }
+    return this.load();
   }
 
   private save(): void {
     const all = this.load();
-    const keys = Object.keys(all).sort((a, b) => all[a].updated - all[b].updated);
+    const keys = Object.keys(all).filter((k) => !this.memoryOnly.has(k)).sort((a, b) => all[a].updated - all[b].updated);
     for (const k of keys.slice(0, Math.max(0, keys.length - MAX_PLACES))) delete all[k];
+    const stored = Object.fromEntries(Object.entries(all).filter(([k]) => !this.memoryOnly.has(k)));
     try {
-      this.store?.setItem(CAMPAIGN_KEY, JSON.stringify({ v: VERSION, places: all }));
+      this.store?.setItem(CAMPAIGN_KEY, JSON.stringify({ v: VERSION, places: stored }));
     } catch {
       this.persistent = false; // storage full or blocked: keep it for this session
     }
@@ -132,9 +157,10 @@ export class CampaignStore {
     return p ? ([1, 2, 3] as Level[]).filter((b) => p.levels[b]) : [];
   }
 
+  /** Saves one difficulty's record for a place, merged into what storage holds now. */
   put(place: string, level: Level, r: CampaignRecord): void {
-    if (!PLACE_KEY.test(place)) return;
-    const all = this.load();
+    const all = this.refresh();
+    if (!PLACE_KEY.test(place)) this.memoryOnly.add(place);
     const entry = all[place] ?? { updated: 0, levels: {} };
     entry.levels[level] = clean(r);
     entry.updated = this.now();
@@ -148,13 +174,15 @@ export class CampaignStore {
    * changed) is reset with every night after it, and the reset is saved; `reset` names the first such night.
    */
   open(place: string, level: Level, nights: readonly Pick<NightPlan, 'night' | 'fp'>[]): { record: CampaignRecord; reset: Night | null } {
+    this.refresh();
     const r = reconcile(nights, this.get(place, level));
     if (r.reset) this.put(place, level, r.record);
     return { record: clean(r.record), reset: r.reset };
   }
 
-  /** Records a finished run of a night (see applyRun) and saves it. */
+  /** Records a finished run of a night (see applyRun) on top of what storage holds now, and saves it. */
   record(place: string, level: Level, night: Night, fp: string, run: Run): ReturnType<typeof applyRun> {
+    this.refresh();
     const before = this.get(place, level);
     const r = applyRun(before, night, fp, run);
     if (r.record !== before) this.put(place, level, r.record);
@@ -163,7 +191,8 @@ export class CampaignStore {
 
   /** "Forget this campaign": every difficulty for this place. */
   forget(place: string): void {
-    const all = this.load();
+    const all = this.refresh();
+    this.memoryOnly.delete(place);
     if (!(place in all)) return;
     delete all[place];
     this.save();

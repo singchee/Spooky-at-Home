@@ -2,7 +2,7 @@ import type { TemplateId } from '../map/recon';
 import type { Mission, MissionType } from './missions';
 import type { SimState } from './sim';
 import { savedPhrase, type Grade } from './score';
-import { betterRun, firstUnwon, type CampaignRecord, type Night, type NightPlan, type NightRecord, type Run, type RunNumbers } from './campaign';
+import { betterRun, firstUnwon, placeIsTrue, type CampaignRecord, type Night, type NightPlan, type NightRecord, type Run, type RunNumbers } from './campaign';
 
 /**
  * Three Nights: every word on the campaign's radio and screens, as data (spec 001; docs/story/campaign.md,
@@ -161,7 +161,8 @@ export function cardLines(c: CardContext): CaptionedLine[] {
 /**
  * Lines at sim start, said in order before cleared-hot. One extra line at most: a truth line (`first-cold`
  * on the first night with cold-blooded contacts, first attempt; `big-expected` on night three when a big
- * wave is planned) beats the template's flavour line.
+ * wave is planned) beats the template's flavour line, which plays only when the mission makes it true
+ * (placeIsTrue: a horde really is on the courts, in the park, or running cold in the trees).
  */
 export function startLines(c: { night: Night; nights: readonly NightPlan[]; record: CampaignRecord }): CaptionedLine[] {
   const x = c.nights[c.night - 1];
@@ -171,7 +172,7 @@ export function startLines(c: { night: Night; nights: readonly NightPlan[]; reco
   let extra: LineId | undefined;
   if (first && firstColdNight(c.nights) === c.night) extra = 'first-cold';
   else if (c.night === 3 && x.mission.waves?.kinds?.includes('big')) extra = 'big-expected';
-  else extra = TEMPLATE_LINE[x.template];
+  else if (placeIsTrue(x.template, x.mission)) extra = TEMPLATE_LINE[x.template];
   if (extra) out.push(line(extra));
   return out;
 }
@@ -257,7 +258,7 @@ export function tally(nights: readonly NightPlan[], r: CampaignRecord): Tally | 
     nights: nights.map((x, i) => ({
       night: x.night, label: `Night ${NIGHT_WORD[x.night]}`, text: tallyText(x.mission, bests[i]!), grade: bests[i]!.grade, gradeWord: GRADE_WORD[bests[i]!.grade],
     })),
-    friendlyFire: ff === 0 ? 'Friendly fire: none in three nights.' : `Friendly fire: ${plural(ff, 'incident')}.`,
+    friendlyFire: ff === 0 ? 'Friendly fire in your best runs: none.' : `Friendly fire in your best runs: ${plural(ff, 'incident')}.`,
   };
 }
 

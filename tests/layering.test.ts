@@ -29,7 +29,7 @@ describe('layering (hard rules 1 and 2)', () => {
   const sim = files('src/sim');
   const map = files('src/map');
 
-  it('src/sim and src/map import neither three nor the DOM, and src/sim has no Math.random or Date', () => {
+  it('src/sim and src/map import neither three nor the DOM nor use Math.random, and src/sim has no Date', () => {
     expect(sim.length).toBeGreaterThan(3);
     expect(map.length).toBeGreaterThan(3);
     for (const f of [...sim, ...map]) {
@@ -40,6 +40,7 @@ describe('layering (hard rules 1 and 2)', () => {
       }
       expect(DOM.exec(src)?.[0] ?? null, `${f} touches the DOM`).toBeNull();
     }
+    for (const f of map) expect(/Math\.random\s*\(/.test(code(f)), `${f} uses Math.random`).toBe(false);
     for (const f of sim) {
       const src = code(f);
       expect(/Math\.random\s*\(/.test(src), `${f} uses Math.random`).toBe(false);
