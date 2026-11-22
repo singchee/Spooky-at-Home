@@ -1073,7 +1073,9 @@ async function wayInChecks(browser) {
   const readoutState = (page) => page.evaluate(() => ({
     text: document.querySelector('.scout-load-text:not([hidden])')?.textContent ?? null,
     server: document.querySelector('.scout-server:not([hidden])')?.textContent ?? null,
-    elapsed: document.querySelector('.scout-elapsed')?.textContent ?? null,
+    // The one clock (3.26), counted from pressing Scout, in the estimate line.
+    elapsed: /(\d+:\d\d) so far$/.exec(document.querySelector('.scout-estimate:not([hidden])')?.textContent ?? '')?.[1] ?? null,
+    clocks: document.querySelectorAll('.scout-progress:not([hidden]) .scout-elapsed').length,
     mode: document.querySelector('.scout-sweep')?.dataset.mode ?? null,
     width: document.querySelector('.scout-sweep span')?.style.width ?? '',
     anim: getComputedStyle(document.querySelector('.scout-sweep span')).animationName,
@@ -1408,6 +1410,7 @@ async function wayInChecks(browser) {
     if (!/^Downloading streets and buildings…$/.test(w1.stage ?? '')) errs.push(`stage while waiting: ${w1.stage}`);
     if (!/Asking overpass-api\.de/.test(w1.server ?? '')) errs.push(`doesn't say which server: ${w1.server}`);
     if (!(secs(w2.elapsed) >= secs(w1.elapsed) + 1)) errs.push(`the elapsed clock doesn't run: ${w1.elapsed} → ${w2.elapsed}`);
+    if (w1.clocks || w2.clocks) errs.push('two clocks on screen: one only, in the estimate line');
     if (/%/.test([w2.text, w2.estimate, w2.server].join(' '))) errs.push('a percentage on screen while nothing is known');
     if (w1.role !== 'status' || !w1.hiddenFromSr) errs.push('readout: the busy numbers should be hidden from screen readers, with a status line instead');
     if (w1.cancel < 44) errs.push(`Cancel is too small to tap: ${w1.cancel}px`);
@@ -1536,7 +1539,7 @@ async function wayInChecks(browser) {
     await page.clock.fastForward('00:46');
     await page.waitForFunction(() => /kumi/.test(document.querySelector('.scout-server')?.textContent ?? ''), null, { timeout: 10000 });
     const f = await readoutState(page);
-    if (!/^ · No answer from overpass-api\.de within 45 seconds, so now asking overpass\.kumi\.systems$/.test(f.server ?? '')) errs.push(`fallback not explained: ${f.server}`);
+    if (!/^No answer from overpass-api\.de within 45 seconds, so now asking overpass\.kumi\.systems$/.test(f.server ?? '')) errs.push(`fallback not explained: ${f.server}`);
     if (!(secs(f.elapsed) >= 46)) errs.push(`elapsed clock after the wait: ${f.elapsed}`);
     const shot = `${out}/wayin-progress-fallback-desktop.png`;
     await page.screenshot({ path: shot });

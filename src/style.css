@@ -383,7 +383,7 @@ button:disabled { opacity: 0.5; }
 .scout-load { margin-top: 8px; }
 .scout-load-text { margin: 0 0 4px; overflow-wrap: anywhere; }
 .scout-load-meta { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
-.scout-elapsed { font-variant-numeric: tabular-nums; }
+.scout-estimate { font-variant-numeric: tabular-nums; }
 .scout-cancel { margin-top: 6px; min-height: 48px; min-width: 96px; }
 .scout-ask { margin-top: 10px; }
 .scout-ask-text { margin: 0 0 8px; font-weight: 700; }

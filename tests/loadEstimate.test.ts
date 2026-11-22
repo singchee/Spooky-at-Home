@@ -62,6 +62,8 @@ describe('estimate', () => {
     expect(estimateLine(e, 50_000, true).fraction).toBe(0.2);
     // Never a percentage on screen.
     expect(estimateLine(e, 90_000).text).not.toMatch(/%/);
+    // The one clock on screen counts from pressing Scout; the maths uses the server wait.
+    expect(estimateLine(e, 40_000, false, 42_000)).toMatchObject({ text: 'Usually about 1–3 min · 0:42 so far', fraction: 0.2 });
   });
 
   it('ranges read naturally, and screen readers hear them in words', () => {

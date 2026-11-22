@@ -87,7 +87,6 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   const estimateEl = el('p', 'small scout-estimate', undefined, load);
   estimateEl.hidden = true;
   const loadMeta = el('p', 'small scout-load-meta', undefined, load);
-  const elapsedEl = el('span', 'scout-elapsed', '0:00', loadMeta);
   const serverEl = el('span', 'scout-server', undefined, loadMeta);
   const spoken = el('p', 'sr-only scout-spoken', undefined, progress);
   const cancel = el('button', 'scout-cancel', 'Cancel', progress);
@@ -219,7 +218,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
       return null;
     }
     const offset = attemptFrom - waitFrom;
-    const line = estimateLine({ ...est, lowMs: est.lowMs + offset, highMs: est.highMs + offset }, Date.now() - waitFrom, reduced());
+    const line = estimateLine({ ...est, lowMs: est.lowMs + offset, highMs: est.highMs + offset }, Date.now() - waitFrom, reduced(), Date.now() - started);
     estimateEl.hidden = false;
     estimateEl.textContent = line.text;
     setBar('estimate', line.fraction);
@@ -244,13 +243,12 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
     }
     const r = readout(p, Date.now() - started);
     loadText.textContent = r.text;
-    serverEl.textContent = ` · ${r.server}`;
+    serverEl.textContent = r.server;
     setBar(r.bar, r.fraction);
     const line = showEstimate();
     if (speak.ready(`${p.stage}:${p.attempt}`, Date.now())) spoken.textContent = line ? `${r.spoken} ${line.spoken}` : r.spoken;
   };
   const tick = () => {
-    elapsedEl.textContent = formatClock(Date.now() - started);
     const line = showEstimate();
     // Still waiting: remind screen readers how long it's been (the throttle spaces it out).
     if (lastProgress?.stage === 'waiting' && line && speak.ready(`waiting:${lastProgress.attempt}${line.over ? ':over' : ''}`, Date.now())) {
@@ -271,7 +269,6 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
       spoken.textContent = '';
       progress.classList.toggle('still', reduced());
       started = Date.now();
-      elapsedEl.textContent = formatClock(0);
       showDetail(null);
       clock = setInterval(tick, 1000);
     }

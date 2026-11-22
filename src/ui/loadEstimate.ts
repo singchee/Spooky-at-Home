@@ -79,12 +79,15 @@ export interface EstimateLine {
   spoken: string;
 }
 
-/** What to show after `waitedMs` of waiting, given the estimate. Steps of 10% when `steps`. */
-export function estimateLine(e: Estimate, waitedMs: number, steps = false): EstimateLine {
+/**
+ * What to show after `waitedMs` of waiting on the server, given the estimate. Steps of 10% when `steps`.
+ * The clock shown is `clockMs`: the one clock on screen, counted from pressing Scout.
+ */
+export function estimateLine(e: Estimate, waitedMs: number, steps = false, clockMs = waitedMs): EstimateLine {
   const over = waitedMs > e.highMs;
   let fraction = Math.min(0.9, (0.9 * Math.max(0, waitedMs)) / e.highMs);
   if (steps) fraction = Math.floor(fraction * 10) / 10;
-  const so = `${formatClock(waitedMs)} so far`;
+  const so = `${formatClock(clockMs)} so far`;
   const range = rangeText(e);
   const where = e.samples ? ` on this device (last ${e.samples} loads)` : '';
   const said = range.replace('–', ' to ').replace(/ s\b/g, ' seconds').replace(/ min\b/g, ' minutes');
