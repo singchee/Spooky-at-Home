@@ -263,7 +263,7 @@ describe('previously-on and the tally (truth from stored numbers)', () => {
     const pct = Math.round(b[2].integrity * 100);
     expect(t.nights[2].text).toMatch(new RegExp(`^${cap(m3.safehouse!.name)} held till dawn, ${pct}% intact\\.`));
     const ff = b.reduce((s, x) => s + x.friendlyHits, 0);
-    expect(t.friendlyFire).toBe(ff === 0 ? 'Friendly fire: none in three nights.' : `Friendly fire: ${plural(ff, 'incident')}.`);
+    expect(t.friendlyFire).toBe(ff === 0 ? 'Friendly fire in your best runs: none.' : `Friendly fire in your best runs: ${plural(ff, 'incident')}.`);
     // Every number on screen is one of the stored numbers.
     const stored = new Set(b.flatMap((x) => [x.kills, x.survivorsSaved, x.survivorsTotal, x.survivorsTotal - x.survivorsSaved, x.friendlyHits, Math.round(x.integrity * 100)]).map(String));
     stored.add(String(ff));
@@ -271,15 +271,15 @@ describe('previously-on and the tally (truth from stored numbers)', () => {
     for (const s of text) for (const num of s.match(/\d+/g) ?? []) expect(stored.has(num), `${num} in "${s}"`).toBe(true);
   }, 240_000);
 
-  it('"none in three nights" iff the friendly-hit sum is 0', () => {
+  it('"Friendly fire in your best runs: none" iff the friendly-hit sum of the best runs is 0', () => {
     const ns = plan(map, 1, 2);
-    expect(tally(ns, wonAll(ns))!.friendlyFire).toBe('Friendly fire: none in three nights.');
-    expect(tally(ns, wonAll(ns, [{}, { friendlyHits: 1 }]))!.friendlyFire).toBe('Friendly fire: 1 incident.');
-    expect(tally(ns, wonAll(ns, [{ friendlyHits: 1 }, {}, { friendlyHits: 1 }]))!.friendlyFire).toBe('Friendly fire: 2 incidents.');
+    expect(tally(ns, wonAll(ns))!.friendlyFire).toBe('Friendly fire in your best runs: none.');
+    expect(tally(ns, wonAll(ns, [{}, { friendlyHits: 1 }]))!.friendlyFire).toBe('Friendly fire in your best runs: 1 incident.');
+    expect(tally(ns, wonAll(ns, [{ friendlyHits: 1 }, {}, { friendlyHits: 1 }]))!.friendlyFire).toBe('Friendly fire in your best runs: 2 incidents.');
     // A loss's friendly fire isn't in the kept best, so it isn't in the tally either.
     let r = wonAll(ns);
     r = applyRun(r, 3, ns[2].fp, { ...winOf(ns[2], { friendlyHits: 2 }), won: false }).record;
-    expect(tally(ns, r)!.friendlyFire).toBe('Friendly fire: none in three nights.');
+    expect(tally(ns, r)!.friendlyFire).toBe('Friendly fire in your best runs: none.');
     // No tally until all three nights are won.
     expect(tally(ns, applyRun(emptyRecord(), 1, ns[0].fp, winOf(ns[0])).record)).toBeNull();
   });

@@ -258,7 +258,7 @@ export function tally(nights: readonly NightPlan[], r: CampaignRecord): Tally | 
     nights: nights.map((x, i) => ({
       night: x.night, label: `Night ${NIGHT_WORD[x.night]}`, text: tallyText(x.mission, bests[i]!), grade: bests[i]!.grade, gradeWord: GRADE_WORD[bests[i]!.grade],
     })),
-    friendlyFire: ff === 0 ? 'Friendly fire: none in three nights.' : `Friendly fire: ${plural(ff, 'incident')}.`,
+    friendlyFire: ff === 0 ? 'Friendly fire in your best runs: none.' : `Friendly fire in your best runs: ${plural(ff, 'incident')}.`,
   };
 }
 
