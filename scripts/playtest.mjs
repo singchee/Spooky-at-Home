@@ -2028,6 +2028,15 @@ function aimAway(page) {
   });
 }
 /** Wait `s` seconds of game time (a busy, software-rendered machine can run far slower than real time). */
+/** Wait (up to `timeout` ms of real time) until the aim has moved from `from`; returns quietly if it never does. */
+function aimMoved(page, from, timeout = 10000) {
+  return page
+    .waitForFunction((f) => {
+      const a = window.__spooky.info().aim;
+      return Math.hypot(a.x - f.x, a.z - f.z) > 0.01;
+    }, from, { timeout, polling: 50 })
+    .catch(() => undefined);
+}
 async function waitGame(page, s) {
   await untilGameTime(page, (await gameTime(page)) + s);
 }
@@ -2293,6 +2302,8 @@ async function controlsChecks(browser) {
       const tapPoint = [viewport.width * 0.5 + Math.min(120, viewport.width * 0.2), viewport.height * 0.4];
       const aimT0 = (await info(page)).aim;
       await tapAt(tapPoint);
+      // Wait for the tap to be handled (a heavy frame can hold input back well past a fixed delay).
+      await aimMoved(page, aimT0);
       const aimT1 = (await info(page)).aim;
       out_.tapMovedMetres = Math.round(Math.hypot(aimT1.x - aimT0.x, aimT1.z - aimT0.z));
       if (out_.tapMovedMetres < 5) errs.push(`tap to aim moved the aim ${out_.tapMovedMetres} m`);
@@ -2519,7 +2530,9 @@ async function controlsChecks(browser) {
         });
         if (!target) errs.push(`${view}: no clear spot on the picture to tap`);
         else {
+          const before = (await info(page)).aim;
           await tapAt(target.at);
+          await aimMoved(page, before);
           const after = (await info(page)).aim;
           res_.tap = { tappedAt: target.at.map(Math.round), wanted: [target.x, target.z], got: [Math.round(after.x), Math.round(after.z)], offM: Number(Math.hypot(after.x - target.x, after.z - target.z).toFixed(1)) };
           if (res_.tap.offM > 3) errs.push(`${view}: a tap on the picture aimed ${res_.tap.offM} m from the spot tapped (${JSON.stringify(res_.tap)})`);
