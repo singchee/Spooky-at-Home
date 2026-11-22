@@ -1,5 +1,5 @@
 import type { MapData, V2 } from '../map/types';
-import { dist, pointAlong, polylineLength } from '../map/geom';
+import { dist, pointAlong, pointInPolygon, polylineLength } from '../map/geom';
 import type { RoadGraph } from '../map/roadGraph';
 import type { WalkGrid } from '../map/grid';
 import { hashString, mulberry32, type Rng } from '../util/rng';
@@ -136,6 +136,8 @@ export class Sim {
   /** Seconds before zombies notice sheltering friendlies (longer on easy). */
   private shelterGrace: number;
   private lastUnderAttack = -99;
+  /** Each survivor's destination footprint (the home or safehouse their route ends in): they go inside at its wall. */
+  private doors: (V2[] | null)[] = [];
   /** A horde creeping toward the sheltering friendlies (clear missions). */
   private drift: { anchor: V2; target: V2; speed: number } | null = null;
 
@@ -170,10 +172,12 @@ export class Sim {
         id: i, x: p.start.x, z: p.start.z, alive: true, home: false, hp: 1, s: 0, delay: p.delay,
         offset: ((i % 3) - 1) * 1.4, route: p.route, routeLen: p.route ? polylineLength(p.route) : 0, diedAt: -1,
       });
-      // Spread the waiting group out a little instead of stacking everyone on one point.
+      // Spread the waiting group out a little instead of stacking everyone on one point (never into a wall).
       const last = this.survivors[this.survivors.length - 1];
       last.x += ((i % 3) - 1) * 1.6;
       last.z += (Math.floor(i / 3) - 0.5) * 1.6;
+      if (grid.isBlocked(last.x, last.z)) Object.assign(last, grid.nearestFree({ x: last.x, z: last.z }));
+      this.doors.push(p.route ? destination(p.route[p.route.length - 1], map, mission.safehouse?.poly) : null);
     });
     if (mission.safehouse && mission.type === 'defend') this.safeField = grid.flowField(grid.perimeterCells(mission.safehouse.poly));
     if (mission.waves) this.waveTimer = FIRST_WAVE; // first wave arrives quickly
@@ -347,8 +351,19 @@ export class Sim {
       const p = pointAlong(s.route, s.s);
       const q = pointAlong(s.route, s.s + 1);
       const len = Math.hypot(q.x - p.x, q.z - p.z) || 1;
-      s.x = p.x + (-(q.z - p.z) / len) * s.offset;
-      s.z = p.z + ((q.x - p.x) / len) * s.offset;
+      const x = p.x + (-(q.z - p.z) / len) * s.offset;
+      const z = p.z + ((q.x - p.x) / len) * s.offset;
+      // Through the door of their own home or the safehouse: they're inside now, not walking through its walls.
+      const door = this.doors[s.id];
+      if (door && (pointInPolygon(p, door) || pointInPolygon({ x, z }, door))) {
+        s.home = true;
+        this.emit({ type: 'survivor-home' });
+        continue;
+      }
+      // Buildings are solid (3.15): step in off the shoulder, or round a building the road's last leg cuts across.
+      const at = !this.grid.isBlocked(x, z) ? { x, z } : !this.grid.isBlocked(p.x, p.z) ? p : this.grid.nearestFree(p, 30);
+      s.x = at.x;
+      s.z = at.z;
     }
   }
 
@@ -545,6 +560,12 @@ export class Sim {
       weapons: this.weapons.map((w) => ({ ...w })),
     };
   }
+}
+
+/** The footprint a route ends in: the safehouse, or the building (home) holding its last point. */
+function destination(end: V2, map: MapData, safehouse: V2[] | undefined): V2[] | null {
+  if (safehouse && pointInPolygon(end, safehouse)) return safehouse;
+  return map.buildings.find((b) => b.pts.length >= 3 && pointInPolygon(end, b.pts))?.pts ?? null;
 }
 
 function gaussian(r: Rng): number {
