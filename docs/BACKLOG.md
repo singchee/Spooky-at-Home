@@ -44,7 +44,7 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 | 3.11 | Controls: touch controls on phones and tablets, on-screen hotkeys (R weapon, Q view, Esc pause/briefing), unlimited 25 mm | review, playtest, feel, balance | in-progress |
 | 3.12 | Remember places on this device; suburb-level place names (no house numbers); real load timings | review, playtest | merged to phase 3 |
 | 3.13 | World dressing: roofs, parked cars, rooftop clutter | review, playtest | done in T4 (map detail) |
-| 3.14 | Three Nights campaign (spec 001, owner approved) | plan, review, playtest, feel, balance | core merged; review FAIL (1 blocker: flavour lines can contradict the briefing), fixes queued |
+| 3.14 | Three Nights campaign (spec 001, owner approved) | plan, review, playtest, feel, balance | core merged; review round 1 PASS (checker re-review); finale + screens next |
 | 3.15 | Zombies walk into buildings and vanish: buildings must block movement (owner playtest, 22 Nov) | review, balance, map-check | in-progress |
 | 3.16 | Waves too small at level 2: more and bigger hordes per difficulty (owner playtest) | balance, player-test | in-progress |
 | 3.17 | Gun sounds: more weight and bass; the 25/40/105 sound hollow (owner playtest) | playtest, player-test | todo |
@@ -53,6 +53,9 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 | 3.20 | Per-server time limit (45–60 s) for the map download: today a slow fallback server can hold the readout for 4+ minutes before saying "busy" (measured by 3.12) | review, playtest | todo |
 | 3.21 | "Load a saved map file" guesses the map centre from all coordinates in a raw export and can lose most of a town (Gundagai fixture: 377 → 24 buildings); read the fixture's stored centre | review, map-check | todo |
 | 3.22 | Load timing on the owner's own connection (cloud timings are unrepresentative: the main Overpass server reset every request from the cloud) | owner | todo |
+
+| 3.24 | Generator bug: an anchored clear (e.g. tennis club) can build with 0 hordes at the place while its briefing names it ("0 hordes are on the courts"); the campaign now rejects these, single missions don't | review, map-check | todo |
+| 3.25 | Campaign store nits: first read throws → save overwrites with this session's places; clock going backwards can trim the newest place; an older build overwrites v2 data | review | todo |
 
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
