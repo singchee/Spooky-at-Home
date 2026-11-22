@@ -126,3 +126,32 @@ If the d5 band can't be reached without regroup delays so long that the end turn
 
 ## Owner decision (22 Nov 2026)
 Approved ("scatter ok"), with the four recommended answers: runners may scatter toward friendlies if shelled from the wrong side; Training night keeps today's hordes for now; the Balance Analyst may retune Clear's time limits; the recorded `few-left` and `cold-leftovers` lines are wired in.
+
+---
+## Feel & access review  *(feel-designer, /plan, 22 Nov 2026)*
+Played on: desktop (keyboard and mouse) and the owner's Android tablet (stick, hold-to-fire, GUN / VIEW / ZOOM). Checked against today's HUD (`src/ui/hud.ts`), heat values (`HEAT` in `src/game/agentAnim.ts`) and blast effects (`src/game/effects.ts`).
+
+**Runner markers: my call (the spec left it to me).** **No marker on individual runners.** Finding them with the right camera is the skill (pillar 3), and a marker on each one would turn the chase into clicking on labels. Instead, the player always knows **where they'll come back to** (M1 below). The leash keeps every runner within about 45 m of that point, so it's also where to look for them.
+
+**Must fix**
+- **M1. Show the regroup point in flight.** While any runner from a horde is out, show that horde's gathering point as an on-screen marker labelled with the horde label (the existing `setMarkers` path, `textContent` only; it's untrusted map text). Add it to the minimap too if that's cheap. Hide it once the horde has regrouped or is dead. Today the briefing and diorama show gathering points, but the in-flight HUD doesn't. Rule 4 ("they come back to the named place") is only fair if the player can find that place while flying. This is also the main help against hunting for the last one.
+- **M2. The cold-blooded hint must work on touch.** The HUD says `COLD-BLOODED n (V: NIGHT VISION)`. On the tablet there's no V key, so it should name the button the player has (`VIEW: NIGHT VISION`). Use the same touch/keyboard switch the controls list already uses. This is an old bug, but scatter makes it matter: cold runners on grass become the main search.
+- **M3. Runners must be seen leaving.** They bolt during the first seconds after a 105 hit, exactly when the round's smoke (about 2.4 s of fireball and smoke) and the night-vision washout cover the impact. If the burst of speed ends inside the smoke, the player sees the result but never *which way* they went. Requirement: **the direction of the runners can be read by t + 2 s in all three views.** Add a **t + 1 s and t + 2 s** screenshot to the `/playtest` set. If it fails, either lengthen the burst so runners come out of the smoke still sprinting, or thin the smoke for the 105 in Clear. Never add a marker for this.
+
+**Should fix**
+- **S1. Cold runner vs cold body in night vision.** Cold zombies are at ground heat alive or dead (`HEAT.cold`), so on thermal a cold runner and a cold body look the same, and in night vision the player tells them apart only by pose and movement. Add one `/playtest` forest-sweep night-vision shot with a cold body and a cold runner close together, at ×2. If a human can't tell which is alive, the forest-sweep regroup delay gets shorter (the spec's lever).
+- **S2. Tune the chase for thumbs, not only for the bot.** The human-skill bot aims perfectly. Leading a sprinting runner with a touch stick in the 25 mm's 5° view is much harder. Keep the speed burst short (around 4 s or less) so the chase is about tracking a runner after it slows, not hitting a sprinter. **At least one human tester plays on a tablet**, and the owner's d2 test run is on the tablet. Add a tablet question to the human playtest: "Could you hit the runners with the stick?"
+- **S3. A runner heading for the friendlies needs a tell that isn't only sound.** Rule 2 allows it on purpose (owner decision). Check that the existing `friendlies-under-attack` and `danger-close` cues show as radio text on screen as well as playing as voice, and fire early enough to react to (before contact, not at it).
+- **S4. HUD words: add nothing else.** `HOSTILES n/total` and `COLD-BLOODED n` already cover the end of the mission. Don't add a "SCATTERED n" line. The marker from M1 carries the rest.
+
+**Ideas**
+- **I1. Last-straggler line (text only):** when 3 or fewer are left and nothing has been killed for 30 s, a text line names the nearest gathering point with runners still out ("Last of them are drifting back to {horde label}"). It's true by rule 4. Use it alongside `few-left` and `cold-leftovers`, not instead.
+- **I2. Kill confirmation on a single runner:** a small tick on the crosshair for 0.3 s when a 40 or 25 round kills a runner. Fresh bodies already cool from white to grey, but a lone kill at 25 mm range is easy to miss on the tablet's smaller screen. It's a local effect, not a flash.
+
+**Other checks: no findings**
+- **Photosensitivity: pass.** There are no new effects, and the 105's 4.5 s reload limits how often it can land, so its washout and kick can't come faster than today. Re-shelling regrouped hordes adds rounds over a mission, not rounds per second.
+- **Reduce flicker and motion: pass.** Nothing new moves the camera. The 105 kick already turns off with Reduce flicker or reduced motion.
+- **Sound alone: pass**, if the first-scatter line, `few-left` and `cold-leftovers` all appear as text (the spec says they do).
+- **Tone: pass.** Zombies scattering from a big shell is slapstick.
+
+**Verdict: APPROVED WITH CHANGES.** Do M1 to M3 in the build. S1 and S2 go into the `/playtest` and human-playtest plans. None of these changes the sim, the guardrail or determinism.
