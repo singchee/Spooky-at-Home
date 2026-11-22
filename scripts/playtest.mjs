@@ -1914,7 +1914,7 @@ async function tourCheckRuns(browser, res) {
     await page.close();
   }
 
-  // 6. Leaks: 20 × (briefing with the tour → Start mission → Esc → R retry). One diorama context at a time.
+  // 6. Leaks: 20 × (briefing with the tour → Start mission → Esc → Restart mission (pause menu)). One diorama context at a time.
   {
     const { page, errs } = await tourPage(browser, { width: 1280, height: 720 });
     await page.addInitScript(() => {
@@ -1948,7 +1948,7 @@ async function tourCheckRuns(browser, res) {
         await page.waitForFunction(() => !document.querySelector('.tour') && !document.querySelector('.dio-canvas'), null, { timeout: 15000 });
         await page.keyboard.press('Escape');
         await page.waitForSelector('.overlay .card h2:has-text("Paused")', { timeout: 10000 });
-        await page.keyboard.press('r');
+        await page.click('.pause-restart'); // since 3.11 R is the gun key; Restart is a pause-menu button
         await page.waitForSelector('.card.briefing .tour', { timeout: 30000 });
         cycles++;
       }
