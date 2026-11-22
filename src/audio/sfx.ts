@@ -2,22 +2,20 @@ import { audio, type SfxOutput } from './engine';
 import { DUCK } from './mix';
 import { SFX } from './assets';
 import type { PlayOpts } from './samples';
+import { FIRE_WEIGHT, Gate, IMPACT_WEIGHT, MIN_GAP, PUNCH, RETRIGGER_25, type Gun, type NoiseLayer, type SubLayer, type Weight } from './weight';
 
-/**
- * The 25 mm fires 12 rounds a second: each round keeps its short synthesised crack, and the
- * recorded burst is laid under it at most this often (s) while the trigger is held. 2.4 a second,
- * under the comfort limit of 3.
- */
-export const RETRIGGER_25 = 0.42;
+export { RETRIGGER_25 };
 
 /** How each recorded effect plays: level, voice cap, slice and variation. */
 export const SAMPLE_PLAY: Record<string, Omit<PlayOpts, 'group'>> = {
-  [SFX.fire25]: { max: 2, gain: 0.9, duration: RETRIGGER_25 + 0.08, fade: 0.08, jitter: 0.08, cents: 60, db: 1.5 },
+  // Gains and trims: the 25 mm file is the quietest (peak -12 dBFS); the 105 and the explosion
+  // start after 80-90 ms of near-silence, trimmed so the blast lands with the flash.
+  [SFX.fire25]: { max: 2, gain: 1, duration: RETRIGGER_25 + 0.08, fade: 0.08, jitter: 0.08, cents: 60, db: 1.5 },
   [SFX.fire40]: { max: 4, gain: 0.5, duration: 1.2, fade: 0.3, cents: 50, db: 1.5 },
-  [SFX.fire105]: { max: 2, gain: 0.75, cents: 40, db: 1 },
-  [SFX.explosion]: { max: 3, gain: 0.85, cents: 60, db: 1.5 },
-  /** A 40 mm round landing: the explosion, smaller (faster and quieter). */
-  'boom40': { max: 4, gain: 0.3, rate: 1.4, duration: 1.6, fade: 0.5, cents: 80, db: 2 },
+  [SFX.fire105]: { max: 2, gain: 0.75, offset: 0.08, cents: 40, db: 1 },
+  [SFX.explosion]: { max: 3, gain: 0.85, offset: 0.09, cents: 60, db: 1.5 },
+  /** A 40 mm round landing: the explosion, smaller (a little faster, so less of its low end is lost than before, and quieter). */
+  'boom40': { max: 4, gain: 0.3, rate: 1.2, offset: 0.09, duration: 1.6, fade: 0.5, cents: 80, db: 2 },
   /** Two pulses of the recorded alarm (0.4 s on, 0.35 s off: 1.3 a second), under the synthesised two-tone. */
   [SFX.alarm]: { max: 1, gain: 0.2, duration: 1.3, fade: 0.15, cents: 0, db: 0 },
 };
@@ -37,6 +35,8 @@ export class Sfx {
   private alarmUntil = -1;
   /** Audio-clock time from which the next 25 mm recorded burst may start. */
   private next25 = -1;
+  /** Retrigger caps for the weight layers and the punch (comfort: under 3 a second). */
+  private gate = new Gate();
 
   constructor(private makeContext: () => AudioContext | SfxOutput | null = () => audio.output()) {}
 
@@ -86,20 +86,40 @@ export class Sfx {
     this.play(src, t, t + dur + 0.05, f, g);
   }
 
-  /** The body of a big gun or blast: a sine that drops in pitch (felt more than heard). */
-  private thump(from: number, to: number, dur: number, vol: number): void {
+  /** A sub layer (weight.ts): a sine dropping in pitch, felt more than heard. */
+  private sub(l: SubLayer): void {
     const o = this.out;
     if (!o || this.muted) return;
-    const t = o.ctx.currentTime;
+    const t = o.ctx.currentTime + l.delay;
     const osc = o.ctx.createOscillator();
-    osc.frequency.setValueAtTime(from, t);
-    osc.frequency.exponentialRampToValueAtTime(to, t + dur * 0.6);
+    osc.frequency.setValueAtTime(l.from, t);
+    osc.frequency.exponentialRampToValueAtTime(l.to, t + l.dur * 0.6);
     const g = o.ctx.createGain();
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(vol, t + 0.01);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    g.gain.linearRampToValueAtTime(l.gain, t + l.attack);
+    g.gain.exponentialRampToValueAtTime(0.001, t + l.dur);
     osc.connect(g).connect(o.sfx);
-    this.play(osc, t, t + dur + 0.05, g);
+    this.play(osc, t, t + l.dur + 0.05, g);
+  }
+
+  private body(l: NoiseLayer): void {
+    this.burst(l.lp, l.dur, l.gain, l.delay);
+  }
+
+  /** The weight under a shot or blast, at most once per its gap (else false). */
+  private weigh(key: string, w: Weight | undefined): boolean {
+    const o = this.out;
+    if (!o || this.muted || !w || !this.gate.admit(key, o.ctx.currentTime, w.gap)) return false;
+    this.sub(w.sub);
+    this.body(w.body);
+    return true;
+  }
+
+  /** Pump the music and drone out of the way (sidechain-style, on the audio clock). */
+  private punch(p: (typeof PUNCH)[keyof typeof PUNCH]): void {
+    const o = this.out;
+    if (!o?.punch || this.muted || !this.gate.admit('punch', o.ctx.currentTime, MIN_GAP)) return;
+    o.punch(p);
   }
 
   private duck(d: readonly [number, number]): void {
@@ -117,30 +137,31 @@ export class Sfx {
   }
 
   fire(weapon: string): void {
+    this.weigh(`fire${weapon}`, FIRE_WEIGHT[weapon as Gun]);
     if (weapon === '25') {
       const o = this.out;
       const rec = !!o?.sample?.(SFX.fire25);
       this.burst(2200, 0.06, rec ? 0.08 : 0.12);
       if (rec && o!.ctx.currentTime >= this.next25 && this.sample(SFX.fire25)) this.next25 = o!.ctx.currentTime + RETRIGGER_25;
     } else if (weapon === '40') {
-      if (!this.sample(SFX.fire40)) {
-        this.burst(900, 0.25, 0.35);
-        this.thump(140, 70, 0.25, 0.25);
-      }
-    } else if (!this.sample(SFX.fire105)) {
-      this.burst(300, 0.9, 0.7);
-      this.thump(90, 38, 0.9, 0.55);
+      // Generated stand-ins carry only the bang: the weight layer above is the thump, for both.
+      if (!this.sample(SFX.fire40)) this.burst(900, 0.25, 0.35);
+    } else {
+      if (!this.sample(SFX.fire105)) this.burst(300, 0.9, 0.7);
+      this.punch(PUNCH.fire105);
     }
     this.duck(DUCK.fire[weapon as keyof typeof DUCK.fire] ?? DUCK.fire['25']);
   }
 
+  /** A round landing (called by the game on the sim's impact event, i.e. after the shell's flight time). */
   impact(weapon: string): void {
+    this.weigh(`impact${weapon}`, IMPACT_WEIGHT[weapon as Gun]);
     if (weapon === '25') this.burst(700, 0.12, 0.05);
     else if (weapon === '40') {
       if (!this.sample(SFX.explosion, 'boom40')) this.burst(400, 0.4, 0.15);
-    } else if (!this.sample(SFX.explosion)) {
-      this.burst(160, 1.4, 0.35);
-      this.thump(60, 28, 1.6, 0.45);
+    } else {
+      if (!this.sample(SFX.explosion)) this.burst(160, 1.4, 0.35);
+      this.punch(PUNCH.impact105);
     }
     this.duck(DUCK.impact[weapon as keyof typeof DUCK.impact] ?? DUCK.impact['25']);
   }

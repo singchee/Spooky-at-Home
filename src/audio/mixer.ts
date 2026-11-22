@@ -1,14 +1,19 @@
 import { getSettings, onSettingsChange, type Settings } from '../ui/settings';
 import { busGains, duckGains, DuckEnvelope } from './mix';
+import { WEAPON_EQ } from './weight';
 
 /**
  * The mixing desk: music, sound-effect and radio buses into a master, with the player's volume
  * settings applied live and the music and engine drone ducked under gunfire.
  *
- *   music in ─ duck ─ music bus ─┐
- *   ambience in ─ duck ─┐        │
- *   sfx in ─────────── sfx bus ──┼─ limiter ─ master ─ speakers
- *   radio in ───────── radio bus ┘
+ *   music in ─ duck ─ punch ─ music bus ─┐
+ *   ambience in ─ duck ─ punch ─┐        │
+ *   weapons in ─ high-pass ─ low shelf ──┤
+ *   sfx in ──────────────────── sfx bus ─┼─ limiter ─ master ─ speakers
+ *   radio in ───────────────── radio bus ┘
+ *
+ * "duck" follows the slow envelope (20 Hz ticks); "punch" is scheduled on the audio clock, so the
+ * music drops out of the way at the very moment a 105 lands (see weight.ts, PUNCH).
  */
 export class Mixer {
   /** Where each kind of sound plugs in. */
@@ -16,12 +21,17 @@ export class Mixer {
   readonly ambience: GainNode;
   readonly sfx: GainNode;
   readonly radio: GainNode;
+  /** The guns and blasts: through the weapon EQ into the sfx bus. */
+  readonly weapons: AudioNode;
   private master: GainNode;
   private limiter: DynamicsCompressorNode;
   private musicBus: GainNode;
   private radioBus: GainNode;
   private musicDuck: GainNode;
   private ambDuck: GainNode;
+  private musicPunch: GainNode;
+  private ambPunch: GainNode;
+  private eq: BiquadFilterNode[];
   private env = new DuckEnvelope();
   private off: () => void;
 
@@ -39,15 +49,32 @@ export class Mixer {
 
     this.musicBus = g();
     this.musicBus.connect(this.limiter);
+    this.musicPunch = g();
+    this.musicPunch.connect(this.musicBus);
     this.musicDuck = g();
-    this.musicDuck.connect(this.musicBus);
+    this.musicDuck.connect(this.musicPunch);
     this.music = this.musicDuck;
 
     this.sfx = g();
     this.sfx.connect(this.limiter);
+    this.ambPunch = g();
+    this.ambPunch.connect(this.sfx);
     this.ambDuck = g();
-    this.ambDuck.connect(this.sfx);
+    this.ambDuck.connect(this.ambPunch);
     this.ambience = this.ambDuck;
+
+    // Weapon EQ: no sub-sonic mud, then a gentle lift under 120 Hz.
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = WEAPON_EQ.highpass;
+    hp.Q.value = 0.7;
+    const shelf = ctx.createBiquadFilter();
+    shelf.type = 'lowshelf';
+    shelf.frequency.value = WEAPON_EQ.shelfHz;
+    shelf.gain.value = WEAPON_EQ.shelfDb;
+    hp.connect(shelf).connect(this.sfx);
+    this.eq = [hp, shelf];
+    this.weapons = hp;
 
     this.radioBus = g();
     this.radioBus.connect(this.limiter);
@@ -75,6 +102,23 @@ export class Mixer {
     this.env.trigger(depth, hold);
   }
 
+  /**
+   * Pump the music and drone out of the way of a big blast, on the audio clock: down by `depth`
+   * within `attack` s, held for `hold`, back over `release`. A new punch takes over from the old.
+   */
+  punch(p: { depth: number; attack: number; hold: number; release: number }): void {
+    const t = this.ctx.currentTime;
+    const low = 1 - Math.max(0, Math.min(1, p.depth));
+    for (const n of [this.musicPunch, this.ambPunch]) {
+      const g = n.gain;
+      g.cancelScheduledValues(t);
+      g.setValueAtTime(g.value, t);
+      g.linearRampToValueAtTime(low, t + p.attack);
+      g.setValueAtTime(low, t + p.attack + p.hold);
+      g.linearRampToValueAtTime(1, t + p.attack + p.hold + p.release);
+    }
+  }
+
   /** Called about 20 times a second by the engine. */
   tick(dt: number): void {
     const d = duckGains(this.env.step(dt));
@@ -97,6 +141,6 @@ export class Mixer {
 
   dispose(): void {
     this.off();
-    for (const n of [this.master, this.limiter, this.musicBus, this.musicDuck, this.sfx, this.ambDuck, this.radioBus]) n.disconnect();
+    for (const n of [this.master, this.limiter, this.musicBus, this.musicDuck, this.musicPunch, this.sfx, this.ambDuck, this.ambPunch, this.radioBus, ...this.eq]) n.disconnect();
   }
 }
