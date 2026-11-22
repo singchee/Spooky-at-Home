@@ -1,5 +1,5 @@
 // Headless browser playtest (gates G7, G8 and visual evidence).
-// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls|scatter|endgame|intro|landmarks|presets|missions|crowd]
+// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls|scatter|endgame|intro|landmarks|presets|missions|crowd|crowd-flash]
 // Starts `vite preview`, loads each mission type with the bot playing, switches cameras,
 // takes screenshots, and records console errors and draw calls. Chromium is preinstalled.
 // It also runs the photosensitivity flash checks and survivor-kit screenshots (`--only safety`
@@ -116,12 +116,12 @@ try {
     await page.close();
   }
   // Photosensitivity flash counts (WCAG 2.3.1) and the survivor kit on every camera.
-  if (!only || only === 'safety') {
-    for (const r of await safetyChecks(browser)) {
+  if (!only || only === 'safety' || only === 'crowd-flash') {
+    for (const r of only === 'crowd-flash' ? [] : await safetyChecks(browser)) {
       results.push(r);
       if (r.errors.length) exitCode = 1;
     }
-    // Spec 003: crowd nights' flash scenarios A (surge, all guns), B (50+ kills a second) and C (zoomed 25 mm, darkening).
+    // Spec 003 (also on its own: --only crowd-flash): crowd nights' flash scenarios A (surge, all guns), B (50+ kills a second) and C (zoomed 25 mm, darkening).
     for (const r of await crowdFlashChecks(browser)) {
       results.push(r);
       if (r.errors.length) exitCode = 1;
