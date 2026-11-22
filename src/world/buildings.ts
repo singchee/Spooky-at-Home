@@ -4,6 +4,7 @@ import { pointInPolygon, polygonArea } from '../map/geom';
 import { at, bestFrame } from './frame';
 import { GeoBuilder, type Sig } from './geo';
 import { isHouse, streamFor } from './placement';
+import { prism, type Prism } from './sightline';
 
 /**
  * Buildings: walls extruded from the footprint, then a roof. Houses get pitched (gable) or hipped
@@ -42,15 +43,21 @@ export function planBuilding(b: Building, seed: number): BuildingPlan {
   return { eave, rise, roof: small || r() < 0.4 ? 'gable' : 'hip', style };
 }
 
-export function buildBuildings(buildings: Building[], seed: number): { geo: GeoBuilder; plans: number } {
-  const geo = new GeoBuilder(true);
-  let plans = 0;
+/**
+ * All buildings in one geometry. Each vertex carries its building's index (`bid`), the index into
+ * `prisms`: the footprints and heights the cut-away and the line-of-sight tests use (sightline.ts).
+ */
+export function buildBuildings(buildings: Building[], seed: number): { geo: GeoBuilder; plans: number; prisms: Prism[] } {
+  const geo = new GeoBuilder(true, true);
+  const prisms: Prism[] = [];
   for (const b of buildings) {
     if (b.pts.length < 3 || polygonArea(b.pts) < 4) continue;
-    addBuilding(geo, b, seed);
-    plans++;
+    geo.id = prisms.length;
+    const plan = addBuilding(geo, b, seed);
+    // A pitched roof counts to about halfway up its rise (a line of sight grazing the ridge is a judgement call).
+    prisms.push(prism(b.pts, plan.eave + plan.rise * 0.5));
   }
-  return { geo, plans };
+  return { geo, plans: prisms.length, prisms };
 }
 
 function signedArea(pts: V2[]): number {
@@ -59,7 +66,7 @@ function signedArea(pts: V2[]): number {
   return s / 2;
 }
 
-function addBuilding(geo: GeoBuilder, b: Building, seed: number): void {
+function addBuilding(geo: GeoBuilder, b: Building, seed: number): BuildingPlan {
   const plan = planBuilding(b, seed);
   const r = streamFor(seed, `bld-${b.id}`);
   const house = plan.style === 1;
@@ -109,7 +116,7 @@ function addBuilding(geo: GeoBuilder, b: Building, seed: number): void {
         geo.box(p.x, p.z, fr.ux, fr.uz, 1.1, 0.8, top, 1.1, [warm, 0.07, 0], [warm, 0.06, 0]);
       }
     }
-    return;
+    return plan;
   }
 
   // Pitched roofs on the footprint's rectangle, ridge along the long side.
@@ -133,6 +140,7 @@ function addBuilding(geo: GeoBuilder, b: Building, seed: number): void {
     outTri(geo, P(hl, -hw, E), P(hl, hw, E), P(hl, 0, R), [fr.ux, fr.uz], wall);
     outTri(geo, P(-hl, -hw, E), P(-hl, hw, E), P(-hl, 0, R), [-fr.ux, -fr.uz], wall);
   }
+  return plan;
 }
 
 /** A triangle facing up (flipped if its vertices came the other way round). */

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { LEAN_GLSL } from './lean';
 
 /**
  * Low-poly human figures with a skeleton that is animated entirely in the vertex shader.
@@ -447,6 +448,7 @@ const vertexShader = /* glsl */ `
     p = rYaw * p;
     n = normalize(rYaw * n);
 
+    ${LEAN_GLSL('vec3(iA.x, uBase, iA.y)', 'p')}
     vec4 world = modelMatrix * vec4(iA.x + p.x, uBase + p.y - sink * ${f(1.6)}, iA.y + p.z, 1.0);
     vec4 mv = viewMatrix * world;
     if (isPanel > 0.5) {

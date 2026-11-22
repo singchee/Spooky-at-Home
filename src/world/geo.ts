@@ -23,8 +23,12 @@ export class GeoBuilder {
   col: number[] = [];
   /** Optional extra per-vertex attribute (4 floats), e.g. the window parameters on walls. */
   extra: number[] | null;
-  constructor(withExtra = false) {
+  /** Optional per-vertex object index (the building a triangle belongs to); `id` is stamped on each new triangle. */
+  ids: number[] | null;
+  id = 0;
+  constructor(withExtra = false, withIds = false) {
     this.extra = withExtra ? [] : null;
+    this.ids = withIds ? [] : null;
   }
   get triangles(): number {
     return this.pos.length / 9;
@@ -52,6 +56,7 @@ export class GeoBuilder {
     const g = c[1] * s;
     const b = c[2];
     this.col.push(r, g, b, r, g, b, r, g, b);
+    if (this.ids) this.ids.push(this.id, this.id, this.id);
     if (this.extra) {
       if (e) this.extra.push(...e);
       else this.extra.push(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -87,6 +92,7 @@ export class GeoBuilder {
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
     if (this.extra) g.setAttribute('wall', new THREE.Float32BufferAttribute(this.extra, 4));
+    if (this.ids) g.setAttribute('bid', new THREE.Float32BufferAttribute(this.ids, 1));
     g.computeBoundingSphere();
     return g;
   }

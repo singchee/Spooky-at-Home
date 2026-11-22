@@ -66,6 +66,8 @@ export class Hud {
     this.cross = el('div', 'hud-cross', undefined, this.root);
     this.switching = el('div', 'hud-switching', 'SENSOR SWITCH', this.root);
     this.markers = el('div', 'hud-markers', undefined, this.root);
+    this.impact = el('div', 'hud-impact', undefined, this.root);
+    this.impact.hidden = true;
     el('div', 'hud-attrib', attribution, this.root);
     this.keys = new HotkeyStrip(this.root);
   }
@@ -75,7 +77,7 @@ export class Hud {
     if (this.lines.length > 5) this.lines.shift();
   }
 
-  update(s: SimState, m: Mission, weapon: string, sensor: string, polarity: number, zoom: number, switching: boolean, now: number, danger = false, touch = false): void {
+  update(s: SimState, m: Mission, weapon: string, sensor: string, polarity: number, zoom: number, switching: boolean, now: number, danger = false, touch = false, masked = false): void {
     // Weapons
     this.weapons.replaceChildren();
     for (const w of WEAPONS) {
@@ -124,6 +126,23 @@ export class Hud {
     this.switching.style.display = switching ? 'block' : 'none';
     this.cross.classList.toggle('danger', danger);
     this.cross.dataset.label = danger ? 'DANGER CLOSE' : '';
+    // 3.39: a building stands between the gunship and the aim point (shown over the cut-away: the HUD is
+    // never see-through, so a player never takes a masked shot for a clear one).
+    this.cross.classList.toggle('masked', masked);
+    this.cross.dataset.mask = masked ? 'MASKED' : '';
+  }
+
+  private impact: HTMLDivElement;
+  /**
+   * 3.39: while MASKED, a small steady mark where the round would actually land (null hides it); with
+   * `angle`, the spot is off screen and this is an edge pointer toward it (radians, 0 = right).
+   */
+  setImpactMark(p: { x: number; y: number; angle?: number } | null): void {
+    this.impact.hidden = !p;
+    if (!p) return;
+    const edge = p.angle !== undefined;
+    this.impact.classList.toggle('edge', edge);
+    this.impact.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)${edge ? ` rotate(${p.angle!.toFixed(3)}rad)` : ''}`;
   }
 
   setMarkers(ms: HudMarker[]): void {

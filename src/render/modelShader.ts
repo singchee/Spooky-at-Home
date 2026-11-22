@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BakedModel } from './characterModels';
+import { LEAN_GLSL } from './lean';
 
 /**
  * Instanced drawing of a baked character model (see src/render/characterModels.ts): one draw call
@@ -22,6 +23,8 @@ export const MODEL_DISPLAY_SCALE = 1.7; // readability first: real 1.75 m figure
 export const MODEL_PANEL_SIZE = 0.28;
 /** The panel is drawn as if this much nearer the camera, so its own body never hides it. */
 const PANEL_PULL = 0.9;
+
+export { FIGURE_LEAN_MAX, FIGURE_LEAN_REF_DEG, figureLean, leanPoint } from './lean';
 
 const vertexShader = /* glsl */ `
   uniform highp sampler2D uPos;
@@ -67,6 +70,7 @@ const vertexShader = /* glsl */ `
     p = rYaw * p;
     n = rYaw * n;
 
+    ${LEAN_GLSL('vec3(iA.x, uBase, iA.y)', 'p')}
     vec4 world = modelMatrix * vec4(iA.x + p.x, uBase + p.y - iD.w * 1.6, iA.y + p.z, 1.0);
     vec4 mv = viewMatrix * world;
     if (aPanel > 0.5) {

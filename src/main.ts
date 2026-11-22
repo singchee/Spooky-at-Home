@@ -3,6 +3,7 @@ import './style.css';
 import { initMotion } from './ui/motion';
 initMotion();
 import { makeSampleTown } from './map/sample';
+import { isPresetFile, PRESET_URL, PRESETS, presetToMap } from './map/presets';
 import { TEMPLATE_IDS, type TemplateId } from './map/recon';
 import type { MapData } from './map/types';
 import { createCrowdSim, createSim } from './sim/setup';
@@ -209,6 +210,18 @@ function clampInt(v: string | null, lo: number, hi: number, dflt: number): numbe
 // URL parameters let testers and the crew skip the menu, e.g.
 // ?map=sample&type=escort&difficulty=2&seed=7&autostart=1&bot=1&sensor=night
 // ?screen=landing|scout|recon|custom|tutorial opens that screen directly (menu = scout).
+/** ?preset=<slug>: a bundled famous place (from our own origin) instead of the sample town (3.39 playtests). */
+async function autostartMap(): Promise<MapData> {
+  const slug = params.get('preset');
+  const pl = PRESETS.find((p) => p.slug === slug);
+  if (slug && !pl) console.warn(`Unknown preset "${slug}": using the sample town.`);
+  if (!pl) return makeSampleTown();
+  const res = await fetch(new URL(PRESET_URL(pl.slug), document.baseURI).href);
+  const json: unknown = await res.json();
+  if (!isPresetFile(json)) throw new Error('bad preset file');
+  return presetToMap(json, pl);
+}
+
 // ?mode=crowd&size=big|huge&seed=N&autostart=1&bot=1&fps=1: a crowd night on the sample town (spec 003).
 if (params.get('autostart') === '1' && params.get('mode') === 'crowd') {
   play(
@@ -216,8 +229,7 @@ if (params.get('autostart') === '1' && params.get('mode') === 'crowd') {
     { bot: params.get('bot') === '1', skipBriefing: params.get('brief') !== '1', sensor: params.get('sensor') === 'night' ? 'night' : undefined },
   );
 } else if (params.get('autostart') === '1') {
-  const map: MapData = makeSampleTown();
-  play(
+  void autostartMap().then((map) => play(
     {
       map,
       type: (['clear', 'escort', 'defend', 'auto'].includes(params.get('type') ?? '') ? params.get('type') : 'escort') as MissionType | 'auto',
@@ -227,7 +239,9 @@ if (params.get('autostart') === '1' && params.get('mode') === 'crowd') {
       template: TEMPLATE_IDS.find((id) => id === params.get('template')) as TemplateId | undefined,
     },
     { bot: params.get('bot') === '1', skipBriefing: params.get('brief') !== '1', sensor: params.get('sensor') === 'night' ? 'night' : undefined },
-  );
+  )).catch((e: unknown) => {
+    window.__spooky!.error = `Couldn't load the map (${(e as Error).message}).`;
+  });
 } else if (params.get('screen') === 'menu' || params.get('screen') === 'scout') {
   menu('scout');
 } else if (params.get('screen') === 'recon') {

@@ -3,10 +3,11 @@ import type { MapData, V2 } from '../map/types';
 import { dist } from '../map/geom';
 import { mulberry32 } from '../util/rng';
 import { buildBuildings } from './buildings';
+import { Cutaway } from './cutaway';
 import { canopyGeometry, carGeometry, carMatrices, fenceGeometry, flatDetail, treeMatrices } from './detailMeshes';
 import { GeoBuilder, type Sig } from './geo';
 import { placeDetail, type Detail } from './placement';
-import { patchMaterial } from './shading';
+import { patchMaterial, type FadeOpts } from './shading';
 import { Occupancy } from './spatial';
 import { applyLampFalloff, applySurfaceTexture } from '../render/groundShader';
 
@@ -32,6 +33,8 @@ export interface World {
   pickables: THREE.Object3D[];
   /** What was placed (trees, cars, pools...), for tests and tools. */
   detail: Detail;
+  /** The building cut-away, line-of-sight index and height grid (3.39). */
+  cutaway: Cutaway;
   dispose(): void;
 }
 
@@ -44,8 +47,8 @@ export function buildWorld(map: MapData, seed: number): World {
   const disposables: { dispose(): void }[] = [];
   const half = map.half;
   const fadeTo = SIG.ground;
-  const basic = (o: THREE.MeshBasicMaterialParameters = {}, extra: { noise?: boolean; windows?: boolean; to?: Sig } = {}) => {
-    const m = patchMaterial(new THREE.MeshBasicMaterial({ vertexColors: true, ...o }), { half, to: extra.to ?? fadeTo, noise: extra.noise, windows: extra.windows });
+  const basic = (o: THREE.MeshBasicMaterialParameters = {}, extra: Partial<Omit<FadeOpts, 'half' | 'to'>> & { to?: Sig } = {}) => {
+    const m = patchMaterial(new THREE.MeshBasicMaterial({ vertexColors: true, ...o }), { half, ...extra, to: extra.to ?? fadeTo });
     disposables.push(m);
     return m;
   };
@@ -109,9 +112,19 @@ export function buildWorld(map: MapData, seed: number): World {
   const detail = placeDetail(map, seed);
   fromBuilder(flatDetail(detail), flat, 'flat-detail');
 
-  // Buildings: walls, pitched or flat roofs, procedural windows (visible light only).
-  const { geo: bGeo } = buildBuildings(map.buildings, seed);
-  const buildingMesh = fromBuilder(bGeo, basic({}, { windows: true }), 'buildings');
+  // Buildings: walls, pitched or flat roofs, procedural windows (visible light only). Towers in the
+  // way of the aim area cut away (cutaway.ts): the solid part here, the see-through part as a ghost
+  // drawn after everything opaque (same geometry, one extra draw call, nothing drawn when nothing is cut).
+  const { geo: bGeo, prisms } = buildBuildings(map.buildings, seed);
+  const cutaway = new Cutaway(prisms, half);
+  disposables.push(cutaway);
+  const buildingMesh = fromBuilder(bGeo, basic({}, { windows: true, cut: { tex: cutaway.texture, part: 'solid' } }), 'buildings');
+  if (buildingMesh) {
+    // One pass for both sides (three.js would otherwise draw a double-sided transparent mesh twice).
+    const ghostMat = basic({ transparent: true, depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true }, { cut: { tex: cutaway.texture, part: 'ghost' } });
+    const ghost = add(new THREE.Mesh(buildingMesh.geometry, ghostMat), 'buildings-ghost');
+    ghost.renderOrder = 10;
+  }
 
   fromBuilder(fenceGeometry(detail.fences), basic(), 'fences');
 
@@ -172,6 +185,7 @@ export function buildWorld(map: MapData, seed: number): World {
     group,
     pickables: buildingMesh ? [buildingMesh, ground] : [ground],
     detail,
+    cutaway,
     dispose: () => {
       for (const o of group.children) if (o instanceof THREE.InstancedMesh) o.dispose();
       disposables.forEach((d) => d.dispose());

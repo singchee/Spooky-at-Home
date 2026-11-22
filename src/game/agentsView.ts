@@ -4,7 +4,7 @@ import type { V2 } from '../map/types';
 import { bounds, pointInPolygon } from '../map/geom';
 import { FIGURE_SCALE, FigureBatch, HEAD_TOP, StrobeSprites } from '../render/figureShader';
 import { loadCharacterModels, type BakedClip, type BakedModel, type CharacterModels } from '../render/characterModels';
-import { MODEL_DISPLAY_SCALE, ModelBatch, clipRows } from '../render/modelShader';
+import { MODEL_DISPLAY_SCALE, ModelBatch, clipRows, leanPoint } from '../render/modelShader';
 import {
   ANIM,
   COWER_RANGE,
@@ -219,6 +219,7 @@ export class AgentsView {
     if (this.blasts.length > IMPACTS) this.blasts.shift();
   }
 
+  /** `view`: the camera (level of detail; figures lean back on steep views and the strobe follows the head). */
   update(sim: Sim, time: number, view?: LodView): void {
     // Animation timing follows the game clock, so it pauses with the game and is frame-rate independent.
     const dt = this.lastTime < 0 ? 0 : Math.min(0.1, Math.max(0, time - this.lastTime));
@@ -372,8 +373,10 @@ export class AgentsView {
         this.writeModel(this.sm, st, i, j, s.x, s.z, seed, name, sf.speed[i], deadFor, -1, 0, dt, core, limb, VIS_SURVIVOR);
         j++;
         if (s.alive) {
-          // The strobe sits on the baked top of the head.
-          const hp = this.modelPoint(this.sm, st, i, 0, seed);
+          // The strobe sits on the baked top of the head, leaning with the body (modelShader.ts).
+          const raw = this.modelPoint(this.sm, st, i, 0, seed);
+          const cp = view?.camera.position;
+          const hp = cp ? leanPoint(raw, cp.x - s.x, cp.y - this.sm.material.uniforms.uBase.value, cp.z - s.z) : raw;
           const q = n * 3;
           this.strobes.pos[q] = s.x + hp[0];
           this.strobes.pos[q + 1] = STROBE_BASE + hp[1] + 0.05; // just above the top of the head, as the simple figures do
@@ -405,9 +408,12 @@ export class AgentsView {
       if (s.alive) {
         const [up, fwd] = strobeOffset(sf.crouch[i], sf.run[i]);
         const q = n * 3;
-        this.strobes.pos[q] = s.x + Math.sin(sf.yaw[i]) * fwd * FIGURE_SCALE;
-        this.strobes.pos[q + 1] = STROBE_BASE + up * FIGURE_SCALE;
-        this.strobes.pos[q + 2] = s.z + Math.cos(sf.yaw[i]) * fwd * FIGURE_SCALE;
+        const raw: [number, number, number] = [Math.sin(sf.yaw[i]) * fwd * FIGURE_SCALE, up * FIGURE_SCALE, Math.cos(sf.yaw[i]) * fwd * FIGURE_SCALE];
+        const cp = view?.camera.position;
+        const hp = cp ? leanPoint(raw, cp.x - s.x, cp.y - STROBE_BASE, cp.z - s.z) : raw; // leans with the head (lean.ts)
+        this.strobes.pos[q] = s.x + hp[0];
+        this.strobes.pos[q + 1] = STROBE_BASE + hp[1];
+        this.strobes.pos[q + 2] = s.z + hp[2];
         n++;
       }
     }

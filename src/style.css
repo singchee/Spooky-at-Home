@@ -57,6 +57,18 @@ button:disabled { opacity: 0.5; }
 .hud-cross svg { width: 100%; height: 100%; }
 .hud-cross.danger { color: #ff5a4e; }
 .hud-cross.danger::after { content: attr(data-label); position: absolute; top: 50%; left: 100%; transform: translate(8px, -50%); white-space: nowrap; background: #b3261e; color: #fff; padding: 2px 6px; border-radius: 4px; font-weight: 700; }
+/* 3.39 MASKED: a building on the line of fire. Amber, dashed, steady (never blinks); its tag sits above the crosshair. */
+.hud-cross.masked { color: #ffb347; }
+.hud-cross.masked svg g:last-child { stroke-dasharray: 5 4; }
+.hud-cross.masked::before { content: attr(data-mask); position: absolute; bottom: 100%; left: 50%; transform: translate(-50%, -6px); white-space: nowrap; background: #1b1408; color: #ffb347; border: 1.5px solid #ffb347; padding: 1px 6px; border-radius: 4px; font-weight: 700; letter-spacing: 0.08em; }
+/* 3.39: where a masked round would hit. A small amber ring and cross, steady (never blinks). */
+.hud-impact { position: absolute; left: 0; top: 0; width: 14px; height: 14px; margin: -8px 0 0 -8px; border: 1.5px solid #ffb347; border-radius: 50%; box-shadow: 0 0 0 1px #000, inset 0 0 0 1px #000; pointer-events: none; }
+.hud-impact::before, .hud-impact::after { content: ''; position: absolute; left: 50%; top: 50%; width: 20px; height: 1.5px; margin: -0.75px 0 0 -10px; background: #ffb347; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6); transform: rotate(45deg); }
+.hud-impact::after { transform: rotate(-45deg); }
+.hud-impact[hidden] { display: none; }
+/* Off screen: a steady amber arrowhead at the edge, pointing at the spot (rotated in hud.ts). */
+.hud-impact.edge { border: none; border-radius: 0; box-shadow: none; width: 0; height: 0; margin: -9px 0 0 -8px; border-top: 9px solid transparent; border-bottom: 9px solid transparent; border-left: 16px solid #ffb347; filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000); transform-origin: 8px 9px; }
+.hud-impact.edge::before, .hud-impact.edge::after { display: none; }
 .hud-switching { position: absolute; left: 50%; top: 32%; transform: translateX(-50%); letter-spacing: 0.2em; display: none; }
 .hud-marker { position: absolute; left: 0; top: 0; font-size: 14px; margin: -48px 0 0 -50px; width: 100px; text-align: center; font-weight: 700; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
 .hud-marker::after { content: ''; display: block; width: 8px; height: 8px; border: 1px solid currentColor; transform: rotate(45deg); margin: 4px auto 0; }
