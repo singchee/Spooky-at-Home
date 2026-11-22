@@ -26,7 +26,7 @@ import { LINES, captionText, line } from '../sim/campaignText';
 import { effectiveReduceFlicker, mouseAimDelta } from './input';
 import { KEYS_SENTENCE, TOUCH_SENTENCE, keyAction, nextView, viewLabel, type ControlAction } from './controls';
 import { TouchControls } from './touchControls';
-import { CROWD_SIZES } from '../sim/crowd';
+import { CROWD_FIGURE_CAP, CROWD_SIZES } from '../sim/crowd';
 import { CROWD_KILL_LINES, CrowdMode } from './crowdMode';
 import { LandmarkLayer } from '../ui/landmarkLayer';
 import { landmarkList, type Landmark } from '../ui/landmarks';
@@ -207,7 +207,7 @@ export class Game {
     this.world = buildWorld(map, sim.mission.seed);
     // Crowd nights (spec 003): level of detail and the body cap inside the 1,200-figure total.
     const crowd = sim.mission.crowd && CROWD_SIZES[sim.mission.crowd.size];
-    this.agents = new AgentsView(crowd ? { lod: { models: crowd.models, bodies: crowd.bodies } } : {});
+    this.agents = new AgentsView(crowd ? { lod: { models: crowd.models, bodies: crowd.bodies, total: CROWD_FIGURE_CAP } } : {});
     this.scene.add(this.world.group, this.agents.group, this.effects.group);
 
     // Picture quality: ?gfx=high|low forces a tier; otherwise start high and drop to low if frames

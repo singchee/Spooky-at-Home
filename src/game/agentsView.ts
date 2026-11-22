@@ -59,6 +59,8 @@ export const LOD_STAY_PX = 22;
 export const LOD_HEIGHT_M = 1.75 * MODEL_DISPLAY_SCALE;
 /** Bodies the crowd cap removes sink out of sight over this long (Feel S4: a fade of 1 s or more, never a vanish). */
 export const BODY_SINK_S = 1.2;
+/** Over the body cap (a burst), the oldest sinking bodies finish within this long instead (never cut off half-sunk). */
+export const BODY_SINK_FAST_S = 0.35;
 /** How far a body sinks (metres): well under the ground and the roads. */
 export const BODY_SINK_M = 1.6;
 
@@ -121,10 +123,11 @@ export class AgentsView {
   private drawn: number[] = [];
   /** Crowd nights: bodies resting from deadOrder[restFrom] on; older ones sink out over BODY_SINK_S, then go. */
   private restFrom = 0;
-  private sinking: { i: number; t: number }[] = [];
+  private sinking: { i: number; p: number; fast: boolean }[] = [];
+  private sinkClock = -1;
   private sinkOf = new Map<number, number>();
   /** Crowd nights (spec 003): the model cap and the body cap; null for every other mission (single batch). */
-  private readonly lod: { models: number; bodies: number } | null;
+  private readonly lod: { models: number; bodies: number; total?: number } | null;
   /** The character-model batches once the models have loaded (null: the procedural figures draw). */
   private zm: ModelBatch | null = null;
   private sm: ModelBatch | null = null;
@@ -137,7 +140,7 @@ export class AgentsView {
    * keeps both zombie batches: up to `models` full models near the aim point, figures for the rest, and at most
    * `bodies` bodies drawn. `modelSet` hands in baked models directly (tests).
    */
-  constructor(opts: { models?: boolean; lod?: { models: number; bodies: number }; modelSet?: CharacterModels } = {}) {
+  constructor(opts: { models?: boolean; lod?: { models: number; bodies: number; total?: number }; modelSet?: CharacterModels } = {}) {
     this.lod = opts.lod ? { ...opts.lod } : null;
     // Same size on screen either way (pillar 3): crowd figures stand as tall as the models.
     if (this.lod) this.zombies.material.uniforms.uScale.value = LOD_HEIGHT_M / HEAD_TOP;
@@ -516,6 +519,7 @@ export class AgentsView {
       this.scanned = 0;
       this.restFrom = 0;
       this.sinking = [];
+      this.sinkClock = -1;
     }
     const alive = this.aliveIdx;
     let w = 0;
@@ -535,20 +539,29 @@ export class AgentsView {
       for (let r = dead.length - 1; r >= 0 && out.length < MAX_Z; r--) out.push(dead[r]);
       return out;
     }
-    // Crowd nights: at most `bodies` bodies, sinking ones included, so living + bodies stays inside the figure cap.
-    // Resting bodies leave room for the ones sinking out; past it the oldest start to sink, and they go once under.
+    // Crowd nights: `bodies` bodies, sinking ones included. Resting bodies leave room for the ones sinking out;
+    // past it the oldest start to sink, and go once under. A burst can push the count over the body cap for a
+    // moment: then the oldest sinking bodies speed up (BODY_SINK_FAST_S) rather than vanish half-sunk. The dead
+    // came from the living, so living + bodies stays inside the figure total; only past that total is one cut.
     const cap = this.lod.bodies;
+    const dt = this.sinkClock < 0 ? 0 : Math.min(0.1, Math.max(0, time - this.sinkClock));
+    this.sinkClock = time;
     const restMax = Math.max(0, cap - Math.max(60, Math.ceil(cap * 0.3))); // room to sink ~100 bodies a second
-    while (dead.length - this.restFrom > restMax) this.sinking.push({ i: dead[this.restFrom++], t: time });
+    while (dead.length - this.restFrom > restMax) this.sinking.push({ i: dead[this.restFrom++], p: 0, fast: false });
     const sink = this.sinking;
+    const resting = dead.length - this.restFrom;
+    let over = resting + sink.length - cap;
+    for (let r = 0; r < sink.length && over > 0; r++, over--) sink[r].fast = true; // oldest first
+    for (const b of sink) b.p = Math.min(1, b.p + dt / (b.fast ? BODY_SINK_FAST_S : BODY_SINK_S));
+    const room = this.lod.total !== undefined ? Math.max(cap, this.lod.total - alive.length) : cap;
     let drop = 0;
-    while (drop < sink.length && (time - sink[drop].t >= BODY_SINK_S || sink.length - drop + (dead.length - this.restFrom) > cap)) drop++;
+    while (drop < sink.length && (sink[drop].p >= 1 || resting + sink.length - drop > room)) drop++;
     if (drop) sink.splice(0, drop);
     this.sinkOf.clear();
     for (let r = dead.length - 1; r >= this.restFrom && out.length < MAX_Z; r--) out.push(dead[r]);
     for (let r = sink.length - 1; r >= 0 && out.length < MAX_Z; r--) {
       out.push(sink[r].i);
-      this.sinkOf.set(sink[r].i, Math.min(1, Math.max(0, (time - sink[r].t) / BODY_SINK_S)));
+      this.sinkOf.set(sink[r].i, sink[r].p);
     }
     return out;
   }

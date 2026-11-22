@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ANIM, HEAT, REACT_TIME, RUN_SPEED, ZOMBIE_RUN_SPEED, bodyHeat, gaitAmp, gaitRate, hash01, poseWeights, reactEnvelope, reactStrength, survivorAnimState, zombieAnimState } from '../src/game/agentAnim';
 import * as THREE from 'three';
-import { AgentsView, BODY_SINK_S, LOD_ENTER_PX, LOD_HEIGHT_M, LOD_STAY_PX, meanHeatWeight } from '../src/game/agentsView';
+import { AgentsView, BODY_SINK_FAST_S, BODY_SINK_S, LOD_ENTER_PX, LOD_HEIGHT_M, LOD_STAY_PX, meanHeatWeight } from '../src/game/agentsView';
 import { bakeModel } from '../src/render/characterModels';
 import { DEATH_EASE, deathHeat } from '../src/game/agentAnim';
 import { tinyRig } from './tinyRig';
@@ -293,6 +293,51 @@ describe('crowd nights (spec 003): draw list caps, level of detail, death heat',
     expect(faded).toBeGreaterThan(100);
     // Newest bodies are kept, oldest gone: the first bodies of all are long gone.
     expect(drawn()).not.toContain(0);
+    view.dispose();
+  });
+
+  it('a burst (265 kills in 1 s on top of 280 resting bodies): no body vanishes half-sunk, the 1,200 total holds, and the body cap is back within ~1.5 s', () => {
+    const view = new AgentsView({ models: false, lod: { models: 400, bodies: 400, total: 1200 } });
+    // 800 living, then 280 of them die and settle as resting bodies.
+    const zombies = Array.from({ length: 800 }, (_, i) => mk(i, true));
+    const sim = { zombies, survivors: [], t: 0 };
+    const drawn = () => (view as unknown as { drawn: number[] }).drawn;
+    const sinkOf = () => (view as unknown as { sinkOf: Map<number, number> }).sinkOf;
+    let t = 0;
+    const frame = () => {
+      t += 1 / 30;
+      sim.t = t;
+      view.update(sim as never, t);
+    };
+    for (let i = 0; i < 280; i++) Object.assign(zombies[i], { alive: false, diedAt: 0 });
+    for (let i = 0; i < 280; i++) zombies.push(mk(zombies.length, true)); // the crowd refills
+    for (let f = 0; f < 60; f++) frame();
+    expect(drawn().length - zombies.filter((z) => z.alive).length).toBe(280);
+    // The burst: 265 of the living die over 30 frames, while new ones arrive at the spawner's ~20 a second.
+    const lastSink = new Map<number, number>();
+    let prev = new Set(drawn());
+    let next = 280;
+    let maxBodies = 0;
+    for (let f = 0; f < 90; f++) {
+      if (f < 30) for (let n = 0; n < 9 && next < 280 + 265; n++) Object.assign(zombies[next++], { alive: false, diedAt: t });
+      if (f % 2 === 0) zombies.push(mk(zombies.length, true));
+      frame();
+      const d = drawn();
+      const now = new Set(d);
+      const living = zombies.filter((z) => z.alive).length;
+      for (let i = 0; i < zombies.length; i++) if (zombies[i].alive) expect(now.has(i)).toBe(true);
+      expect(d.length).toBeLessThanOrEqual(1200);
+      if (f >= 45) expect(d.length - living, `bodies at frame ${f}`).toBeLessThanOrEqual(400);
+      maxBodies = Math.max(maxBodies, d.length - living);
+      for (const i of prev) {
+        if (now.has(i) || zombies[i].alive) continue;
+        // Seen one frame before it went: at most one fast step (1/30 s of BODY_SINK_FAST_S) short of fully sunk.
+        expect(lastSink.get(i) ?? 0, `body ${i} left the picture before sinking`).toBeGreaterThanOrEqual(1 - 1 / 30 / BODY_SINK_FAST_S - 1e-6);
+      }
+      for (const [i, s] of sinkOf()) lastSink.set(i, s);
+      prev = now;
+    }
+    expect(maxBodies).toBeGreaterThan(400); // the burst really went over the body cap
     view.dispose();
   });
 
