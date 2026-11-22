@@ -3322,10 +3322,9 @@ async function crowdFlashChecks(browser) {
       await page.close();
     }
   }
-  // B. Mass kills for 10 s: the 105, 40 and 25 each into one of the three densest cells, Huge, white-hot. Gate (needs the
-  //    owner's OK; see spec 003): at least 35 kills a second sustained over the 10 s, and at least one 1-second window
-  //    of 150+ kills, so the opening burst is covered too. The spec's 50/s dates from the 1,200/2,000-alive drafts:
-  //    Huge at 800 alive can supply about 37 kills a second over 10 s (a probe's best single second was 265).
+  // B. Mass kills for 10 s: hold fire to the cap, then the 105, 40 and 25 onto the densest cell, Huge, white-hot. Gate
+  //    (spec 003): the spec's 50+ kills a second sustained over the 10 s, plus at least one 1-second
+  //    window of 150+ kills, so the opening burst is covered too (strictly harder than the spec's gate).
   {
     // Hold fire until the crowd is at Huge's cap (800 alive, from t = 200), then open with the 105 on the densest
     // cell and bring the 40 and the 25 into the same spot as it lands: the worst burst the meter can see.
@@ -3370,7 +3369,7 @@ async function crowdFlashChecks(browser) {
       bestSecond = Math.max(bestSecond, log[i][1] - log[j][1]);
     }
     const r = judge('crowd B: 10 s of mass kills (105, 40 and 25 into the three densest cells), white-hot, huge', frames, { kills, killsPerSec: Number((kills / 10).toFixed(1)), bestSecond, aliveAtStart: alive0, firstCell: spot.n });
-    if (kills < 350) r.errors.push(`${(kills / 10).toFixed(1)} kills a second over 10 s: the scenario needs 35 or more (not a flash failure; the crowd wasn't dense enough)`);
+    if (kills < 500) r.errors.push(`${(kills / 10).toFixed(1)} kills a second over 10 s: the scenario needs 50 or more (not a flash failure; the crowd wasn't dense enough)`);
     if (bestSecond < 150) r.errors.push(`best 1-second window ${bestSecond} kills: the scenario needs a burst of 150 or more`);
     r.errors.push(...errs);
     r.ok = !r.errors.length;
