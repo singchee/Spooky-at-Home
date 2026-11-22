@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BURST_GAP, BurstCounter, COUNTER_HZ, MULT_FADE, TALLY_IN, TALLY_MAX, TALLY_MIN, TALLY_OUT, tallyFor, tallyOpacity } from '../src/ui/crowdHud';
 import { CrowdBests, crowdBestKey } from '../src/ui/crowdBests';
 import { CROWD_KILL_LINES, FrameStats } from '../src/game/crowdMode';
+import { defaultCrowdSize } from '../src/ui/recon';
 
 /** Spec 003 Feel M1-M4 and S1: the crowd HUD's rules (the DOM side is checked by the playtest). */
 describe('crowd HUD rules', () => {
@@ -78,5 +79,22 @@ describe('frame stats (dev readout)', () => {
     expect(s.medianFps).toBeCloseTo(60, 0);
     expect(s.worst1sFps).toBeLessThan(40);
     expect(s.maxFrameMs).toBe(50);
+  });
+});
+
+describe('crowd size default (spec 003 §4)', () => {
+  it('tablets and phones (coarse pointer) start on Big, everything else on Huge', () => {
+    const g = globalThis as { matchMedia?: unknown };
+    const old = g.matchMedia;
+    try {
+      g.matchMedia = (q: string) => ({ matches: q === '(pointer: coarse)' });
+      expect(defaultCrowdSize()).toBe('big');
+      g.matchMedia = () => ({ matches: false });
+      expect(defaultCrowdSize()).toBe('huge');
+      g.matchMedia = undefined;
+      expect(defaultCrowdSize()).toBe('huge');
+    } finally {
+      g.matchMedia = old;
+    }
   });
 });

@@ -62,6 +62,9 @@ button:disabled { opacity: 0.5; }
 .hud-marker::after { content: ''; display: block; width: 8px; height: 8px; border: 1px solid currentColor; transform: rotate(45deg); margin: 4px auto 0; }
 .hud-attrib { position: absolute; right: 16px; bottom: 16px; font-size: 14px; }
 /* Crowd nights (spec 003, Feel M1/S2): numbers on a solid dark plate with an outline, top centre, clear of the guns, stick and buttons. */
+.recon-crowd { margin-top: 16px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.15); }
+.recon-crowd-size { display: flex; gap: 16px; flex-wrap: wrap; }
+.recon-crowd-opt { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; }
 .crowd-top { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; gap: 16px; align-items: baseline; white-space: nowrap; background: rgba(0, 0, 0, 0.7); border-radius: 4px; padding: 4px 12px; }
 .crowd-top, .crowd-tally, .crowd-alarm { text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
 .crowd-kills { font-size: 22px; font-weight: 700; letter-spacing: 0.04em; }

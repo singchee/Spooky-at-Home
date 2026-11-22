@@ -8,6 +8,9 @@ import { TacticalMap } from './tacticalMap';
 import { el } from './dom';
 import { bestKey, bests, formatBest, missionKind } from './bests';
 import { timeAgo } from './placeCache';
+import { generateCrowd, type CrowdSize } from '../sim/crowd';
+import { mapFingerprint } from '../sim/campaign';
+import { crowdBestKey, crowdBests } from './crowdBests';
 
 /**
  * "Recon complete": what's in the area, a tactical map, and three missions that suit it.
@@ -17,6 +20,17 @@ export interface ReconHandlers {
   onChoose(s: MissionSuggestion, difficulty: number, seed: number): void;
   onCustom(): void;
   onBack(): void;
+  /** Spec 003: fly a crowd night on this map at this size. */
+  onCrowd?(size: CrowdSize, seed: number): void;
+}
+
+/** The crowd size a device starts on (spec 003 §4): tablets and phones Big, desktops Huge. The player can change it. */
+export function defaultCrowdSize(): CrowdSize {
+  try {
+    return typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 'big' : 'huge';
+  } catch {
+    return 'huge';
+  }
 }
 
 /** A place kept on this device (BACKLOG 3.12): say so, and offer Refresh and Forget. */
@@ -140,6 +154,8 @@ export function showRecon(parent: HTMLElement, map: MapData, start: { seed: numb
     render();
   });
 
+  if (h.onCrowd) crowdEntry(root, map, graph, walk, seed, h.onCrowd);
+
   const foot = el('div', 'row', undefined, root);
   el('button', 'recon-custom', 'Custom mission', foot).addEventListener('click', () => h.onCustom());
   el('button', 'recon-change', 'Scout another place', foot).addEventListener('click', () => h.onBack());
@@ -166,6 +182,54 @@ export function showRecon(parent: HTMLElement, map: MapData, start: { seed: numb
       timingNote.textContent = text;
     },
   };
+}
+
+/**
+ * Spec 003: the crowd night's entry, below the suggested missions (the story stays the front door). Always offered
+ * where the map allows it; where it doesn't, the generator's own reason. "Horde Night" is a working title.
+ */
+function crowdEntry(root: HTMLElement, map: MapData, graph: ReturnType<typeof buildRoadGraph>, walk: WalkGrid, seed: number, go: (size: CrowdSize, seed: number) => void): void {
+  const box = el('div', 'recon-crowd', undefined, root);
+  el('h3', undefined, 'Horde Night', box);
+  el('p', undefined, 'Five minutes. Thousands of them. Just shooting.', box);
+  let check: ReturnType<typeof generateCrowd>;
+  try {
+    check = generateCrowd(map, graph, walk, { seed, size: 'big' });
+  } catch (e) {
+    check = { ok: false, reason: `Couldn't plan a Horde Night here (${(e as Error).message}).` };
+  }
+  if (!check.ok) {
+    el('p', 'small recon-crowd-reason', check.reason, box);
+    return;
+  }
+  el('p', 'small', `At ${check.mission.safehouse!.name}, till dawn.`, box);
+  const row = el('div', 'row recon-crowd-row', undefined, box);
+  const group = el('div', 'recon-crowd-size', undefined, row);
+  group.setAttribute('role', 'radiogroup');
+  group.setAttribute('aria-label', 'Crowd size');
+  let size = defaultCrowdSize();
+  const best = el('p', 'small mc-best', '', box);
+  const fp = mapFingerprint(map);
+  const showBest = () => {
+    const b = crowdBests().get(crowdBestKey(fp, size));
+    best.textContent = b ? `Best on ${size === 'big' ? 'Big' : 'Huge'}: ${b.score.toLocaleString('en-AU')} (${b.kills.toLocaleString('en-AU')} kills)` : 'Not flown yet at this size';
+  };
+  for (const [id, label, note] of [['big', 'Big', 'up to 600 at once · for tablets'], ['huge', 'Huge', 'up to 800 at once · for desktops']] as const) {
+    const lab = el('label', 'recon-crowd-opt', undefined, group);
+    const input = el('input', undefined, undefined, lab);
+    input.type = 'radio';
+    input.name = 'crowd-size';
+    input.value = id;
+    input.checked = id === size;
+    input.addEventListener('change', () => {
+      size = id;
+      showBest();
+    });
+    el('span', undefined, ` ${label} `, lab);
+    el('span', 'small', note, lab);
+  }
+  showBest();
+  el('button', 'recon-crowd-go', 'Fly Horde Night', row).addEventListener('click', () => go(size, seed));
 }
 
 /** "Found in the area": the places, bus routes, and the counts. Drawn again when the extras arrive. */

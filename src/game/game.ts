@@ -271,7 +271,7 @@ export class Game {
     const visuals = briefingVisuals(this.map, m, this.sim.graph, this.sim.grid);
     this.briefingView = visuals;
     card.appendChild(visuals.el);
-    el('div', 'card-kicker', `MISSION · DIFFICULTY ${m.difficulty} · SEED ${m.seed}`, card);
+    el('div', 'card-kicker', m.crowd ? `HORDE NIGHT · ${m.crowd.size.toUpperCase()} · SEED ${m.seed}` : `MISSION · DIFFICULTY ${m.difficulty} · SEED ${m.seed}`, card);
     el('h2', undefined, m.title, card);
     for (const line of m.briefing) el('p', undefined, line, card);
     for (const line of m.intel) el('p', 'intel', line, card);

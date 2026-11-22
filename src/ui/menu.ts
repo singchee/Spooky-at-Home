@@ -28,6 +28,8 @@ export interface MenuChoice {
   /** Set when the mission was chosen on the recon screen. */
   template?: TemplateId;
   anchor?: string;
+  /** Spec 003: a crowd night (Horde Night) at this size, instead of a mission. */
+  crowd?: 'big' | 'huge';
 }
 
 export type MenuMode = 'scout' | 'recon' | 'custom';
@@ -190,6 +192,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
         onChoose: (s, d, sd) => onStart({ map: m, type: s.base, template: s.template, anchor: s.anchor?.id, difficulty: d, seed: sd }),
         onCustom: () => show('custom'),
         onBack: () => show('scout'),
+        onCrowd: (size, sd) => onStart({ map: m, type: 'defend', difficulty: 3, seed: sd, crowd: size }),
       }, savedNote?.map === m ? savedNote : undefined);
       if (loadInfo?.map === m) {
         if (loadInfo.extras === 'pending') recon.extras('pending');
