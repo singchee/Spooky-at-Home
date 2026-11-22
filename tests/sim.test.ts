@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { makeSampleTown } from '../src/map/sample';
 import { buildRoadGraph, dijkstra, nearestNode, pathFromPrev } from '../src/map/roadGraph';
 import { WalkGrid } from '../src/map/grid';
-import { generateMission, MISSION_TYPES, waveIntel, type MissionType } from '../src/sim/missions';
+import { generateMission, MISSION_TYPES, SCATTER_BRIEF, waveIntel, type MissionType } from '../src/sim/missions';
 import { createSim } from '../src/sim/setup';
 import { Bot, SKILL } from '../src/sim/bot';
 import type { Sim } from '../src/sim/sim';
@@ -212,6 +212,9 @@ describe('committed hashes: escort and classic clear (spec 002 commit 1, locked 
   it('committed fingerprint: sample-town classic clear d3 seed 42 has not changed', () => {
     const r = generateMission(map, graph, grid, { type: 'clear', difficulty: 3, seed: 42 });
     expect(fnv(JSON.stringify(r))).toBe(EXPECTED_CLEAR_FINGERPRINT);
+    // The scatter briefing sentence is text only: without it, the mission is exactly the one locked in commit 1.
+    if (r.ok) r.mission.briefing = r.mission.briefing.filter((b) => b !== SCATTER_BRIEF);
+    expect(fnv(JSON.stringify(r))).toBe(CLEAR_FINGERPRINT_WITHOUT_SCATTER_TEXT);
   });
   it('a classic clear with nobody firing plays identically (trace hash, d3 seed 42, 30 s)', () => {
     const t = trace('clear');
@@ -224,7 +227,9 @@ describe('committed hashes: escort and classic clear (spec 002 commit 1, locked 
 const EXPECTED_ESCORT_TRACE = 'dc9b389b';
 // Spec 002 commit 1: locked with the 99 m HORDE_CHILD_GAP (SCATTER_LEASH 45). They differ from the pre-gap
 // values on purpose: the wider gap moves hordes, the shelter spot or the drift line in ~25% of Clear missions.
-const EXPECTED_CLEAR_FINGERPRINT = '8af85e6';
+// 45b4ee67: the Clear briefing gains the scatter sentence (SCATTER_BRIEF, text only). Without it: 8af85e6 (commit 1).
+const EXPECTED_CLEAR_FINGERPRINT = '45b4ee67';
+const CLEAR_FINGERPRINT_WITHOUT_SCATTER_TEXT = '8af85e6';
 // Before the gap (80 m) they were b2ab636a and 486e254c.
 const EXPECTED_CLEAR_TRACE = 'a8aa6fd6';
 

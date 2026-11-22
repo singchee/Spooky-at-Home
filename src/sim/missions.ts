@@ -141,6 +141,8 @@ export const CHILD_FIRE_CLEARANCE = 30;
  * horde's path (its gathering point, or the drifting horde's line to the shelter). A hard move rule in Sim.
  */
 export const SCATTER_LEASH = 45;
+/** The Clear briefing's one true sentence about scatter (spec 002 rule 7; draft for the Story Writer). Always true: a rule. */
+export const SCATTER_BRIEF = "Shell a horde and whatever's left of it scatters, then drifts back to where it gathered.";
 /**
  * Guardrail (PLAN §9): no horde gathers within this many metres of a school, kindergarten or playground.
  * The farthest a horde zombie can ever be from its gathering point (the scatter leash, which is wider than the
@@ -291,7 +293,7 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
         title: `Clear the horde — ${placeLabel(map, orbit)}`,
         briefing: [
           `Spooky, this is Ground. ${hordes.length} hordes are shambling around ${listJoin(unique(hordes.map((h) => h.label)))}.`,
-          `Clear every one of them within ${fmtTime(timeLimit)}.`,
+          `Clear every one of them within ${fmtTime(timeLimit)}.`, SCATTER_BRIEF,
           `Two friendlies are sheltering near ${shelterAt.label}. Mind your aim.`,
           roe,
         ],
@@ -705,7 +707,7 @@ function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'c
     mission: {
       ...base,
       title,
-      briefing: [opener, `Clear every one of them within ${fmtTime(timeLimit)}.`, `Two friendlies are sheltering near ${shelterAt.label}. Mind your aim.`, roe],
+      briefing: [opener, `Clear every one of them within ${fmtTime(timeLimit)}.`, SCATTER_BRIEF, `Two friendlies are sheltering near ${shelterAt.label}. Mind your aim.`, roe],
       intel: [intel],
       timeLimit,
       orbitCentre: centroid(centres),
