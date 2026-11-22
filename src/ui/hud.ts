@@ -117,10 +117,16 @@ export class Hud {
   }
 
   private impact: HTMLDivElement;
-  /** 3.39: while MASKED, a small steady mark where the round would actually hit (null hides it). */
-  setImpactMark(p: { x: number; y: number } | null): void {
+  /**
+   * 3.39: while MASKED, a small steady mark where the round would actually land (null hides it); with
+   * `angle`, the spot is off screen and this is an edge pointer toward it (radians, 0 = right).
+   */
+  setImpactMark(p: { x: number; y: number; angle?: number } | null): void {
     this.impact.hidden = !p;
-    if (p) this.impact.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
+    if (!p) return;
+    const edge = p.angle !== undefined;
+    this.impact.classList.toggle('edge', edge);
+    this.impact.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)${edge ? ` rotate(${p.angle!.toFixed(3)}rad)` : ''}`;
   }
 
   setMarkers(ms: HudMarker[]): void {

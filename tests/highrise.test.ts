@@ -4,7 +4,7 @@ import { blocks, entryT, hideDistance, HeightGrid, pointSegDist, prism, PrismInd
 import { AIM_KEEP, CUT_MIN_TOP, Cutaway, cutHeight, FADE_TIME, STUMP } from '../src/world/cutaway';
 import { GHOST } from '../src/world/shading';
 import { CENTRE_PULL, GunshipOrbit, offVertical, orbitTarget, RM_FAR, RM_GAP, tallFactor, TALL_FROM, TALL_TO, TIGHT_RADIUS, turnHeading } from '../src/game/gunshipOrbit';
-import { dangerCloseAt, MaskLatch, NearSet } from '../src/game/lineOfFire';
+import { dangerCloseAt, edgePointer, MaskLatch, NearSet, roundTarget } from '../src/game/lineOfFire';
 import { figureLean, FIGURE_LEAN_MAX, leanPoint } from '../src/render/modelShader';
 import { ORBIT } from '../src/sim/sim';
 import { presetToMap } from '../src/map/presets';
@@ -185,6 +185,30 @@ describe('the gunship orbit (3.39)', () => {
     expect(p.cuts).toBe(1); // a long aim move, once the aim is still: one cut, even mid-burst
   });
 
+  it('reduced motion: "the aim is still" is judged by speed, the same at 30, 60 and 144 fps', () => {
+    const cutTimes = (fps: number) => {
+      const o = new GunshipOrbit({ cx: 0, cz: 0, r: 1000 }, { x: 0, z: 0 }, 0);
+      // A slow drift (2 m/s, still for this purpose), then a 10 m/s pan, then a stop.
+      const path = (t: number) => ({ x: t < 3 ? t * 2 : t < 20 ? 6 + (t - 3) * 10 : 176, z: 0 });
+      let before = 0;
+      const out: number[] = [];
+      for (let f = 0; f <= fps * 25; f++) {
+        const t = f / fps;
+        o.update(1 / fps, 1, C, path(t), R, { reducedMotion: true, idle: 0 });
+        if (o.cuts !== before) out.push(t);
+        before = o.cuts;
+      }
+      return out;
+    };
+    const ref = cutTimes(60);
+    expect(ref.length).toBeGreaterThan(0);
+    for (const fps of [30, 144]) {
+      const c = cutTimes(fps);
+      expect(c.length).toBe(ref.length);
+      c.forEach((t, i) => expect(Math.abs(t - ref[i])).toBeLessThan(0.05));
+    }
+  });
+
   it('reduced motion: panning across the edge of a high-rise district cuts at most once every 1.5 s', () => {
     // Tall west of x = 0, low east of it, with a ragged edge (the tall factor wobbles near the boundary).
     const kAt = (p: { x: number; z: number }) => (p.x < 10 * Math.sin(p.z / 7) ? 1 : p.x < 25 ? 0.3 + 0.2 * Math.sin(p.x) : 0);
@@ -240,6 +264,29 @@ describe('the line of fire: where rounds land, DANGER CLOSE, MASKED (3.39)', () 
     expect(l.x).toBeCloseTo(65);
     expect(l.y).toBeCloseTo(97.5);
     expect(new PrismIndex([tower], 400).landing({ x: -100, z: 0 }, G)).toEqual({ x: -100, y: 0, z: 0, building: -1 });
+  });
+
+  it('the MASKED impact mark sits on the ground exactly where tryFire sends the round', () => {
+    const contact = new PrismIndex([tower], 400).landing(O, G); // meets the wall 30 m up at x = 20
+    const rt = roundTarget(contact);
+    expect(rt.blocked).toBe(true);
+    expect(rt.mark).toEqual({ x: rt.fire.x, y: 0, z: rt.fire.z }); // on the ground, not on the wall
+    expect(rt.fire.x).toBeCloseTo(20);
+    const clear = roundTarget(new PrismIndex([tower], 400).landing({ x: -100, z: 0 }, G));
+    expect(clear).toEqual({ fire: { x: -100, z: 0 }, mark: { x: -100, y: 0, z: 0 }, blocked: false });
+  });
+
+  it('an off-screen impact gets a pointer on the screen edge, toward it', () => {
+    const e = edgePointer(2000, 360, 1280, 720, 28); // far right, level with the centre
+    expect(e.x).toBeCloseTo(1252);
+    expect(e.y).toBeCloseTo(360);
+    expect(e.angle).toBeCloseTo(0);
+    const d = edgePointer(640, -1000, 1280, 720, 28); // straight up
+    expect(d.y).toBeCloseTo(28);
+    expect(d.angle).toBeCloseTo(-Math.PI / 2);
+    const c = edgePointer(-2000, 2000, 1280, 720, 28); // down-left: leaves through the bottom
+    expect(c.y).toBeCloseTo(692);
+    expect(c.x).toBeGreaterThanOrEqual(28);
   });
 
   it('DANGER CLOSE is judged where the round will land, not at the aim point', () => {

@@ -14,6 +14,40 @@ export function dangerCloseAt(landing: V2, friends: readonly { x: number; z: num
   return friends.some((s) => s.alive && !s.home && Math.hypot(s.x - landing.x, s.z - landing.z) < r);
 }
 
+/** What `landing()` returns: the point of contact on the line of fire, and the building (-1: none). */
+export interface Contact {
+  x: number;
+  y: number;
+  z: number;
+  building: number;
+}
+
+/**
+ * Where a round fired at `aim` goes (buildings stop rounds; BACKLOG 3.41 moves this into the sim):
+ * `fire` is the ground point handed to the sim (under the first building contact, or the aim point),
+ * `mark` is where the MASKED impact mark is drawn: the same point, on the ground (y 0), where the
+ * blast will actually be, not where the line of fire meets the wall.
+ */
+export function roundTarget(contact: Contact): { fire: V2; mark: { x: number; y: number; z: number }; blocked: boolean } {
+  return { fire: { x: contact.x, z: contact.z }, mark: { x: contact.x, y: 0, z: contact.z }, blocked: contact.building >= 0 };
+}
+
+/**
+ * A steady pointer at the screen edge for a point off screen (CSS px): the point where the line from
+ * the screen centre toward it leaves the screen, `margin` px inside, and the direction (radians, 0 = right).
+ */
+export function edgePointer(x: number, y: number, w: number, h: number, margin = 28): { x: number; y: number; angle: number } {
+  const cx = w / 2;
+  const cy = h / 2;
+  let dx = x - cx;
+  let dy = y - cy;
+  if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) dy = 1;
+  const t = Math.min(Math.abs(dx) > 1e-6 ? (cx - margin) / Math.abs(dx) : Infinity, Math.abs(dy) > 1e-6 ? (cy - margin) / Math.abs(dy) : Infinity);
+  dx *= Math.max(0, t);
+  dy *= Math.max(0, t);
+  return { x: cx + dx, y: cy + dy, angle: Math.atan2(y - cy, x - cx) };
+}
+
 /** MASKED: on as soon as the line is blocked, off only once it has been clear for OFF_AFTER seconds. */
 export class MaskLatch {
   static readonly OFF_AFTER = 0.3;

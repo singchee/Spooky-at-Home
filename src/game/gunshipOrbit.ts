@@ -42,6 +42,8 @@ export const RM_IDLE = 1;
 export const RM_GAP = 1.5;
 export const RM_STILL = 0.4;
 export const RM_K_STEP = 0.25;
+/** The aim counts as still below this speed, m/s (frame-rate independent). */
+export const RM_STILL_SPEED = 3;
 
 /** 0 over low-rise ground, 1 over high-rise blocks (smooth in between). */
 export function tallFactor(tallness: number): number {
@@ -86,7 +88,8 @@ export class GunshipOrbit {
     dt = Math.max(0, dt); // the first animation frame can stamp a time just before the game's start
     this.t += dt;
     const moved = Math.hypot(aim.x - this.prevAim.x, aim.z - this.prevAim.z);
-    this.still = moved > 0.5 ? 0 : this.still + dt;
+    if (dt > 0) this.still = moved / dt > RM_STILL_SPEED ? 0 : this.still + dt;
+    else if (moved > 0.01) this.still = 0;
     this.prevAim = { ...aim };
     const s = this.shape;
     if (o.reducedMotion) {

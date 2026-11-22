@@ -30,7 +30,7 @@ import { LandmarkLayer } from '../ui/landmarkLayer';
 import { landmarkList, type Landmark } from '../ui/landmarks';
 import { GunshipOrbit, offVertical, orbitTarget, tallFactor, turnHeading } from './gunshipOrbit';
 import { AIM_KEEP, type Keep } from '../world/cutaway';
-import { dangerCloseAt, MaskLatch, NearSet } from './lineOfFire';
+import { dangerCloseAt, edgePointer, MaskLatch, NearSet, roundTarget } from './lineOfFire';
 
 /** The browser game: renders the simulation, handles input, camera, sound and screens. */
 export interface GameOptions {
@@ -794,8 +794,7 @@ export class Game {
    */
   private tryFire(): void {
     if (!this.sim.weaponReady(this.weapon)) return;
-    const l = this.world.cutaway.index.landing(this.aim, this.gunship);
-    this.sim.fire(this.weapon, { x: l.x, z: l.z });
+    this.sim.fire(this.weapon, roundTarget(this.world.cutaway.index.landing(this.aim, this.gunship)).fire);
   }
 
   /** Kills waiting to be called in (merged over KILL_MERGE seconds), and which line goes next. */
@@ -915,9 +914,14 @@ export class Game {
     const markers = this.markers(markerPts);
     this.hud.setMarkers(markers);
     // MASKED: a small steady mark where the round would actually hit (the HUD: never see-through).
-    const l = this.landing;
-    const mark = this.masked && l.building >= 0 ? this.screenPos({ x: l.x, z: l.z }, l.y) : null;
-    this.hud.setImpactMark(mark && mark.visible ? mark : null);
+    // On the ground where the blast will be (the same point tryFire hands the sim); a steady edge
+    // pointer toward it when that is off screen.
+    const rt = roundTarget(this.landing);
+    if (this.masked && rt.blocked) {
+      const sp = this.screenPos(rt.fire, rt.mark.y);
+      const c = this.renderer.domElement;
+      this.hud.setImpactMark(sp.visible ? { x: sp.x, y: sp.y } : edgePointer(sp.x, sp.y, c.clientWidth, c.clientHeight));
+    } else this.hud.setImpactMark(null);
     this.updateLandmarks(fov, markers);
   }
 
