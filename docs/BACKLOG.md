@@ -73,6 +73,8 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 
 | 3.34 | Menu and UI restyle, military feel (owner: "menus are very generic"): landing, scout, recon, briefing, settings, pause, result and campaign screens as one system: ops-terminal panels, stencil headings, mission-card "dossiers", stamped status tags, map grid textures, monospace data readouts, sensor-green/amber accents. Rules: our own style (no copying Zombie Gunship's or any real military's insignia, unit names or classification markings), readable (contrast, ≥14 px, ≥48 px touch targets), works in reduced motion, one style guide in docs/STYLE.md | visuals, feel, playtest | later (Art Director) |
 
+| 3.35 | Shorter briefings (owner: "too wordy"): (1) one short **spoken** briefing per mission type (Clear, Escort, Defend, Convoy, Horde Night), recorded once by Commander Quill or Ground, generic so it's true on every map (no names or numbers in the audio); (2) the specifics shown **on the map** (labels, counts, arrows, route) via the walk-through, with at most one short line of text per stop; (3) the full written intel kept behind a "Details" toggle so nothing true is lost. Story Writer trims, Audio Director records (price first), Art Director lays out | story, sound, visuals, feel | later |
+
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game
