@@ -84,6 +84,8 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 | 3.41 | Buildings block shots in the sim: rounds travel from the gunship's real position and hit the first building on the line (roof or wall); MASKED reticle state from the sim; balance runs; school guardrail check that rooftop impacts keep the child-place clearance; after Horde Night merges (same file) | plan, review, balance, playtest | todo (after 003) |
 | 3.40 | Swap the New York preset centre to the Central Park edge (open ground for hordes, city around it); after the 4-city download batch finishes (fair use) | map-check, playtest | todo |
 
+| 3.42 | World campaign through the famous places (owner idea): a fixed tour (e.g. Sydney → London → Paris → Rome → Tokyo → New York), each city a short chain of missions built around its landmark area. Chief's note: because preset maps are fixed, these missions can be **hand-tuned** (positions, waves, bosses, radio lines) like Zombie Gunship's levels, unlike the generated Three Nights; reuse spec 001's campaign engine (planning, saved progress, previously-on, tally) and cutscene-free radio briefings (3.35); bosses (3.36) as city finales; loadout unlocks (3.29) as rewards. Same rules: tone exclusions, school guardrail, intel always true | pitch, plan, balance, story, sound | next after Three Nights screens |
+
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game
