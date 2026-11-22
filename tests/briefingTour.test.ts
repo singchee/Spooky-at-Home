@@ -7,7 +7,7 @@ import { CATEGORY_INFO, mapFeatures, MISSION_TEMPLATES, TEMPLATE_IDS } from '../
 import { FIRST_WAVE, generateMission, likelyWaveDirections, placeLabel, type Mission } from '../src/sim/missions';
 import { noWaveSpawn, ORBIT } from '../src/sim/sim';
 import { createSim } from '../src/sim/setup';
-import { dioramaExtent, planTour } from '../src/ui/briefingDiorama';
+import { dioramaExtent, labelSpecs, planTour } from '../src/ui/briefingDiorama';
 import {
   angleDelta,
   blendPose,
@@ -325,5 +325,20 @@ describe('walk-through camera maths', () => {
     const m2 = { ...m1, seed: m1.seed + 1 };
     expect(tourKey(m1)).not.toBe(tourKey(m2));
     expect(tourKey(m1)).toBe(tourKey({ ...m1 }));
+  });
+});
+
+describe('landmark labels (owner decision #11)', () => {
+  it('labels public landmarks but never schools, kindergartens (childcare) or playgrounds', () => {
+    const child = new Set(mapFeatures(map).filter((f) => ['school', 'kindergarten', 'playground'].includes(f.category)).map((f) => `f:${f.id}`));
+    expect(child.size).toBeGreaterThan(0); // the sample town has a school to leave out
+    let places = 0;
+    for (const [name, m] of MISSIONS) {
+      const waves = likelyWaveDirections(m, map, graph);
+      const specs = labelSpecs(map, m, waves, dioramaExtent(map, m));
+      for (const s of specs) expect(child.has(s.id), `${name}: ${s.text}`).toBe(false);
+      places += specs.filter((s) => s.kind === 'place').length;
+    }
+    expect(places).toBeGreaterThan(0);
   });
 });

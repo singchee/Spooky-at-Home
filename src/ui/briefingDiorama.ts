@@ -203,13 +203,16 @@ export interface LabelSpec {
 
 /** Longest label, in characters (longer OpenStreetMap names are cut with an ellipsis). */
 const LABEL_MAX = 26;
+/** Places never labelled (owner decision #11). Childcare is mapped as a kindergarten. */
+const CHILD_PLACES = new Set<string>(['school', 'kindergarten', 'playground']);
 const clip = (s: string) => (s.length > LABEL_MAX ? `${s.slice(0, LABEL_MAX - 1)}…` : s);
 
 /**
  * What gets a label: the mission's own places (safehouse, home, hordes, friendlies, wave
  * directions), the recon place it's built around, then public landmarks (recon features with a
  * name, most important first). Never the player's own typed address: it isn't a feature, so it
- * can't appear here.
+ * can't appear here. Never schools, kindergartens, childcare or playgrounds (owner decision #11:
+ * they are left out of the game).
  */
 export function labelSpecs(map: MapData, m: Mission, waves: WaveDirection[], box: Rect, heightAt: (p: V2) => number = () => 0): LabelSpec[] {
   const out: LabelSpec[] = [];
@@ -240,7 +243,7 @@ export function labelSpecs(map: MapData, m: Mission, waves: WaveDirection[], box
   if (m.anchor && inside(m.anchor.p, box)) out.push({ id: `f:${m.anchor.id}`, text: clip(m.anchor.name), kind: 'anchor', p: m.anchor.p, y: heightAt(m.anchor.p) + 4, priority: 78 });
   const seen = new Set<string>();
   for (const f of mapFeatures(map)) {
-    if (!f.name || f.id === anchorId || !inside(f.p, box) || CATEGORY_INFO[f.category].weight < 4) continue;
+    if (!f.name || f.id === anchorId || !inside(f.p, box) || CATEGORY_INFO[f.category].weight < 4 || CHILD_PLACES.has(f.category)) continue;
     // A place mapped twice (outline and point) gets one label.
     if (seen.has(f.name)) continue;
     seen.add(f.name);
