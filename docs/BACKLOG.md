@@ -71,6 +71,8 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 
 | 3.33 | Friendly tracking boxes (owner idea, maybe an upgrade): corner-bracket boxes around friendlies, like body-cam / targeting-pod tracking, in every sensor. Chief's note: telling friend from foe is part of the skill (ID panel in thermal, IR strobe in night vision), so: always on in Training and difficulty 1; an "IFF tracker" unlock in the campaign / Horde Night (pairs with 3.28/3.29); and an accessibility toggle in Settings for anyone who needs it. Boxes must never flash, must follow the friendly smoothly, and must not cover the zombie next to them | pitch, feel, playtest | later |
 
+| 3.34 | Menu and UI restyle, military feel (owner: "menus are very generic"): landing, scout, recon, briefing, settings, pause, result and campaign screens as one system: ops-terminal panels, stencil headings, mission-card "dossiers", stamped status tags, map grid textures, monospace data readouts, sensor-green/amber accents. Rules: our own style (no copying Zombie Gunship's or any real military's insignia, unit names or classification markings), readable (contrast, ≥14 px, ≥48 px touch targets), works in reduced motion, one style guide in docs/STYLE.md | visuals, feel, playtest | later (Art Director) |
+
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game
