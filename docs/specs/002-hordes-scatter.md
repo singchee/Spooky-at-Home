@@ -1,6 +1,6 @@
 # 002 — Shelled hordes scatter, then regroup (Clear missions)
 
-*Status: approved, awaiting /plan* · *Owner: Game Director* · *Date: 22 Nov 2026*
+*Status: ready* · *Owner: Game Director* · *Date: 22 Nov 2026*
 
 **Mode: HOLD, with tight edges.** Build the owner's idea as asked: in Clear missions, a 105 round that lands on a horde sends the survivors running, and later they drift back to where the horde gathered. I'm adding three rules that the idea needs to stay fair, and leaving out everything that would spread it beyond Clear. **Class C:** it's a new enemy behaviour and a balance change well over 15%, and it widens the school guardrail gap. It needs the owner's yes before `/build`.
 

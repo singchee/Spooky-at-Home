@@ -1,6 +1,6 @@
 # 003 — Horde Night: a crowd mode for the joy of the big gun
 
-*Status: approved, awaiting /plan* · *Owner: Game Director* · *Date: 22 Nov 2026*
+*Status: ready* · *Owner: Game Director* · *Date: 22 Nov 2026*
 
 **Mode: REDUCE.** The owner asked for "a mode where there are just insane numbers of zombies just for the satisfaction of shooting them down." I'm building the smallest version that tests whether **density** is the satisfaction. That means one five-minute run where your street floods with zombies towards a real landmark and you hold them off until dawn, with a kill counter, a multiplier and a "best shot". There are no new guns, enemies, upgrades or explosions, and the mode is not endless. **Class C:** it's a new mode, it adds a performance budget to QUALITY §2, and it's a taste call. It needs the owner's yes before `/build`. *(Working title: the Story Writer names it; see open question 5.)*
 
@@ -191,6 +191,129 @@ A dev-only frame-time readout (or `window.__spooky` stats) shows median and wors
 
 ---
 ## Technical design  *(added by tech-lead)*
+
+*Reviewed against feat/phase-3 at ede92b6, with the owner's cap applied (Big 600, Huge 1,200, no Insane). "Measured" means probed headless on this tree, on a 4-core cloud machine under load ~4.*
+
+### 0. What the code says today (it shapes the design)
+- **The sim is already cheap enough.** Measured: one defend step with 1,200 living zombies takes 0.73 ms; with 2,000 living, 0.56 ms; with 1,200 living + 6,000 dead entries, 0.40 ms; with 2,000 + 10,000 dead, 0.49 ms (plus a 25 mm round every 5 steps). There are no survivors, so the per-zombie survivor scan costs nothing, and dead entries cost one `alive` check each. The 4 ms budget is not the risk.
+- **The real sim gap is the crowd's shape, not speed.** `grid.downhill` steers every zombie to the centre of the best neighbouring cell, so a stream folds into **single file** within a few cells. "Kerb to kerb" (the whole satisfaction lever) needs a separation pass, and that pass is what the spatial grid is for.
+- **Doors:** today each zombie at the wall drains `integrity` by 0.02/s, so 1,200 at the doors would break in within a second. Crowd door damage needs its own capped rule.
+- **Spec 001's `WavePlan.schedule` has not landed** (no `schedule` in `src/sim`). The crowd schedule is its own data (§2).
+- **Renderer:** `AgentsView` draws `zombies.slice(-2500)` dead or alive, and `useModels` throws the procedural batch away. LOD needs both batches alive at once.
+- **3.9 (feat/3.9-sensor-look)** narrows the gun FOVs (105: 6°, 40: 2.2°, 25: 1.6°), adds `src/render/gfxGovernor.ts` and rewrites much of `game.ts`. 003 builds after it merges, with LOD thresholds in **screen pixels**, never per gun.
+
+### 1. Where it lives
+| File | Change |
+|---|---|
+| `src/sim/crowd.ts` (new) | `CROWD_SIZES` (`big`: maxAlive 600, bodies 400, models 150; `huge`: 1,200 / 1,000 / 400), `CROWD_SCHEDULE` (data, §2), `CrowdPlan` type, `generateCrowd(map, g, grid, { seed, size, anchor? }) → MissionResult`. Uses `findAnchor` (`hold-sports`, then `hold-landmark`) and `safehouseFromFeature` / `findSafehouse`, exported from `missions.ts` unchanged. |
+| `src/sim/missions.ts` | `Mission.crowd?: CrowdPlan`. **The type stays `'defend'`, and `MISSION_TYPES` is untouched.** Adding a fourth type would change every `type: 'auto'` pick (`pick(rng, MISSION_TYPES)`) for everyone. `likelyWaveDirections` returns the plan's streams when `m.crowd` is set (true intel), so the tactical map, tour and diorama get their arrows with no change of their own. |
+| `src/map/grid.ts` | `flowField(sources, avoid?: Uint8Array)`: an optional mask treated as blocked. Existing callers are unchanged. |
+| `src/map/recon.ts` | `childMask(map, grid, buffer): Uint8Array` marks the cells whose nearest point is within `buffer` of a child zone. |
+| `src/sim/sim.ts` | (a) `living`: a derived index, below. (b) Crowd mode when `mission.crowd` is set: a spawner instead of `updateWaves`, the no-go mask in movement, a separation pass, capped door damage, and `crowdStats` (kills, multiplier, best shot `{kills, weapon, place}`) in `state()`. |
+| `src/sim/setup.ts` | `createCrowdSim(map, { seed, size })`. |
+| `src/game/agentsView.ts` | The draw list and LOD (§5). Constructor `{ lod?: { models, bodies } }`. |
+| `src/ui/crowdHud.ts`, `src/ui/crowdEnd.ts`, `src/ui/crowdBests.ts` (new) | Counter, tallies (a reused element pool), end card, and bests keyed by map + size. `textContent` only. |
+| `src/game/game.ts` | **One gated block**: `if (sim.mission.crowd)` → crowd HUD, end card, `KILL_LINES` swap, no grade or single-mission best, `AgentsView` LOD options, frame stats in `info()`. |
+| `src/ui/recon.ts`, `src/ui/menu.ts`, `src/main.ts` | One entry plus a size choice (default: `matchMedia('(pointer: coarse)')` → Big, else Huge). `MenuChoice.crowd?: 'big' \| 'huge'`. `play()` calls `createCrowdSim` when it's set. URL hook `?mode=crowd&size=big\|huge&seed=N&autostart=1&bot=1`. |
+
+Layering: the sim, map and crowd generator stay three.js- and DOM-free. LOD lives only in `src/game`.
+
+### 2. Data flow
+```
+recon/URL → generateCrowd(map, seed, size)
+   anchor (hold-sports → hold-landmark → classic safehouse)
+   noGo   = childMask(map, grid, MAX_KILL_REACH + CHILD_FIRE_CLEARANCE + cell·√2/2)   (≈ 56 m)
+   doors  = perimeterCells(safehouse) minus noGo        → none left: next anchor
+   field  = flowField(doors, noGo)                      (paths never enter noGo)
+   streams: 3–4 road nodes 250–450 m out, field > 0, not in noGo, sectors ≥ 2 apart,
+            each { at, compass, street = placeLabel }, walk time = field·cell·1.1 / slowest speed
+   surge feasibility: surgeStart + max walk time ≤ DAWN − 10 s, else drop that stream / next anchor
+   → Mission{ type 'defend', timeLimit 300, safehouse, crowd: { size, streams, schedule, doors } }
+Sim (crowd):
+   spawner: per stream, rate(t) from the schedule × size → accumulator → ≤ 8 spawns/step,
+            jitter ±6 m across the road (reject blocked/noGo); over maxAlive → dropped, not queued
+   per living zombie: downhill(field) + separation (3 m bucket grid) → tryMove (blocked | noGo rejected)
+   at doors (field == 0): integrity −= min(atDoors, doors.cap) · doors.rate · dt; multiplier steps down
+   impact event (exists) → kills per round → tally / best shot / multiplier (sim-side, deterministic)
+Game: AgentsView(draw list + LOD) · crowd HUD · end card · bests(map, size)
+```
+**The schedule as data** (Balance Analyst owns the numbers): `CROWD_SCHEDULE: { from: s; to: s; streams: number; rate: number /* × size.peakRate, per open stream */ }[]`. Rows: warm-up 0–45 (2 streams, thin), build 45–210 (rising to 4), lull (~10 s, rate 0), surge (last ~75 s, all streams, peak). It's a pure function of `t`, so the briefing can quote it. **Spawns over `maxAlive` are dropped, not deferred.** Deferring would make the crowd answer how fast the player kills (the spec says time only). `state().crowdDropped` exposes the count to balance.
+
+**`living`:** an index array of live zombies in id order. At the start of each step, entries appended to `zombies` since the last step are added (this catches tests and Training pushing directly). At the end of any step with a death, dead entries are removed by stable compaction, never by swap-remove. Every per-zombie loop in `updateShells`, `updateZombies`, `updateWaves` and `state()` iterates `living`. Order is preserved, so the main rng is drawn in exactly today's order, and **the defend trace hash and escort fingerprint prove it.** `zombies` stays append-only (ids = indices) for the renderer and tests.
+
+### 3. Determinism
+- Map + seed + size → identical run, at the game's fixed 1/60 step. The crowd generator uses `mulberry32(hashString('crowd|' + map + '|' + seed + '|' + anchor + '|' + size))`, and the spawn jitter uses its own sim stream. There's no difficulty dial (`CROWD_DIFFICULTY = 3` is fixed for speeds).
+- No wall-clock time and no frame rate anywhere in the sim. LOD, tallies and frame stats are render-only and never feed back. The 3.9 governor may change picture quality, never the crowd.
+- The separation pass reads a bucket grid built at the start of the step (not updated as zombies move). The result is order-independent and deterministic.
+- Fingerprints: `EXPECTED_FINGERPRINT`, `EXPECTED_DEFEND_FINGERPRINT`, `EXPECTED_DEFEND_TRACE` and (after 002) the escort and Clear traces and the campaign fingerprints all stay unchanged. JSON omits the absent `crowd` key.
+
+### 4. Failure modes
+| Input | Missing / malformed / huge |
+|---|---|
+| Map without a sports centre or landmark | Classic safehouse fallback. If none, the generator's own reason ("No hospital, police station…"), shown on recon where the entry would be. |
+| Anchor with a child place within ~56 m of its doors, or fewer than 3 streams clear of `noGo` | Next anchor. If all fail: "There's no way in to {place} that keeps clear of schools and playgrounds, so there's no Horde Night here." (Story Writer's words, `textContent`.) The gap is never shrunk. |
+| Surge can't reach the doors in time from any stream | That stream is dropped. Fewer than 3 left → next anchor. |
+| Huge real map (6,000 buildings) | `childMask` is O(cells × child zones, box-culled), computed once per generation and cached per map, like `childSafeCost`. Grid n² ≤ ~440² = 194k cells. |
+| Saved bests from a different map version | Keyed by `mapFingerprint` + size, never the typed name (the privacy rule, as in the campaign store). Unparseable store → empty. |
+
+### 5. Render: draw list, LOD, caps
+- **Draw list** (all modes): first every `living` zombie, then bodies newest-first up to `bodies` (crowd) or until `MAX_Z` (normal). Huge: 1,200 + 1,000 = 2,200 ≤ `MAX_Z` 2,500, so `MAX_Z` stays. Normal missions draw the same set as today (they never exceed 2,500 entries). Only instance order changes. `applyBlasts` iterates the draw list, not `slice(-2500)`.
+- **Bodies past the cap** sink into the ground over 1 s (Feel S4). That's a `deadFor`-driven offset in both shaders, with no transparency and no brightness step. By the time a body hits the cap it has already cooled close to ground heat (20 s).
+- **LOD** (crowd only, so normal missions keep their single batch and draw-call count): the `ModelBatch` and the procedural `FigureBatch` both stay alive. Per frame, project each drawn zombie. If its on-screen height is ≥ 28 px (enter) or ≥ 22 px (stay), it's a model candidate. Candidates nearest the aim point first, up to `models` (150 / 400). Everyone else is a figure. A zombie that changes batch picks its clip fresh (`clip = -1`). Thresholds are in pixels, so they survive 3.9's FOV changes. On the 3.9 `low` tier the model cap may halve: LOD is value-identical, so that changes nothing a player can see.
+- **Same picture either way:** both batches get identical `core`, `limb` and `vis` from `bodyHeat`. On-screen height: model 1.75 × `MODEL_DISPLAY_SCALE` 1.5 = 2.63 m against figure `HEAD_TOP` 1.95 × `FIGURE_SCALE` 1.4 = 2.73 m. That's 4% today, and it must stay within 5%. The area-weighted mean heat of each geometry (from `aHeatW` against figure part weights) must match within 0.03.
+- **Feel M3 (darkening flash):** render-only. `bodyHeat` eases from live to `bodyStart` over 0.3 s instead of in one frame. It applies in every mode, because it's visual only and the sim is untouched.
+
+### 6. Performance against QUALITY §2
+| Budget | Estimate | Gate |
+|---|---|---|
+| Sim step, crowd | today ~0.5–0.7 ms at 1,200–2,000 living. Separation adds ~60k neighbour checks per step at 1,200 (est. +0.3 ms); the spawner is negligible. **Est. ≤ 1.5 ms.** | New QUALITY §2 row: *"Simulation step, 2,000 living crowd zombies + 6,000 dead entries, headless: < 4 ms"*. It keeps the owner-approved 2,000 as headroom over the 1,200 cap. The existing 1,000-zombie row is unchanged. |
+| Draw calls | today's count + 1 (the second zombie batch in crowd mode) | < 150 at the surge, both sizes (`info().drawCalls`). |
+| Triangles | Huge ≤ 400 models × ~1k + 1,800 figures × < 120 ≈ 0.62 M; Big ≈ 0.25 M | recorded for regression only. |
+| CPU per frame in `AgentsView` | ~2,200 instance writes plus 1,200 projections, est. 1–2 ms desktop and 3–5 ms tablet. This is the tablet's real risk, more than the GPU. | On-device table in §4 plus Feel S3 (no frame > 50 ms in the second after a 30+ kill). |
+| JS size | about +6 KB gzipped | < 400 KB. |
+| Flashes | rounds landing per second unchanged (same guns) | meter scenarios below. |
+
+**Frame stats:** `Game` keeps a ring buffer of real frame times. `info().frames = { medianFps, worst1sFps, maxFrameMs }`. `?fps=1` shows them as a small dev overlay (Feel's 14 px minimum applies). The cloud playtest records draw calls, triangles and the sim budget only.
+
+### 7. Test plan (write these first; 1–4 fail before the crowd code exists)
+**Sim (`tests/crowd.test.ts`):**
+1. *Determinism*: same map, seed and size → same trace hash after 300 s with no input. Big and Huge differ.
+2. *Guardrail every step*: school-heavy town and sample town, both sizes, seeds 1–4, `Bot(SKILL.human)` firing, step 1/30. **Every living zombie, every step**, is ≥ `MAX_KILL_REACH + CHILD_FIRE_CLEARANCE` (54 m) from every child place, with no −2 m allowance (the mask is conservative by half a cell diagonal). Plus `schoolHeavyTown({ playgroundBesideSafehouse: true })` → that anchor isn't offered, and the reason names schools and playgrounds.
+3. *Intel*: every spawned zombie's nearest stream origin is a named stream, within 6 m + one step. No cold zombies, no survivors, and the briefing says both.
+4. *Surge arrives*: no input → zombies reach the doors before `DAWN − 5 s`, and the run is lost (G6), at both sizes.
+5. *Budget*: 2,000 living crowd zombies (separation on) + 6,000 dead entries, 60 steps, < 4 ms per step. A second run with 0 dead entries must be within 20% of it (the dead cost nothing).
+6. *Kerb to kerb*: in a 30 s window of a build-phase stream, the median distance of zombies from the stream's road centreline is > 2 m (it's single file today).
+7. *Other modes untouched*: the existing escort and defend fingerprints, defend trace, and the 002 escort and Clear traces pass unchanged. The existing 1,000-zombie budget test still pushes into `sim.zombies` and still measures real work (via the `living` catch-up).
+8. *Spawn trickle*: never more than 8 spawns in one step.
+
+**Render (`tests/agentAnim.test.ts`, headless with a fake sim):**
+9. 1,200 living + 3,000 dead: all 1,200 living are in the draw list, bodies ≤ cap, the oldest go first.
+10. LOD parity: the same zombie written to both batches has identical `core`/`limb`/`vis`. Height ratio and mean-heat parity are within the tolerances in §5.
+11. LOD cap: never more than `models` instances in the model batch, and a zombie at the threshold doesn't flip every frame (hysteresis).
+
+**Playtest (`/playtest`)**, at `?mode=crowd&size=big|huge&seed=1&autostart=1&bot=1&fps=1`, at 1280×800 and desktop:
+- **Flash A** (spec): 10 s of the surge, all three guns into the densest stream, in white-hot, black-hot and NV: ≤ 3 flashes/s and < 25% of the screen.
+- **Flash B** (spec): a scripted > 50 kills/s for 10 s (`fireAt` the 40 and 105 into a stream held at the cap).
+- **Flash C** (Feel M3): the 25 mm zoomed ×2 on a packed stream, a 105 into it. The meter counts darkening transitions as well.
+- Screenshots: the surge in three views at ×1 and ×2, a live zombie inside a fresh pile, and an LOD pair (one zombie straddling the threshold) with mean brightness within 3%.
+- `drawCalls < 150` at the surge, triangles recorded, no console errors.
+
+**Balance (`/balance`)**: the crowd runner per size, 12 seeds. Win rate, doing nothing, kills per 105 round in build and surge, total kills, `crowdDropped`, and the Big against Huge gap (≤ 15 points).
+
+### 8. Smallest first step
+**Commit 1: "Living first" (no behaviour change).** Add `Sim.living` (stable compaction plus catch-up) used by every per-zombie loop. Change the `AgentsView` draw list to living first, then bodies newest-first. Tests: render test 9, budget test 5 in its normal-mission form (1,000 living + 6,000 dead, < 4 ms), and every existing fingerprint and trace unchanged. That proves two of the spec's four performance outcomes on today's code and removes the 2,500-entry bug the mode depends on.
+**Commit 2** is the headless crowd (`crowd.ts`, the mask, field, spawner, separation and doors), with tests 1–8. That's where the design's real claims (guardrail every step, kerb-to-kerb, surge timing) are proven before any UI exists. LOD, HUD and the recon entry come after, once 3.9 has merged.
+
+### Verdict: **APPROVED WITH CHANGES**
+1. Separation (a 3 m bucket grid, crowd mode only) is **required**, not "only if profiling shows". The reason is the single-file shape of the flow field, not cost (measured: the sim is already 0.5–0.7 ms).
+2. Crowd door damage is capped data in `CrowdPlan.doors`. Today's per-zombie drain would end a run in a second.
+3. The schedule is the mode's own data (spec 001's schedule hasn't landed). Spawns over the cap are dropped, not queued, so it stays time-only.
+4. The mode is `type: 'defend'` + `crowd`. `MISSION_TYPES` stays unchanged.
+5. Guardrail by construction: a child no-go mask in both the flow field and every move, checked every step at 54 m with no allowance.
+6. Update the tables to the owner's cap: remove Insane from §4, the balance table and the frame-rate table. QUALITY §2 gets the 2,000-living row above (headroom over 1,200).
+7. LOD thresholds in screen pixels, both batches kept, and parity tests on heat and height. The death-heat ease (0.3 s) answers Feel M3 without touching the sim.
+8. Build order: 002 first, then 3.9 merges, then 003 commits 3 and later (`game.ts`). Commits 1–2 don't touch `game.ts`.
+9. Feel S6 (does 1,200 count living or drawn?) goes to the owner. The render design fits either: with a 1,200-drawn cap, the Huge body cap is lowered.
 
 ## Feel & access  *(added by feel-designer)*
 
