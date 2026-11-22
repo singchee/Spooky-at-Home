@@ -111,6 +111,25 @@ const KIND_LABEL: Record<string, string> = {
   fire_station: 'the fire station', library: 'the library', place_of_worship: 'the church', clinic: 'the clinic',
 };
 
+/**
+ * How much bigger hordes and waves get with difficulty (owner playtest 3.16: "even at level 2 the waves are
+ * quite small and easily taken out"). Difficulty 1 stays gentle (x1); each level above adds the type's step.
+ * Tuned with the balance runner so the human-skill bot stays in QUALITY §3's bands.
+ */
+export const PRESSURE_STEP = { clear: 0.45, escort: 0.65 } as const;
+export const pressure = (type: keyof typeof PRESSURE_STEP, d: number): number => 1 + PRESSURE_STEP[type] * (d - 1);
+/**
+ * Hold the safehouse: zombies per wave by difficulty 1-5 (was 6 + 4d: 10-26). Defend is the steepest mission:
+ * at difficulty 5 waves come every 7 s and a few more zombies at the wall decide it (bot win rate 67% at 30,
+ * 50% at 34, 33% at 38, 17% at 45 in a sweep), so it rises fast through the middle and difficulty 5 differs from 4 mostly
+ * only in how often the waves come.
+ */
+export const DEFEND_WAVE_SIZE = [10, 20, 30, 36, 37] as const;
+/** Clear missions: how many hordes (difficulty 2 and up bring one more than before 3.16). */
+export const hordeCount = (d: number): number => Math.min(6, 2 + Math.floor(d * 0.8) + (d >= 2 ? 1 : 0));
+/** Clear missions: zombies in each horde. */
+export const hordeSize = (d: number): number => Math.round((6 + 3 * d) * pressure('clear', d));
+
 /** A horde's zombies start within this many metres of its gathering point (see Sim). */
 export const HORDE_SPREAD = 22;
 /** ...and mill around it, each heading for a spot up to this many metres away (see Sim.updateZombies). */
@@ -233,7 +252,7 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
   const { base, coldShare, coldIntel, roe } = c;
 
   if (type === 'clear') {
-    const nHordes = Math.min(6, 2 + Math.floor(d * 0.8));
+    const nHordes = hordeCount(d);
     const candidates: V2[] = [];
     for (const a of map.areas) {
       const c = centroid(a.pts);
@@ -250,7 +269,7 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
       if (centres.every((o) => dist(o, free) > 130)) centres.push(free);
     }
     if (centres.length < 2) return { ok: false, reason: 'Could not find room for the hordes on this map.' };
-    const per = 6 + 3 * d;
+    const per = hordeSize(d);
     const hordes: Horde[] = centres.map((c) => ({ centre: c, count: per, cold: Math.round(per * coldShare), label: placeLabel(map, c) }));
     const shelterAt = hordes[Math.floor(rng() * hordes.length)];
     const shelterSpot = shelterSpotFor(grid, map, hordes, shelterAt, rng);
@@ -373,7 +392,7 @@ function buildEscort(c: Ctx, safehouse: Safehouse, fl: EscortFlavour = CLASSIC_E
   const length = Math.round(polylineLength(route) / 10) * 10;
   const timeLimit = 420 + 30 * d;
   const every = Math.max(9, 22 - 2.6 * d);
-  const waves: WavePlan = { every, size: 3 + 3 * d, coldShare, minDist: 140, maxDist: 300, maxAlive: 60 + 20 * d, kinds: waveSequence(c, every, Math.min(timeLimit, escortMinTime(route, survivors))) };
+  const waves: WavePlan = { every, size: Math.round((3 + 3 * d) * pressure('escort', d)), coldShare, minDist: 140, maxDist: 300, maxAlive: Math.round((60 + 20 * d) * pressure('escort', d)), kinds: waveSequence(c, every, Math.min(timeLimit, escortMinTime(route, survivors))) };
   const xs = route.map((p) => p.x);
   const zs = route.map((p) => p.z);
   return {
@@ -496,7 +515,7 @@ function buildDefend(c: Ctx, safehouse: Safehouse, fl?: DefendFlavour): MissionR
   }
   const from = survivors.length ? nearestStreet(map, survivors[0].start) : '';
   const every = Math.max(7, 20 - 2.6 * d);
-  const waves: WavePlan = { every, size: 6 + 4 * d, coldShare, minDist: 180, maxDist: 340, maxAlive: 80 + 25 * d, kinds: waveSequence(c, every, hold) };
+  const waves: WavePlan = { every, size: DEFEND_WAVE_SIZE[d - 1], coldShare, minDist: 180, maxDist: 340, maxAlive: 80 + 25 * d + 3 * (DEFEND_WAVE_SIZE[d - 1] - (6 + 4 * d)), kinds: waveSequence(c, every, hold) };
   return {
     ok: true,
     mission: {
@@ -600,7 +619,7 @@ function generateFromTemplate(map: MapData, g: RoadGraph, grid: WalkGrid, opts: 
 /** Clear missions around a place: hordes on the tennis courts, in the park, or among the trees. */
 function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'clear-park' | 'forest-sweep'): MissionResult {
   const { map, g, grid, rng, d, base, coldShare, coldIntel, roe } = c;
-  const nHordes = Math.min(6, 2 + Math.floor(d * 0.8));
+  const nHordes = hordeCount(d);
   const forest = id === 'forest-sweep';
   // Forests hide more cold-blooded zombies: they match the cool ground under the trees.
   const coldHere = forest ? Math.min(0.6, coldShare + 0.25) : coldShare;
@@ -636,7 +655,7 @@ function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'c
     add(p, 110);
   }
   if (centres.length < 2) return { ok: false, reason: `Could not find room for the hordes around ${name}.` };
-  const per = 6 + 3 * d;
+  const per = hordeSize(d);
   const hordes: Horde[] = centres.map((p) => {
     const here = isHere(p);
     return { centre: p, count: per, cold: Math.round(per * (here ? coldHere : coldShare)), label: here ? name : placeLabel(map, p) };
