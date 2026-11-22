@@ -51,6 +51,20 @@ export const VOICE_LINES = [
   'mission-failed',
 ] as const;
 export type VoiceLine = (typeof VOICE_LINES)[number];
+
+/** The intro's voiceover ("The Late Bulletin", docs/story/intro.md), played by src/ui/intro.ts. */
+export const INTRO_VOICE = [
+  'intro-news-1',
+  'intro-news-2',
+  'intro-news-3',
+  'intro-cmd-1',
+  'intro-cmd-2',
+  'intro-cmd-3',
+  'intro-cmd-4',
+  'intro-cmd-5',
+  'intro-cmd-6',
+  'intro-ground',
+] as const;
 export const voiceAsset = (line: VoiceLine): string => `voice/${line}`;
 
 export type AssetState = 'idle' | 'queued' | 'loading' | 'ready' | 'failed';
@@ -107,20 +121,27 @@ export class AssetBank {
   }
 
   /**
-   * Load these, in order, behind anything already waiting. Never throws or rejects; the promise
+   * Load these, in order, behind anything already waiting (or, with `first`, ahead of it: the
+   * intro's voice can't wait behind the whole game's sound). Never throws or rejects; the promise
    * settles when each has either loaded or failed. Asking again for a file is free.
    */
-  request(ids: readonly string[]): Promise<void> {
+  request(ids: readonly string[], first = false): Promise<void> {
     const waits: Promise<void>[] = [];
+    const jump: string[] = [];
     for (const id of ids) {
       const s = this.status(id);
       if (s === 'ready' || s === 'failed') continue;
       if (s === 'idle') {
         this.states.set(id, 'queued');
-        this.waiting.push(id);
+        if (first) jump.push(id);
+        else this.waiting.push(id);
+      } else if (s === 'queued' && first) {
+        this.waiting.splice(this.waiting.indexOf(id), 1);
+        jump.push(id);
       }
       waits.push(new Promise((res) => this.settled.set(id, [...(this.settled.get(id) ?? []), res])));
     }
+    this.waiting.unshift(...jump);
     this.pump();
     return Promise.all(waits).then(() => undefined);
   }

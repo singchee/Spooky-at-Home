@@ -315,7 +315,7 @@ export class VoiceDirector {
 // ---------- playback ----------
 
 /** Squelch: the burst in the file runs ~0.2–0.7 s; play a short slice of it before each line. */
-const SQUELCH = { offset: 0.18, length: 0.32, gain: 0.22 };
+export const SQUELCH = { offset: 0.18, length: 0.32, gain: 0.22 };
 /** The line starts this long after its squelch. */
 const LEAD = 0.26;
 /** A cut line fades out this fast (s). */
