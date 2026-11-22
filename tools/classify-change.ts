@@ -6,8 +6,8 @@
  *   B = crew merges, highlighted in the digest; you can veto and it gets reverted
  *   C = crew opens a draft PR and escalates; waits for you
  *
- * CLI:  npm run -s classify -- [--base <ref> | --base=<ref> | <ref>] [--head <ref>]
- *       base defaults to origin/main, head to HEAD.
+ * CLI:  npm run -s classify -- [--base <ref> | --base=<ref> | <ref>]
+ *       base defaults to origin/main. Head is always HEAD (what would be merged).
  */
 
 export type ChangeClass = 'A' | 'B' | 'C';
@@ -89,16 +89,16 @@ export function classify(f: ChangeFacts): { cls: ChangeClass; reasons: string[] 
 }
 
 // ---------- CLI: gather facts from git ----------
-export interface CliArgs { base: string; head: string }
+export interface CliArgs { base: string }
 
 /** Pure parser for the CLI arguments (argv without node and script). Throws Error with a clear message. */
 export function parseArgs(argv: string[]): CliArgs {
   let base: string | undefined;
-  let head: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const m = /^--(base|head)(?:=(.*))?$/.exec(a);
+    if (m && m[1] === 'head') throw new Error('--head is not supported: head is always HEAD, so the class describes what would be merged');
     if (m) {
       let val = m[2];
       if (val === undefined) {
@@ -106,9 +106,9 @@ export function parseArgs(argv: string[]): CliArgs {
         if (val === undefined || val.startsWith('-')) throw new Error(`--${m[1]} needs a ref, e.g. --${m[1]} origin/main`);
       }
       if (val === '') throw new Error(`--${m[1]} needs a non-empty ref`);
-      if (m[1] === 'base') base = val; else head = val;
+      base = val;
     } else if (a.startsWith('-')) {
-      throw new Error(`unknown option ${a}. Usage: classify [--base <ref> | <ref>] [--head <ref>]`);
+      throw new Error(`unknown option ${a}. Usage: classify [--base <ref> | <ref>]`);
     } else positional.push(a);
   }
   if (positional.length > 1) throw new Error(`too many arguments: ${positional.join(' ')}`);
@@ -116,7 +116,7 @@ export function parseArgs(argv: string[]): CliArgs {
     if (base !== undefined) throw new Error('give the base ref once: either --base <ref> or a bare ref, not both');
     base = positional[0];
   }
-  return { base: base ?? 'origin/main', head: head ?? 'HEAD' };
+  return { base: base ?? 'origin/main' };
 }
 
 async function main() {
@@ -129,7 +129,7 @@ async function main() {
     catch { console.error(`classify: ${label} ref '${ref}' does not exist (try 'git fetch origin')`); process.exit(2); }
   };
   const baseSha = resolve('base', args.base);
-  const headSha = resolve('head', args.head);
+  const headSha = resolve('head', 'HEAD');
   const mergeBase = git('merge-base', baseSha, headSha).trim();
   const files = git('diff', '--name-status', mergeBase, headSha).trim().split('\n').filter(Boolean)
     .map((l) => { const [status, ...rest] = l.split('\t'); return { status, path: rest[rest.length - 1] }; });
@@ -149,12 +149,12 @@ async function main() {
     if (l.startsWith('+++ ')) current = l.replace(/^\+\+\+ (b\/)?/, '');
     else if (l.startsWith('+')) addedLines.push({ path: current, text: l.slice(1) });
   }
-  const branch = args.head === 'HEAD' ? git('rev-parse', '--abbrev-ref', 'HEAD').trim() : args.head.replace(/^(refs\/heads\/|origin\/)/, '');
+  const branch = git('rev-parse', '--abbrev-ref', 'HEAD').trim();
   const result = classify({
     branch, files, depsBase: deps(mergeBase), depsHead: deps(headSha),
     testCountBase: countTests(mergeBase), testCountHead: countTests(headSha), addedLines,
   });
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify({ ...result, base: args.base, baseSha, mergeBase, headSha }, null, 2));
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/').split('/').pop()!)) {
