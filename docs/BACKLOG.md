@@ -63,6 +63,8 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 
 | 3.28 | Upgrade path (owner idea, later): rate of fire, ammunition, damage, splash; tougher zombies as difficulty rises. Chief's note: prefer upgrades that are trade-off choices (e.g. faster 25 mm but overheats) and difficulty from count, speed and types rather than hit points (sponges undercut the one-shot 105 and can't be read in thermal); earned in the campaign and Horde Night only. Decide after human playtests (spec 001 already defers upgrades). | pitch, balance, player-test | later |
 
+| 3.29 | Tech abilities (owner idea, later; pairs with 3.28 upgrades): radar, motion sensors, target indicators, targeted bombing run. Chief's note: anything that shows every zombie undercuts the sensor game and the cold-blooded mechanic (pillar 3), so make them limited and readable: a motion-sensor pulse on a cooldown that shows movers for a few seconds (a counter to cold-blooded that still needs the right camera), Ground marking targets with an IR designator visible in night vision, and a called-in bombing run on a long cooldown with a danger-close check, the school guardrail and flash-safety limits. | pitch, plan, balance, feel | later |
+
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game

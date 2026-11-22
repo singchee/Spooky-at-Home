@@ -1,6 +1,6 @@
 # 004 — Convoy: keep the trucks rolling down your main road
 
-*Status: draft* · *Owner: Game Director* · *Date: 22 Nov 2026*
+*Status: approved, awaiting /plan* · *Owner: Game Director* · *Date: 22 Nov 2026*
 
 **Mode: REDUCE.** The owner asked: "Cover mode? Protect a military convoy." I'm building the smallest version that tests whether a convoy plays differently from Escort. That means one recon template: 3–5 fictional ground-team trucks drive in on one main road and out on another, they **stop for anything on the road ahead**, and they lose health while they're stopped. There are no new guns or enemies, the trucks don't shoot back, the player can't choose the route, and there's no pickup stop. **It's an Escort variant, not a fourth mission type.** **Likely class C:** it's a new mission variant, and the look of the vehicles and the "military" framing are taste calls. Run `npm run -s classify` to confirm. It needs the owner's yes before `/build`. *(Working title: the Story Writer names it, see open question 4.)*
 
@@ -167,3 +167,6 @@ Escort is about people on foot. They spread out, they can be grabbed from any si
 ## Technical design  *(added by tech-lead)*
 
 ## Feel & access  *(added by feel-designer)*
+
+## Owner decision (22 Nov 2026)
+Approved with the Game Director's recommendations: Ground's trucks carry evacuees; built as an Escort variant through a template; a single zombie can stop a truck in v1. Queued after Horde Night (003) and the campaign's finale and screens (001).
