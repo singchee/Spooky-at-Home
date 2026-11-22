@@ -17,7 +17,7 @@ import type { BakedModel } from './characterModels';
  * from the current 1.8 km orbit (about 5 px at the 40 mm); the new oblique camera should size them,
  * and this is the one knob if they still need exaggerating for readability (the old figures were 2.7 m, i.e. ~1.55).
  */
-export const MODEL_DISPLAY_SCALE = 1.5; // readability first: real 1.75 m figures read as specks from the gunship; retune with the 3.9 camera
+export const MODEL_DISPLAY_SCALE = 1.7; // readability first: real 1.75 m figures read as specks from the gunship; tuned with the 3.9 camera (~27 px at the 40 mm default on a 1080 px screen)
 /** Side of the survivors' cold ID panel, metres (about two thirds of the chest's width). */
 export const MODEL_PANEL_SIZE = 0.28;
 /** The panel is drawn as if this much nearer the camera, so its own body never hides it. */

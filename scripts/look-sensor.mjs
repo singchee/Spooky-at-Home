@@ -67,14 +67,8 @@ try {
       requestAnimationFrame(f);
     }));
     const info = await page.evaluate(() => window.__spooky.info());
-    // Rounds in flight: the 25 mm firing, white-hot. Tracers should come in from off screen.
-    await page.evaluate(() => window.__spooky.setSensor('thermal'));
+    // (Tracers: scripted shots would hit the survivors the bot's camera follows; shoot them on a quieter page.)
     await page.keyboard.press('1');
-    await wait(1.0);
-    await page.evaluate(() => window.__spooky.holdFire(true));
-    await wait(0.5);
-    await shot('25-firing-white-hot');
-    await page.evaluate(() => window.__spooky.holdFire(false));
     await page.keyboard.press('z');
     await page.evaluate(() => window.__spooky.setSensor('thermal'));
     await wait(1.2);

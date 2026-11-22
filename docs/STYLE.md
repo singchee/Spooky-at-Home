@@ -123,10 +123,10 @@ All of it works on sensor values *before* the display mapping, so black-hot inve
 | Gun | Lens | Ground covered (height) | Person on a 1080 px screen |
 |---|---|---|---|
 | 25 mm | 1.6° | ~50 m | ~36 px |
-| 40 mm (default) | 2.2° | ~69 m | ~27 px |
+| 40 mm (default) | 2.0° | ~63 m | ~27 px |
 | 105 mm | 6° | ~190 m | ~10 px |
 
-- **Zoom:** everything goes through `Game.zoomBy(-1|0|1)`. Z or the ZOOM button toggles ×1 ↔ ×1.6; the mouse wheel and a pinch step along ×0.45, ×0.7, ×1, ×1.6, ×2.4. Each gun remembers its own zoom. The narrowest lens is 1.0° (25 mm zoomed: a person is ~60 px). People are drawn at `MODEL_DISPLAY_SCALE` 1.5 (2.6 m), tuned with these lenses.
+- **Zoom:** everything goes through `Game.zoomBy(-1|0|1)`. Z or the ZOOM button toggles ×1 ↔ ×1.6; the mouse wheel and a pinch step along ×0.45, ×0.7, ×1, ×1.6, ×2.4. Each gun remembers its own zoom. The narrowest lens is 1.0° (25 mm zoomed: a person is ~65 px). People are drawn at `MODEL_DISPLAY_SCALE` 1.7 (about 3 m: exaggerated on purpose so they read), tuned with these lenses.
 - **Near/far:** 600 m / 6000 m. Roads sit 1 m above the ground plane and areas 0.4 m (no z-fighting at this near plane).
 - **105 kick:** at most 5 px, one damped swing (0.4 s), off with reduced motion or reduce flicker.
 - **Tracers come in from off screen:** rounds fly from the gunship's real orbit position along its slant line to the impact (flight time = the sim's range / `WeaponDef.speed`). The camera's slant differs from the plane's, so the plane sits just off the picture; if the two lines nearly coincide, the tracer's start swings around the target (same range) until it is just outside the field of view. Rounds never pop out of the middle of the screen.
