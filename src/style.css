@@ -482,3 +482,37 @@ button:disabled { opacity: 0.5; }
   .settings-row:not(.settings-toggle) { grid-template-columns: minmax(0, 1fr) 4.5em; }
   .settings-row > label:first-child { grid-column: 1 / -1; }
 }
+
+/* Briefing walk-through (3.7): caption and Skip / Replay under the pictures; a stepped list (Back / Next) under reduced motion. */
+.tour { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: rgba(9, 12, 11, 0.6); }
+.tour-bar { display: flex; gap: 10px; align-items: baseline; min-height: 3em; }
+.tour-step { flex: 0 0 auto; min-width: 3.4em; color: var(--muted); font-size: 14px; }
+.tour-step:empty { display: none; }
+.tour-cap { flex: 1 1 auto; margin: 0; font-size: 15px; line-height: 1.45; color: var(--ink); }
+.tour-ctrl { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.tour-btn { min-height: 48px; min-width: 48px; padding: 10px 16px; }
+.tour-list { display: none; margin: 8px 0 0; padding-left: 1.8em; color: var(--muted); font-size: 14px; line-height: 1.45; }
+.tour.steps .tour-list { display: block; }
+.tour.steps .tour-cap { display: none; }
+.tour.steps .tour-bar { min-height: 0; }
+.tour-item { padding: 3px 6px; border-radius: 4px; }
+.tour-item + .tour-item { margin-top: 2px; }
+.tour-item.cur { color: var(--ink); background: rgba(184, 255, 138, 0.1); outline: 1px solid rgba(184, 255, 138, 0.45); }
+.dio-label.cur { box-shadow: 0 0 0 2px currentColor; background: rgba(9, 12, 11, 0.96); }
+.dio-pin.cur { width: 12px; height: 12px; left: -6px; top: -6px; }
+/* The tactical map's highlight: an overlay with the map's own viewBox, so the map is never redrawn. */
+.briefing-map { position: relative; }
+.tmap-tour { position: absolute; left: 0; top: 0; width: 100%; height: 100%; border: 1px solid transparent; pointer-events: none; overflow: hidden; }
+.tmap-tour * { vector-effect: non-scaling-stroke; fill: none; }
+.tt-ring { stroke: var(--accent); stroke-width: 3; }
+.tt-ring.hostile { stroke: var(--danger); }
+.tt-ring.friendly { stroke: var(--tm-friendly); }
+.tt-area { stroke: var(--ink); stroke-width: 2; stroke-dasharray: 7 5; }
+.tt-path { stroke: var(--accent); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; opacity: 0.5; }
+.tmap-tour .tt-dot { fill: var(--accent); stroke: #0b0d0c; stroke-width: 2; }
+.tt-orbit { stroke: var(--ink); stroke-width: 3; }
+/* A slow swell (0.4 a second), never a flash; none under reduced motion or Reduce flicker. */
+.tt-pulse { animation: tt-pulse 1.25s ease-in-out infinite alternate; }
+@keyframes tt-pulse { from { opacity: 0.5; } to { opacity: 1; } }
+.tmap-tour.still .tt-pulse { animation: none; }
+@media (prefers-reduced-motion: reduce) { .tt-pulse { animation: none; } }

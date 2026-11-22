@@ -1,5 +1,5 @@
 // Headless browser playtest (gates G7, G8 and visual evidence).
-// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin]
+// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour]
 // Starts `vite preview`, loads each mission type with the bot playing, switches cameras,
 // takes screenshots, and records console errors and draw calls. Chromium is preinstalled.
 // It also runs the photosensitivity flash checks and survivor-kit screenshots (`--only safety`
@@ -129,6 +129,12 @@ try {
   }
   if (!only || only === 'wayin') {
     for (const r of await wayInChecks(browser)) {
+      results.push(r);
+      if (r.errors.length) exitCode = 1;
+    }
+  }
+  if (!only || only === 'tour') {
+    for (const r of await tourChecks(browser)) {
       results.push(r);
       if (r.errors.length) exitCode = 1;
     }
@@ -1197,6 +1203,262 @@ async function wayInChecks(browser) {
     }
     if (osmCalls.length !== 4) errs.push(`expected two searches and two downloads without storage: ${osmCalls.length}`);
     res.push({ type: 'way in: storage blocked (private window)', errors: errs });
+    await page.close();
+  }
+  return res;
+}
+
+// ---------- Briefing walk-through ("Hello, home", 3.7) ----------
+// For clear, escort, defend and a recon mission, at 1280x720 and 390x844: the tour visits every stop
+// in order (area first, orbit last), each stop is screenshotted held still at mid-hold, the diorama's
+// labels never overlap (checked at each stop and sampled through a real run), Skip works (button, Space,
+// Enter), dragging the model hands it to the player, Start mission stays available, controls are at
+// least 48 px. Reduced motion: a stepped list with Back / Next that cuts (no animation). Then 20
+// briefing → mission → retry cycles must not leak WebGL contexts or dioramas.
+// (Function declarations, not consts: the checks run from the top-level code above, before this line.)
+function tourRank(id) {
+  return { area: 0, safehouse: 1, home: 1, survivors: 2, friendlies: 2, stragglers: 2, horde: 3, wave: 3, route: 3, orbit: 4 }[id.replace(/\d+$/, '')];
+}
+
+async function tourPage(browser, viewport, extra = {}) {
+  const page = await browser.newPage({ viewport, deviceScaleFactor: scale, ...extra });
+  const errs = [];
+  page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+  page.on('pageerror', (e) => errs.push(String(e)));
+  // Pointer lock collapses the headless frame rate; Start mission asks for it.
+  await page.addInitScript(() => {
+    Element.prototype.requestPointerLock = () => Promise.resolve();
+  });
+  return { page, errs };
+}
+
+/** Opens a mission's briefing: a URL mission, or 'recon' (the first suggested mission on the sample town's recon screen). */
+async function openBriefing(page, which) {
+  if (which === 'recon') {
+    await page.goto(`http://localhost:${PORT}/?screen=recon`);
+    await page.waitForSelector('.menu .recon .mission-card');
+    await page.click('.recon .mission-card button.primary');
+  } else {
+    await page.goto(`http://localhost:${PORT}/?autostart=1&type=${which}&difficulty=3&seed=7&brief=1`);
+  }
+  await page.waitForSelector('.card.briefing .tour', { timeout: 30000 });
+  return page.textContent('.card.briefing h2');
+}
+
+/** Pairs of diorama labels that overlap on screen (should be none). */
+function labelOverlaps(page) {
+  return page.evaluate(() => {
+    const rs = [...document.querySelectorAll('.dio-label.on')].map((e) => ({ t: e.textContent, r: e.getBoundingClientRect() }));
+    const bad = [];
+    for (let i = 0; i < rs.length; i++)
+      for (let j = i + 1; j < rs.length; j++) {
+        const a = rs[i].r;
+        const b = rs[j].r;
+        if (a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5) bad.push(`${rs[i].t} / ${rs[j].t}`);
+      }
+    return bad;
+  });
+}
+
+function tourState(page) {
+  return page.evaluate(() => {
+    const t = document.querySelector('.tour');
+    return t ? { ...t.dataset, caption: t.querySelector('.tour-cap')?.textContent ?? '', step: t.querySelector('.tour-step')?.textContent ?? '' } : null;
+  });
+}
+
+async function tourChecks(browser) {
+  const res = [];
+  try {
+    await tourCheckRuns(browser, res);
+  } catch (e) {
+    // Keep what already ran; report the failure as a check, not a crash.
+    res.push({ type: 'briefing walk-through: checks stopped', errors: [String(e).split('\n')[0]], shots: {} });
+  }
+  return res;
+}
+
+async function tourCheckRuns(browser, res) {
+  for (const which of ['clear', 'escort', 'defend', 'recon']) {
+    for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+      const { page, errs } = await tourPage(browser, viewport);
+      const shots = {};
+      const tag = `${which}-${viewport.width}`;
+      const title = await openBriefing(page, which);
+      await page.waitForSelector('.tour[data-state="playing"]', { timeout: 15000 }).catch(() => errs.push('the tour did not start on its own'));
+      const st0 = await tourState(page);
+      const stops = (st0?.stops ?? '').split(',');
+      if (stops[0] !== 'area' || stops[stops.length - 1] !== 'orbit') errs.push(`stops should run area … orbit: ${stops}`);
+      for (let i = 1; i < stops.length; i++) if (tourRank(stops[i]) < tourRank(stops[i - 1])) errs.push(`stop ${stops[i]} out of order: ${stops}`);
+      const total = Number(st0?.total);
+      if (!(total >= 15 && total <= 20)) errs.push(`tour is ${total} s (15–20 s wanted)`);
+      const startBtn = await page.$('.card.briefing > button.primary');
+      if (!startBtn || !(await startBtn.isVisible()) || !(await startBtn.isEnabled())) errs.push('Start mission is not available during the tour');
+      const small = await page.$$eval('.tour-btn', (bs) => bs.filter((b) => b.getBoundingClientRect().height < 48 || b.getBoundingClientRect().width < 48).map((b) => b.textContent));
+      if (small.length) errs.push(`tour buttons under 48 px: ${small}`);
+
+      // 1. Each stop, held still at mid-hold: right caption, a highlight, no overlapping labels. Screenshot.
+      const times = await page.evaluate(() => document.querySelector('.tour').tourHook.times());
+      await page.evaluate(() => document.querySelector('.tour').tourHook.freeze(true));
+      const captions = [];
+      for (let i = 0; i < stops.length; i++) {
+        const s = times[i];
+        await page.evaluate((t) => document.querySelector('.tour').tourHook.seek(t), s.t0 + s.move + s.hold * 0.6);
+        await page.waitForTimeout(700);
+        const st = await tourState(page);
+        if (Number(st.index) !== i || st.stop !== stops[i]) errs.push(`seek to stop ${i} shows ${st.stop}`);
+        if (!st.caption.trim()) errs.push(`stop ${stops[i]} has no caption`);
+        captions.push(st.caption);
+        const hl = await page.evaluate(() => document.querySelectorAll('.tmap-tour > *').length);
+        if (!hl) errs.push(`stop ${stops[i]}: nothing highlighted on the tactical map`);
+        const ov = await labelOverlaps(page);
+        if (ov.length) errs.push(`stop ${stops[i]}: labels overlap: ${ov.join('; ')}`);
+        await (await page.$('.briefing-visuals')).scrollIntoViewIfNeeded();
+        shots[stops[i]] = `${out}/tour-${tag}-${i + 1}-${stops[i]}.png`;
+        await page.screenshot({ path: shots[stops[i]] });
+      }
+
+      // 2. A real run (clock x3: the headless machine draws slowly), labels sampled as it flies.
+      await page.evaluate(() => {
+        const h = document.querySelector('.tour').tourHook;
+        h.freeze(false);
+        h.rate(3);
+        h.seek(0);
+      });
+      const t0 = Date.now();
+      let samples = 0;
+      while (Date.now() - t0 < 90000) {
+        const st = await tourState(page);
+        if (st.state !== 'playing') break;
+        const ov = await labelOverlaps(page);
+        samples++;
+        if (ov.length) errs.push(`labels overlap mid-flight at ${st.stop}: ${ov.join('; ')}`);
+        await page.waitForTimeout(200);
+      }
+      const done = await tourState(page);
+      if (done.ended !== 'end') errs.push(`the tour didn't end on its own (ended: ${done.ended}, state ${done.state})`);
+      if (done.visited !== stops.join(',')) errs.push(`visited ${done.visited}, expected ${stops.join(',')}`);
+      if (!(await page.$('.tour-replay'))) errs.push('no Replay after the tour');
+
+      // 3. Skip: Space and Enter (focus on the page), then the button. 4. Dragging the model hands over.
+      const replay = async () => {
+        await page.click('.tour-replay');
+        await page.waitForSelector('.tour[data-state="playing"]');
+        await page.evaluate(() => document.activeElement?.blur());
+      };
+      for (const key of ['Space', 'Enter']) {
+        await replay();
+        await page.keyboard.press(key);
+        const st = await tourState(page);
+        if (st.ended !== 'skip' || st.state !== 'done') errs.push(`${key} didn't skip (${st.state}, ${st.ended})`);
+        if (!(await page.$('.card.briefing'))) errs.push(`${key} left the briefing`);
+      }
+      await replay();
+      await page.click('.tour-skip');
+      if ((await tourState(page)).ended !== 'skip') errs.push('the Skip button did not skip');
+      if (await page.isVisible('.dio-canvas')) {
+        await replay();
+        const box = await (await page.$('.dio-canvas')).boundingBox();
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 4 });
+        await page.mouse.up();
+        const st = await tourState(page);
+        if (st.ended !== 'interrupt' || st.state !== 'done') errs.push(`dragging didn't hand over (${st.state}, ${st.ended})`);
+      }
+      const info = await page.evaluate(() => ({ buildMs: Number(document.querySelector('.dio')?.dataset.buildMs), drawCalls: Number(document.querySelector('.dio')?.dataset.drawCalls) }));
+      res.push({ type: `briefing walk-through: ${which} (${viewport.width}x${viewport.height})`, title, stops: stops.join(' → '), total, captions, labelSamples: samples, ...info, errors: errs, shots });
+      await page.close();
+    }
+  }
+
+  // 5. Reduced motion: no flight. A stepped list, Back / Next cut between framings, nothing moves on its own.
+  {
+    const { page, errs } = await tourPage(browser, { width: 1280, height: 720 }, { reducedMotion: 'reduce' });
+    await openBriefing(page, 'defend');
+    await page.waitForSelector('.tour[data-state="steps"]', { timeout: 15000 }).catch(() => errs.push('no stepped list under reduced motion'));
+    const st = await tourState(page);
+    const n = (st?.stops ?? '').split(',').length;
+    const list = await page.evaluate(() => ({ shown: getComputedStyle(document.querySelector('.tour-list')).display !== 'none', items: document.querySelectorAll('.tour-item').length }));
+    if (!list.shown || list.items !== n) errs.push(`stepped list: ${JSON.stringify(list)}`);
+    if (!(await page.isDisabled('.tour-back'))) errs.push('Back should be disabled on the first stop');
+    const stage = await page.$('.dio-stage');
+    const shots = { first: `${out}/tour-reduced-1.png` };
+    await page.screenshot({ path: shots.first });
+    const still = async (label) => {
+      await page.waitForTimeout(400);
+      const a = await stage.screenshot();
+      await page.waitForTimeout(700);
+      const b = await stage.screenshot();
+      if (!a.equals(b)) errs.push(`the picture moved on its own (${label})`);
+    };
+    await still('stop 1');
+    for (let i = 1; i <= n; i++) {
+      await page.click('.tour-next');
+      const s = await tourState(page);
+      if (i < n && Number(s.index) !== i) errs.push(`Next went to ${s.index}, not ${i}`);
+      if (i === 2) {
+        await still(`stop ${i + 1}`);
+        shots.step = `${out}/tour-reduced-${i + 1}.png`;
+        await page.screenshot({ path: shots.step });
+      }
+      const ov = await labelOverlaps(page);
+      if (ov.length) errs.push(`labels overlap at step ${i}: ${ov.join('; ')}`);
+    }
+    if ((await tourState(page)).step !== 'Whole area') errs.push('Next past the last stop should show the whole area');
+    await page.click('.tour-back');
+    if (Number((await tourState(page)).index) !== n - 1) errs.push('Back from the whole area should return to the last stop');
+    res.push({ type: 'briefing walk-through: reduced motion (stepped list)', errors: errs, shots });
+    await page.close();
+  }
+
+  // 6. Leaks: 20 × (briefing with the tour → Start mission → Esc → R retry). One diorama context at a time.
+  {
+    const { page, errs } = await tourPage(browser, { width: 1280, height: 720 });
+    await page.addInitScript(() => {
+      window.__ctx = { made: 0, lost: 0 };
+      const orig = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+        const c = orig.call(this, type, attrs);
+        if (c && /webgl/.test(type) && !this.__counted) {
+          this.__counted = true;
+          window.__ctx.made++;
+          this.addEventListener('webglcontextlost', () => window.__ctx.lost++);
+        }
+        return c;
+      };
+    });
+    await openBriefing(page, 'defend');
+    const snap = () =>
+      page.evaluate(() => ({ ...window.__ctx, dioramas: document.querySelectorAll('.dio-canvas').length, tours: document.querySelectorAll('.tour').length, tourLayers: document.querySelectorAll('.tmap-tour').length, nodes: document.getElementsByTagName('*').length, heapMB: Math.round((performance.memory?.usedJSHeapSize ?? 0) / 1e5) / 10 }));
+    const before = await snap();
+    const t0 = Date.now();
+    let cycles = 0;
+    try {
+      for (let i = 0; i < 20; i++) {
+        await page.waitForSelector('.tour');
+        // A retried mission's briefing starts with the tour done (seen already): replay it, fly a little, start.
+        if (i > 0 && (await tourState(page)).state !== 'done') errs.push(`retry ${i}: the tour should start done (seen), not ${(await tourState(page)).state}`);
+        if (await page.$('.tour-replay')) await page.click('.tour-replay');
+        await page.waitForTimeout(300);
+        await page.click('.card.briefing > button.primary');
+        // Start mission disposes the walk-through and the diorama (the card itself is only hidden).
+        await page.waitForFunction(() => !document.querySelector('.tour') && !document.querySelector('.dio-canvas'), null, { timeout: 15000 });
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.overlay .card h2:has-text("Paused")', { timeout: 10000 });
+        await page.keyboard.press('r');
+        await page.waitForSelector('.card.briefing .tour', { timeout: 30000 });
+        cycles++;
+      }
+    } catch (e) {
+      errs.push(`cycle ${cycles + 1}: ${String(e).split('\n')[0]}`);
+    }
+    const after = await snap();
+    const alive = (s) => s.made - s.lost;
+    if (alive(after) > alive(before)) errs.push(`WebGL contexts alive grew from ${alive(before)} to ${alive(after)}`);
+    if (after.dioramas !== 1 || after.tours !== 1 || after.tourLayers !== 1) errs.push(`after 20 cycles: ${after.dioramas} dioramas, ${after.tours} tours, ${after.tourLayers} map layers`);
+    if (after.nodes > before.nodes * 1.2 + 50) errs.push(`DOM grew from ${before.nodes} to ${after.nodes} nodes`);
+    res.push({ type: 'briefing walk-through: 20 briefing → mission → retry cycles', cycles, before, after, seconds: Math.round((Date.now() - t0) / 1000), errors: errs, shots: {} });
     await page.close();
   }
   return res;
