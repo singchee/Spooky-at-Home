@@ -37,7 +37,7 @@ export function progressFraction(bytes: number, total: number | null): number | 
   return bytes / total;
 }
 
-export type BarMode = 'waiting' | 'bytes' | 'determinate';
+export type BarMode = 'waiting' | 'estimate' | 'bytes' | 'determinate';
 
 export interface Readout {
   /** The main line under the stages. */

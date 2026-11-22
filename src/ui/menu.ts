@@ -9,6 +9,7 @@ import { el } from './dom';
 import { showRecon, type ReconView, type SavedNote } from './recon';
 import { placeCache, placeId, timeAgo } from './placeCache';
 import { formatClock, formatDuration, readout, SpeakThrottle, timingLine, type BarMode } from './loadProgress';
+import { estimateFor, estimateLine, loadHistory, recordWait, type Estimate } from './loadEstimate';
 import { getSettings } from './settings';
 
 /**
@@ -83,6 +84,8 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   const load = el('div', 'scout-load', undefined, progress);
   load.setAttribute('aria-hidden', 'true');
   const loadText = el('p', 'scout-load-text', undefined, load);
+  const estimateEl = el('p', 'small scout-estimate', undefined, load);
+  estimateEl.hidden = true;
   const loadMeta = el('p', 'small scout-load-meta', undefined, load);
   const elapsedEl = el('span', 'scout-elapsed', '0:00', loadMeta);
   const serverEl = el('span', 'scout-server', undefined, loadMeta);
@@ -112,7 +115,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   const file = el('input', undefined, undefined, fileLabel);
   file.type = 'file';
   file.accept = '.json,application/json';
-  el('p', 'small', 'Your search goes straight from your browser to OpenStreetMap. This game has no server. Places you scout are kept in this browser for 30 days so they open instantly next time; they are never sent anywhere. Saved map files stay on your computer.', scout);
+  el('p', 'small', 'Your search goes straight from your browser to OpenStreetMap. This game has no server. Places you scout are kept in this browser for 30 days so they open instantly next time, with how long each download took (to estimate the next wait); none of it is ever sent anywhere. Saved map files stay on your computer.', scout);
   el('p', 'small', 'Plays with a mouse and keyboard, or with on-screen touch controls.', scout);
   el('p', 'attrib', 'Map data © OpenStreetMap contributors (ODbL) when a real place is used.', scout);
 
@@ -200,27 +203,59 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
   const reduced = () => (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) || getSettings().reduceFlicker;
   const setBar = (mode: BarMode, fraction: number | null) => {
     sweep.dataset.mode = mode;
-    sweepFill.style.width = mode === 'determinate' && fraction !== null ? `${(fraction * 100).toFixed(1)}%` : '';
+    sweepFill.style.width = (mode === 'determinate' || mode === 'estimate') && fraction !== null ? `${(fraction * 100).toFixed(1)}%` : '';
   };
   /** Shows a download's progress, or (null) hides the download details. */
+  // The estimate while the server prepares the area (3.26): from this device's past waits for that
+  // server, else the default. Measured from the first request, so a fallback adds the time already spent.
+  let waitFrom = 0;
+  let attemptFrom = 0;
+  let attemptSeen = -1;
+  let est: Estimate | null = null;
+  const showEstimate = () => {
+    const p = lastProgress;
+    if (!p || p.stage !== 'waiting' || !est) {
+      estimateEl.hidden = true;
+      return null;
+    }
+    const offset = attemptFrom - waitFrom;
+    const line = estimateLine({ ...est, lowMs: est.lowMs + offset, highMs: est.highMs + offset }, Date.now() - waitFrom, reduced());
+    estimateEl.hidden = false;
+    estimateEl.textContent = line.text;
+    setBar('estimate', line.fraction);
+    return line;
+  };
   const showDetail = (p: DownloadProgress | null) => {
     lastProgress = p;
     loadText.hidden = !p;
     serverEl.hidden = !p;
     if (!p) {
+      waitFrom = 0;
+      attemptSeen = -1;
+      estimateEl.hidden = true;
       setBar('waiting', null);
       return;
+    }
+    if (p.stage === 'waiting' && p.attempt !== attemptSeen) {
+      attemptSeen = p.attempt;
+      attemptFrom = Date.now();
+      waitFrom ||= attemptFrom;
+      est = estimateFor(loadHistory(), p.host);
     }
     const r = readout(p, Date.now() - started);
     loadText.textContent = r.text;
     serverEl.textContent = ` · ${r.server}`;
     setBar(r.bar, r.fraction);
-    if (speak.ready(`${p.stage}:${p.attempt}`, Date.now())) spoken.textContent = r.spoken;
+    const line = showEstimate();
+    if (speak.ready(`${p.stage}:${p.attempt}`, Date.now())) spoken.textContent = line ? `${r.spoken} ${line.spoken}` : r.spoken;
   };
   const tick = () => {
     elapsedEl.textContent = formatClock(Date.now() - started);
+    const line = showEstimate();
     // Still waiting: remind screen readers how long it's been (the throttle spaces it out).
-    if (lastProgress?.stage === 'waiting' && speak.ready(`waiting:${lastProgress.attempt}`, Date.now())) spoken.textContent = readout(lastProgress, Date.now() - started).spoken;
+    if (lastProgress?.stage === 'waiting' && line && speak.ready(`waiting:${lastProgress.attempt}${line.over ? ':over' : ''}`, Date.now())) {
+      spoken.textContent = `${readout(lastProgress, Date.now() - started).spoken} ${line.spoken}`;
+    }
   };
   const setBusy = (busy: boolean) => {
     progress.hidden = !busy;
@@ -353,6 +388,7 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
         });
         json = { ...got.json, parts: ['core'] };
         stats = got.stats;
+        recordWait(stats.host, stats.hostWaitMs); // this device's own history, for next time's estimate
       }
       if (id !== run) return;
       setStage(2);
