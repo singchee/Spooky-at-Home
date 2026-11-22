@@ -120,7 +120,8 @@ export function buildWorld(map: MapData, seed: number): World {
   disposables.push(cutaway);
   const buildingMesh = fromBuilder(bGeo, basic({}, { windows: true, cut: { tex: cutaway.texture, part: 'solid' } }), 'buildings');
   if (buildingMesh) {
-    const ghostMat = basic({ transparent: true, depthWrite: false, side: THREE.DoubleSide }, { cut: { tex: cutaway.texture, part: 'ghost' } });
+    // One pass for both sides (three.js would otherwise draw a double-sided transparent mesh twice).
+    const ghostMat = basic({ transparent: true, depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true }, { cut: { tex: cutaway.texture, part: 'ghost' } });
     const ghost = add(new THREE.Mesh(buildingMesh.geometry, ghostMat), 'buildings-ghost');
     ghost.renderOrder = 10;
   }
