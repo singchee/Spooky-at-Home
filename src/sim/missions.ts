@@ -137,11 +137,17 @@ export const HORDE_WANDER = 26;
 /** Metres of clear ground kept between the farthest a shell can kill and a school, kindergarten or playground. */
 export const CHILD_FIRE_CLEARANCE = 30;
 /**
- * Guardrail (PLAN §9): no horde gathers within this many metres of a school, kindergarten or playground.
- * A zombie at the edge of its wander, hit by a 105 round, still leaves CHILD_FIRE_CLEARANCE of clear
- * ground before the grounds: 26 + 24 + 30 = 80 m.
+ * Clear missions (spec 002): a horde zombie scattered by a 105 round never ends a move farther than this from its
+ * horde's path (its gathering point, or the drifting horde's line to the shelter). A hard move rule in Sim.
  */
-export const HORDE_CHILD_GAP = Math.max(HORDE_SPREAD, HORDE_WANDER) + MAX_KILL_REACH + CHILD_FIRE_CLEARANCE;
+export const SCATTER_LEASH = 45;
+/**
+ * Guardrail (PLAN §9): no horde gathers within this many metres of a school, kindergarten or playground.
+ * The farthest a horde zombie can ever be from its gathering point (the scatter leash, which is wider than the
+ * start spread and the wander), hit by a 105 round there, still leaves CHILD_FIRE_CLEARANCE of clear ground
+ * before the grounds: 45 + 24 + 30 = 99 m (was 80 m before spec 002).
+ */
+export const HORDE_CHILD_GAP = Math.max(HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH) + MAX_KILL_REACH + CHILD_FIRE_CLEARANCE;
 
 /** Road edges a survivor's route may not use: any that passes within CHILD_BUFFER of a child place (PLAN §9). */
 const routeCostCache = new WeakMap<RoadGraph, { map: MapData; cost: EdgeCost }>();

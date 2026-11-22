@@ -3,7 +3,7 @@ import { makeSampleTown } from '../src/map/sample';
 import { buildRoadGraph, dijkstra, nearestNode, pathFromPrev, type RoadGraph } from '../src/map/roadGraph';
 import { WalkGrid } from '../src/map/grid';
 import { distToSegment, pointInPolygon } from '../src/map/geom';
-import { CHILD_FIRE_CLEARANCE, HORDE_SPREAD, HORDE_WANDER, generateMission } from '../src/sim/missions';
+import { CHILD_FIRE_CLEARANCE, HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH, generateMission } from '../src/sim/missions';
 import { nearChildPlace, childZones, TEMPLATE_IDS } from '../src/map/recon';
 import { parseOverpass, featureCategory, type OverpassJson } from '../src/map/overpass';
 import { KILL_REACH, WEAPONS } from '../src/sim/weapons';
@@ -154,11 +154,11 @@ describe('item 3.8: school guardrail gaps', () => {
     expect(withStragglers, 'stragglers still come in from the clear side of town').toBe(built);
   }, 120_000);
 
-  it('hordes: worst-case wander plus a 105 round stays 30 m clear of child places, every template, difficulty and seed', () => {
-    // From the sim's own numbers: zombies start within HORDE_SPREAD and mill within HORDE_WANDER of their
-    // gathering point, and a 105 round can kill reach105 from where it lands.
-    const gap = Math.max(HORDE_SPREAD, HORDE_WANDER) + reach105 + CHILD_FIRE_CLEARANCE;
-    expect(gap).toBeGreaterThanOrEqual(80);
+  it('hordes: worst-case wander or scatter plus a 105 round stays 30 m clear of child places, every template, difficulty and seed', () => {
+    // From the sim's own numbers: zombies start within HORDE_SPREAD, mill within HORDE_WANDER and, scattered by a
+    // 105 in Clear (spec 002), run at most SCATTER_LEASH from their horde's path; a 105 round can kill reach105 from where it lands.
+    const gap = Math.max(HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH) + reach105 + CHILD_FIRE_CLEARANCE;
+    expect(gap).toBeGreaterThanOrEqual(99);
     for (const town of [makeSampleTown(), schoolHeavyTown()]) {
       const g = buildRoadGraph(town);
       const w = new WalkGrid(town);
