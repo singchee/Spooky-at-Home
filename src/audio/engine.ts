@@ -23,6 +23,8 @@ export interface SfxOutput {
   radio: AudioNode;
   noise?: AudioBuffer;
   duck?(depth: number, hold: number): void;
+  /** Pump the music and drone down on the audio clock (Mixer.punch). */
+  punch?(p: { depth: number; attack: number; hold: number; release: number }): void;
   radioStatic?(dur: number): void;
   kit?: Kit;
   resume?(): void;
@@ -278,11 +280,12 @@ export class AudioEngine {
     let hiss = 0;
     return {
       ctx,
-      sfx: mixer.sfx,
+      sfx: mixer.weapons,
       radio: mixer.radio,
       noise,
       kit: sfxKit,
       duck: (d, h) => mixer.duck(d, h),
+      punch: (p) => mixer.punch(p),
       radioStatic: (dur) => radioStatic(ctx, mixer.radio, noise, dur, (hiss += 0.37), sfxKit),
       resume: () => this.unlock(),
       sample: (id) => this.bank?.get(id) ?? null,

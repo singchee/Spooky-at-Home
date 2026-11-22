@@ -276,6 +276,7 @@ function fakeContext() {
       return { ...node(), gain };
     },
     createDynamicsCompressor: () => ({ ...node(), threshold: param(), knee: param(), ratio: param(), attack: param(), release: param() }),
+    createBiquadFilter: () => ({ ...node(), type: '', frequency: param(), gain: param(), Q: param() }),
   };
   return { ctx: ctx as unknown as AudioContext, params };
 }
