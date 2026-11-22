@@ -6,7 +6,7 @@
 // runs just those), and the way in from the front page with OpenStreetMap stubbed out
 // (`--only wayin` runs just that).
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -153,6 +153,13 @@ try {
     }
   }
   // The intro ("The Late Bulletin"): plays through on a controlled clock, captions, skip, flashes, reduced motion, leaks.
+  // Famous places (3.27): each bundled preset opens from our own origin (no OpenStreetMap request) and reaches recon with the attribution.
+  if (!only || only === 'presets') {
+    for (const r of await presetChecks(browser)) {
+      results.push(r);
+      if (r.errors.length) exitCode = 1;
+    }
+  }
   if (!only || only === 'intro') {
     for (const r of await introChecks(browser)) {
       results.push(r);
@@ -2623,4 +2630,92 @@ async function introCheckRuns(browser, res) {
     res.push({ type: 'intro: 10 start → skip cycles', cycles, before, after, errors: errs, shots: {} });
     await page.close();
   }
+}
+
+// ---------- Famous places (3.27) ----------
+// Picking each bundled preset must load one file from this game's own origin, never OpenStreetMap
+// (every request to an OSM host is aborted and counted), reach recon with the attribution visible,
+// and be touch-friendly (48 px targets, no sideways scrolling), at desktop and phone size.
+async function presetChecks(browser) {
+  const OSM_HOST = /^https?:\/\/(nominatim\.openstreetmap\.org|overpass-api\.de|overpass\.kumi\.systems|[a-z0-9.-]*openstreetmap\.org)\//;
+  // The files that ship: the picker must offer exactly these.
+  const SHIPPED = readdirSync('public/maps/presets').filter((f) => f.endsWith('.json') && f !== 'exclusions.json').map((f) => f.slice(0, -5)).sort();
+  const res = [];
+  for (const vp of [{ w: 1280, h: 720, touch: false }, { w: 390, h: 844, touch: true }]) {
+    const page = await browser.newPage({ viewport: { width: vp.w, height: vp.h }, deviceScaleFactor: scale, hasTouch: vp.touch, isMobile: vp.touch });
+    const errs = [];
+    const r = { type: `presets: famous places (${vp.w}x${vp.h})`, errors: errs, shots: {}, osmRequests: 0, loaded: {} };
+    const files = [];
+    page.on('pageerror', (e) => errs.push(String(e)));
+    page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+    await page.route(OSM_HOST, (route) => {
+      r.osmRequests++;
+      errs.push(`request to OpenStreetMap: ${route.request().url()}`);
+      return route.abort();
+    });
+    page.on('request', (q) => /\/maps\/presets\//.test(q.url()) && files.push(q.url()));
+    try {
+      await page.goto(`http://localhost:${PORT}/`);
+      await page.waitForSelector('.landing h1');
+      const tap = (sel) => (vp.touch ? page.tap(sel) : page.click(sel));
+      const small = (scope) =>
+        page.evaluate(
+          (scope) => [...document.querySelectorAll(`${scope} button`)].filter((b) => { const q = b.getBoundingClientRect(); return q.width > 0 && (q.height < 48 || q.width < 48); }).map((b) => `${b.textContent.trim().slice(0, 30)} ${Math.round(b.getBoundingClientRect().width)}x${Math.round(b.getBoundingClientRect().height)}`),
+          scope,
+        );
+      const landingSmall = await small('.landing-actions');
+      if (landingSmall.length) errs.push(`landing buttons under 48 px: ${landingSmall.join(' | ')}`);
+      await tap('.la-famous');
+      await page.waitForSelector('.famous .famous-place');
+      const picker = await page.evaluate(() => ({
+        countries: [...document.querySelectorAll('.famous-country')].map((h) => h.textContent.trim()),
+        places: [...document.querySelectorAll('.famous-place')].map((b) => b.dataset.preset),
+        attrib: document.querySelector('.scout .attrib')?.textContent ?? '',
+        wide: document.documentElement.scrollWidth > window.innerWidth + 1,
+      }));
+      if ([...picker.places].sort().join() !== SHIPPED.join()) errs.push(`the picker offers ${picker.places.join(', ')} but the files are ${SHIPPED.join(', ')}`);
+      if (picker.countries.length !== picker.places.length) errs.push(`expected one country heading per place, saw ${picker.countries.length} for ${picker.places.length}`);
+      const SLUGS = picker.places;
+      if (!/OpenStreetMap/.test(picker.attrib)) errs.push('the scout screen lost the OpenStreetMap attribution');
+      if (picker.wide) errs.push('the scout screen scrolls sideways');
+      const picks = await small('.famous');
+      if (picks.length) errs.push(`famous place buttons under 48 px: ${picks.join(' | ')}`);
+      r.shots.picker = `${out}/presets-picker-${vp.w}.png`;
+      await page.locator('.famous').screenshot({ path: r.shots.picker });
+      for (const slug of SLUGS) {
+        const before = files.length;
+        await page.waitForSelector(`.famous-place[data-preset="${slug}"]`);
+        await tap(`.famous-place[data-preset="${slug}"]`);
+        await page.waitForSelector('.menu .recon .mission-card', { timeout: 30000 });
+        const st = await page.evaluate(() => ({
+          title: document.querySelector('.menu .recon h2')?.textContent ?? '',
+          attrib: document.querySelector('.menu .recon .attrib')?.textContent ?? '',
+          cards: document.querySelectorAll('.menu .recon .mission-card').length,
+          wide: document.documentElement.scrollWidth > window.innerWidth + 1,
+        }));
+        r.loaded[slug] = { title: st.title, cards: st.cards };
+        if (!/OpenStreetMap/.test(st.attrib)) errs.push(`${slug}: recon shows no OpenStreetMap attribution (${st.attrib})`);
+        if (!st.cards) errs.push(`${slug}: recon offers no missions`);
+        if (st.wide) errs.push(`${slug}: recon scrolls sideways`);
+        const got = files.slice(before);
+        if (got.length !== 1 || !got[0].startsWith(`http://localhost:${PORT}/`) || !got[0].includes(`${slug}.json`)) errs.push(`${slug}: expected one request to our own ${slug}.json, saw ${got.join(', ') || 'none'}`);
+        r.shots[slug] = `${out}/presets-${slug}-${vp.w}.png`;
+        await page.screenshot({ path: r.shots[slug] });
+        await tap('.recon-change');
+        await page.waitForSelector('.famous .famous-place');
+      }
+      // A mission starts from a preset recon card and is playable.
+      await tap(`.famous-place[data-preset="${SLUGS[SLUGS.length - 1]}"]`);
+      await page.waitForSelector('.menu .recon .mission-card');
+      await tap('.recon .mission-card button');
+      await page.waitForSelector('.overlay .card.briefing', { timeout: 30000 });
+      r.shots.briefing = `${out}/presets-briefing-${vp.w}.png`;
+      await page.screenshot({ path: r.shots.briefing });
+    } catch (e) {
+      errs.push(String(e));
+    }
+    res.push(r);
+    await page.close();
+  }
+  return res;
 }

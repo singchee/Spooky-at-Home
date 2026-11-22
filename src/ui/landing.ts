@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { makeSampleTown } from '../map/sample';
+import { PRESETS } from '../map/presets';
 import type { MapData } from '../map/types';
 import { createSim } from '../sim/setup';
 import type { Sim } from '../sim/sim';
@@ -15,7 +16,7 @@ import { audio } from '../audio/engine';
  * three steps that explain the idea, and three ways in. Render-only, no HUD. The menu theme starts
  * on the first click or key press (browsers need a gesture) and carries on into the menu.
  */
-export type LandingChoice = 'scout' | 'sample' | 'training' | 'intro';
+export type LandingChoice = 'scout' | 'sample' | 'famous' | 'training' | 'intro';
 
 export interface LandingOptions {
   /** A one-line notice above the title (e.g. after finishing training). Static text only. */
@@ -69,6 +70,9 @@ export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) =>
 
   const actions = el('div', 'landing-actions', undefined, main);
   const scout = el('button', 'primary la-scout', 'Scout my neighbourhood', actions);
+  const famousBtn = el('button', 'la-famous', undefined, actions);
+  el('span', 'la-label', 'Famous places', famousBtn);
+  el('span', 'la-sub', PRESETS.map((p) => p.city).join(' · '), famousBtn);
   const sample = el('button', 'la-sample', 'Try the sample town', actions);
   const training = el('button', 'la-training', undefined, actions);
   el('span', 'la-label', 'Training night', training);
@@ -93,6 +97,7 @@ export function showLanding(parent: HTMLElement, onChoose: (c: LandingChoice) =>
   window.addEventListener('keydown', unlock);
   scout.addEventListener('click', choose('scout'));
   sample.addEventListener('click', choose('sample'));
+  famousBtn.addEventListener('click', choose('famous'));
   training.addEventListener('click', choose('training'));
   introBtn?.addEventListener('click', () => {
     audio.unlock(); // the click is the gesture sound needs
