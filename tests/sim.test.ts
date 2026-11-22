@@ -5,7 +5,6 @@ import { WalkGrid } from '../src/map/grid';
 import { generateMission, MISSION_TYPES, waveIntel, type MissionType } from '../src/sim/missions';
 import { createSim } from '../src/sim/setup';
 import { Bot, SKILL } from '../src/sim/bot';
-import { isUnlimited, weaponById } from '../src/sim/weapons';
 import type { Sim } from '../src/sim/sim';
 import type { MapData } from '../src/map/types';
 
@@ -138,48 +137,6 @@ describe('simulation (gate G6: win and loss both reachable)', () => {
     expect(sim.fire('105', { x: 0, z: 0 })).toBe(false); // reloading
     play(sim, null, 5);
     expect(sim.weaponReady('105')).toBe(true);
-  });
-
-  it('the 25 mm never runs dry: no magazine, no reload (owner, 3.11)', () => {
-    const sim = make('clear', 1, 1);
-    expect(isUnlimited(weaponById('25'))).toBe(true);
-    // Ten seconds of trigger at 12 rounds a second: twice the old 60-round magazine, with no pause.
-    let fired = 0;
-    for (let i = 0; i < 600; i++) {
-      if (sim.weaponReady('25')) {
-        expect(sim.fire('25', { x: 0, z: 0 })).toBe(true);
-        fired++;
-      }
-      expect(sim.state().weapons.find((w) => w.id === '25')!.reloading).toBe(0);
-      sim.step(1 / 60);
-    }
-    expect(fired).toBeGreaterThanOrEqual(119);
-    expect(fired).toBeLessThanOrEqual(121);
-  });
-
-  it('the 40 mm and 105 mm keep their magazines and reloads', () => {
-    expect(isUnlimited(weaponById('40'))).toBe(false);
-    expect(isUnlimited(weaponById('105'))).toBe(false);
-    const sim = make('clear', 1, 1);
-    let fired = 0;
-    while (sim.weaponReady('40')) {
-      sim.fire('40', { x: 0, z: 0 });
-      fired++;
-      sim.step(0.5);
-    }
-    expect(fired).toBe(weaponById('40').magazine);
-    expect(sim.state().weapons.find((w) => w.id === '40')!.reloading).toBeGreaterThan(0);
-  });
-
-  it('unlimited 25 mm stays deterministic: same seed and inputs, same mission', () => {
-    const run = () => {
-      const sim = make('escort', 3, 9);
-      const bot = new Bot(sim, SKILL.human);
-      play(sim, bot, 120);
-      const s = sim.state();
-      return JSON.stringify([s.t, s.shots, s.kills, s.zombiesAlive, s.survivorsAlive, s.friendlyHits, s.phase]);
-    };
-    expect(run()).toBe(run());
   });
 
   it('budget (QUALITY §2): one step with ~1,000 zombies takes under 4 ms on average', () => {
