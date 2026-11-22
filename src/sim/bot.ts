@@ -20,12 +20,21 @@ export interface BotSkill {
   sensorSwitch: number;
   /** Only these guns (balance runs, e.g. a 105-only bot for spec 002). Unset: all three. */
   guns?: string[];
+  /**
+   * Sees only this far (metres) from where it's looking, like a person on a zoomed camera, and has to search:
+   * the search help's circles first, then the briefed horde places, then a seeded sweep. Unset: sees the whole map.
+   */
+  view?: number;
 }
 
 export const SKILL: Record<'ace' | 'human', BotSkill> = {
   ace: { thinkEvery: 0.2, aimError: 0, oneGunAtATime: false, switchDelay: 0, seesCold: true, sensorSwitch: 0 },
   human: { thinkEvery: 0.45, aimError: 3.5, oneGunAtATime: true, switchDelay: 0.8, seesCold: false, sensorSwitch: 0.7 },
 };
+/** A human-skill bot that has to find what it shoots (owner's report: "I'm looking and looking and can't find them"). */
+export const SEARCHER: BotSkill = { ...SKILL.human, view: 70 };
+/** Seconds a searching bot looks at one spot before moving on. */
+export const LOOK_DWELL = 2.5;
 
 export class Bot {
   private timer = 0;
@@ -36,6 +45,10 @@ export class Bot {
   private switching = 0;
   private r: () => number;
   private skill: BotSkill;
+  /** Where a searching bot (skill.view) is looking, and its search plan. */
+  look: { x: number; z: number } | null = null;
+  private lookT = 0;
+  private plan = 0;
   constructor(private sim: Sim, skill: BotSkill | number = SKILL.ace) {
     this.skill = typeof skill === 'number' ? { ...SKILL.ace, thinkEvery: skill } : skill;
     let a = 0x9e3779b9 ^ sim.mission.seed;
@@ -54,18 +67,35 @@ export class Bot {
     if (this.timer > 0) return;
     this.timer = this.skill.thinkEvery;
     const sim = this.sim;
-    const all = sim.zombies.filter((z) => z.alive);
+    const view = this.skill.view;
+    if (view) this.lookT += this.skill.thinkEvery;
+    const inView = (z: { x: number; z: number }) => !view || (!!this.look && Math.hypot(z.x - this.look.x, z.z - this.look.z) <= view);
+    const all = sim.zombies.filter((z) => z.alive && inView(z));
     const canSee = (z: { cold: boolean }) => this.skill.seesCold || this.sensor === 'night' || !z.cold;
     const visible = all.filter(canSee);
+    if (view && !visible.length && (!this.look || this.lookT >= LOOK_DWELL * (this.sensor === 'night' ? 2 : 1))) {
+      // Nothing here: look somewhere else. A person checks the marked search circles, then the briefed places, then sweeps.
+      this.lookT = 0;
+      const areas = sim.searchAreas();
+      const places = [...sim.regroupPoints().map((g) => g.p), ...sim.mission.hordes.map((h) => h.centre)];
+      const h = sim.map.half * 0.85;
+      const k = this.plan++;
+      if (areas.length) this.look = { ...areas[k % areas.length].p };
+      else if (k % 3 !== 2 && places.length) this.look = { ...places[k % places.length] };
+      else this.look = { x: (this.r() * 2 - 1) * h, z: (this.r() * 2 - 1) * h };
+    }
     if (!this.skill.seesCold) {
       // Like a person: check night vision when thermal shows nothing (the briefing said cold ones are out
       // there), and go back to thermal after a look, because night vision is murkier.
-      const wantNight = this.sensor === 'thermal' ? visible.length === 0 && all.length > 0 && this.sensorTime > 3 : this.sensorTime < 12 || visible.every((z) => !z.cold) === false;
+      // A searching bot doesn't know cold ones are in view: it tries night vision on a quiet spot it has looked at a while.
+      const hunch = view ? this.lookT >= LOOK_DWELL * 0.6 : all.length > 0;
+      const wantNight = this.sensor === 'thermal' ? visible.length === 0 && hunch && this.sensorTime > 3 : this.sensorTime < 12 || visible.every((z) => !z.cold) === false;
       const next = wantNight ? 'night' : 'thermal';
       if (next !== this.sensor && this.sensorTime > 3) {
         this.sensor = next;
         this.sensorTime = 0;
         this.switching = Math.max(this.switching, this.skill.sensorSwitch);
+        sim.noteSensorSwitch();
         return;
       }
     }
@@ -107,6 +137,11 @@ export class Bot {
       const aim = { x: target.x + target.vx * tof + (this.r() - 0.5) * 2 * e, z: target.z + target.vz * tof + (this.r() - 0.5) * 2 * e };
       const safe = friends.every((f) => Math.hypot(f.x - aim.x, f.z - aim.z) > w.radius * 1.6 + 4);
       if (!safe) continue;
+      if (view) {
+        // Keep the camera on what it's shooting.
+        this.look = { x: target.x, z: target.z };
+        this.lookT = 0;
+      }
       sim.fire(id, aim);
       return;
     }
