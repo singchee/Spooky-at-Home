@@ -1,5 +1,5 @@
 import { el } from '../ui/dom';
-import { TAP_MAX_FRAMES, TAP_MAX_MS, TAP_MAX_PX, pinchStep, stickDeflection, stickNudge } from './controls';
+import { TAP_MAX_FRAMES, TAP_MAX_MS, TAP_MAX_PX, pinchStep, stickAt, stickNudge } from './controls';
 
 /**
  * On-screen controls for phones and tablets (3.11, owner: "When accessed via mobile I can't control").
@@ -31,6 +31,8 @@ export interface TouchActions {
   pause(): void;
   /** Labels for the GUN, VIEW and ZOOM buttons, e.g. "40", "WH" and "×2". */
   labels(): { weapon: string; view: string; zoom: string };
+  /** Touch controls came on (true) or went off. */
+  activeChanged?(on: boolean): void;
 }
 
 /** The OS says the main pointer is a finger. */
@@ -195,6 +197,7 @@ export class TouchControls {
   setActive(on: boolean): void {
     this.active = on;
     this.container.classList.toggle('touch-mode', on);
+    this.act.activeChanged?.(on);
     if (!on) {
       this.releaseStick();
       this.releaseFire();
@@ -244,13 +247,9 @@ export class TouchControls {
   }
 
   private moveStick(p: PointerEvent): void {
-    const r = this.stick.getBoundingClientRect();
-    const radius = r.width / 2;
-    const dx = p.clientX - (r.left + radius);
-    const dy = p.clientY - (r.top + r.height / 2);
-    this.stickVec = stickDeflection(dx, dy, radius);
-    const k = Math.min(1, radius / Math.max(1, Math.hypot(dx, dy)));
-    this.knob.style.transform = `translate(${Math.round(dx * k)}px, ${Math.round(dy * k)}px)`;
+    const { vec, knob } = stickAt(p.clientX, p.clientY, this.stick.getBoundingClientRect());
+    this.stickVec = vec;
+    this.knob.style.transform = `translate(${Math.round(knob[0])}px, ${Math.round(knob[1])}px)`;
     this.stick.classList.add('down');
   }
 

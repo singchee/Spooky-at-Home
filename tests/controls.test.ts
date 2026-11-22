@@ -4,7 +4,9 @@ import {
   coldHint,
   PAUSE_ESC_GRACE,
   RESULT_KEY_GRACE,
+  STICK_DEADZONE,
   STICK_SPEED,
+  stickAt,
   keyAction,
   nextView,
   pinchStep,
@@ -90,6 +92,28 @@ describe('touch stick', () => {
     const [x, y] = stickDeflection(0, -45, 60);
     expect(x).toBeCloseTo(0);
     expect(y).toBeLessThan(0);
+  });
+  // Owner, Android tablet: "No matter where I touch the controller it defaults up straight away." The stick
+  // reads a finger against the ring's box: the centre is no push, each edge pushes its own way.
+  it('reads a finger against the ring: centre is still, each edge pushes its own way, past the rim clamps', () => {
+    const ring = { left: 16, top: 528, width: 136, height: 136 }; // Galaxy Tab S4 landscape, as laid out
+    const cx = 16 + 68;
+    const cy = 528 + 68;
+    expect(stickAt(cx, cy, ring).vec).toEqual([0, 0]);
+    expect(stickAt(cx + 4, cy - 5, ring).vec).toEqual([0, 0]); // dead zone
+    const S = Math.SQRT1_2;
+    for (const [ux, uy] of [[1, 0], [S, S], [0, 1], [-S, S], [-1, 0], [-S, -S], [0, -1], [S, -S]]) {
+      const { vec, knob } = stickAt(cx + ux * 61, cy + uy * 61, ring); // near the edge
+      expect(Math.atan2(vec[1], vec[0])).toBeCloseTo(Math.atan2(uy, ux), 5);
+      expect(Math.hypot(...vec)).toBeCloseTo((61 / 68 - STICK_DEADZONE) / (1 - STICK_DEADZONE), 5);
+      expect(knob[0]).toBeCloseTo(ux * 61, 5);
+      expect(knob[1]).toBeCloseTo(uy * 61, 5);
+      const out = stickAt(cx + ux * 200, cy + uy * 200, ring); // dragged off the ring
+      expect(Math.hypot(...out.vec)).toBeCloseTo(1, 5);
+      expect(Math.hypot(...out.knob)).toBeCloseTo(68, 5);
+    }
+    // Halfway out is less than half speed (the dead zone), never full.
+    expect(stickAt(cx, cy - 34, ring).vec[1]).toBeCloseTo(-(0.5 - STICK_DEADZONE) / (1 - STICK_DEADZONE), 5);
   });
   it('moves the aim by speed x deflection x dt (frame-rate independent)', () => {
     const d: [number, number] = [0.5, -1];
