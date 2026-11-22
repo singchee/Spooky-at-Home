@@ -60,6 +60,8 @@ interface TestHooks {
   holdFire?: (on: boolean) => void;
   /** Where the aim point appears relative to the screen centre, CSS px (the camera kick, as last drawn). */
   aimOffset?: () => [number, number];
+  /** Where a ground point appears on screen now, CSS px (the touch stick checks measure which way the aim moved). */
+  screenOf?: (x: number, z: number) => [number, number];
 }
 
 /** The OS asks for reduced motion (live: it can change while the page is open). */
@@ -211,6 +213,10 @@ export class Game {
         const p = this.screenPos(this.aim, 0);
         const c = this.renderer.domElement;
         return [p.x - c.clientWidth / 2, p.y - c.clientHeight / 2];
+      };
+      hooks.screenOf = (x, z) => {
+        const p = this.screenPos({ x, z }, 0);
+        return [p.x, p.y];
       };
       hooks.holdFire = (on) => {
         this.firing = on && this.screen === 'playing';
@@ -813,7 +819,7 @@ export class Game {
     this.disposed = true;
     // Test hooks must not outlive this game (they'd point at a dead one).
     const hooks = window.__spooky as TestHooks | undefined;
-    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset'] as const) delete hooks[k];
+    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
     audio.release('mission');
     this.offSettings();

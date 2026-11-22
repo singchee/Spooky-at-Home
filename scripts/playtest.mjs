@@ -10,7 +10,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { chromium } = require('playwright');
+const { chromium, devices } = require('playwright');
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
 const scale = Number(arg('--scale', 1));
 const out = arg('--out', 'reports/playtest');
@@ -2308,6 +2308,228 @@ async function controlsChecks(browser) {
       await page.tap('.overlay button:has-text("Resume")');
       await waitInfo(page, () => window.__spooky.info().screen === 'playing');
       if (!(await info(page)).touch) errs.push('touch controls switched off by tapping Resume');
+    } catch (e) {
+      errs.push(String(e));
+    }
+    res.push(out_);
+    await page.close();
+  }
+
+  // ----- Touch: the thumb stick and tap-to-aim on an Android tablet, started the way a player starts -----
+  // Owner, Android tablet (Chrome): "No matter where I touch the controller it defaults up straight away.
+  // Touching the screen doesn't work either." The touch checks above start with ?autostart (no briefing), so
+  // they never pressed "Start mission", which asked for pointer lock even on touch screens. With the lock
+  // held, Chrome reports every pointer event at (0, 0): the stick always read "up" and taps aimed at the corner.
+  // Here: Galaxy Tab device profiles (Android Chrome user agent, pixel ratio 2.25, touch, mobile viewport), the
+  // briefing's "Start mission" tapped with a finger, real CDP touch sequences on the stick (centre, each edge,
+  // drags in small steps past the ring, a pointercancel mid-drag, with FIRE held), a tap on the picture, and
+  // all of it again after turning the tablet round.
+  for (const deviceName of ['Galaxy Tab S4 landscape', 'Galaxy Tab S4']) {
+    const device = devices[deviceName];
+    const { page, errs } = await gamePage(browser, 'autostart=1&brief=1&type=escort&difficulty=1&seed=3', { ...device });
+    page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+    const out_ = { type: `controls: thumb stick and tap on ${deviceName} (Android Chrome, via the briefing)`, errors: errs, shots: {} };
+    try {
+      const cdp = await page.context().newCDPSession(page);
+      const finger = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y, id = 1]) => ({ x, y, id, radiusX: 12, radiusY: 12, force: 1 })) });
+      const tapAt = async ([x, y]) => {
+        await finger('touchStart', [[x, y]]);
+        await finger('touchEnd', []);
+        await page.waitForTimeout(150);
+      };
+      const centreOf = (sel) =>
+        page.evaluate((s) => {
+          const r = [...document.querySelectorAll(s)].find((e) => e.getBoundingClientRect().width)?.getBoundingClientRect();
+          return r ? [r.left + r.width / 2, r.top + r.height / 2] : null;
+        }, sel);
+      // The briefing, then "Start mission" with a finger, as the owner does.
+      await page.waitForFunction(() => [...document.querySelectorAll('.overlay button')].some((b) => b.textContent === 'Start mission' && b.getBoundingClientRect().width));
+      await tapAt(await page.evaluate(() => {
+        const r = [...document.querySelectorAll('.overlay button')].find((b) => b.textContent === 'Start mission').getBoundingClientRect();
+        return [r.left + r.width / 2, r.top + r.height / 2];
+      }));
+      await waitInfo(page, () => window.__spooky.info().screen === 'playing');
+      await page.waitForSelector('.touch-controls:not([hidden]) .tc-stick');
+      await page.waitForTimeout(300);
+      // Where pointer events say a finger is, next to where the touch really is.
+      await page.evaluate(() => {
+        window.__pd = [];
+        window.addEventListener('pointerdown', (e) => e.pointerType === 'touch' && window.__pd.push({ id: e.pointerId, x: e.clientX, y: e.clientY, target: e.target }), true);
+      });
+      const knob = () =>
+        page.evaluate(() => {
+          const m = (document.querySelector('.tc-knob').style.transform || '').match(/-?[\d.]+/g);
+          return m ? [Number(m[0]), Number(m[1])] : [0, 0];
+        });
+      const aim = async () => ({ ...(await info(page)).aim, t: await gameTime(page) });
+      /** Which way (unit vector, screen) and how far (px) the aim moved from a to b, seen in the current view. */
+      const motion = (a, b) =>
+        page.evaluate(([a, b]) => {
+          const p = window.__spooky.screenOf(a.x, a.z);
+          const q = window.__spooky.screenOf(b.x, b.z);
+          const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+          return { dir: d ? [(q[0] - p[0]) / d, (q[1] - p[1]) / d] : [0, 0], px: d, speed: d / Math.max(1e-6, b.t - a.t) };
+        }, [a, b]);
+      const unit = (v) => (Math.hypot(...v) ? v.map((c) => c / Math.hypot(...v)) : [0, 0]);
+      const angle = (u, v) => (Math.acos(Math.max(-1, Math.min(1, u[0] * v[0] + u[1] * v[1]))) * 180) / Math.PI;
+      const centreAim = async () => {
+        await page.evaluate(() => window.__spooky.aimAt(0, 0));
+        await waitGame(page, 0.2);
+      };
+      /** Let go; returns how far (m) the aim moved afterwards (should stay put). */
+      const release = async () => {
+        await finger('touchEnd', []);
+        await page.waitForTimeout(100);
+        const a = await aim();
+        await waitGame(page, 0.4);
+        const b = await aim();
+        return Math.hypot(b.x - a.x, b.z - a.z);
+      };
+      const S = Math.SQRT1_2;
+      const dirs = [['right', 1, 0], ['down-right', S, S], ['down', 0, 1], ['down-left', -S, S], ['left', -1, 0], ['up-left', -S, -S], ['up', 0, -1], ['up-right', S, -S]];
+
+      const checks = async (view) => {
+        const res_ = { directions: {} };
+        out_[view] = res_;
+        const lock = await page.evaluate(() => document.pointerLockElement?.className ?? null);
+        res_.pointerLock = lock;
+        if (lock) errs.push(`${view}: the pointer is locked (to ${lock}) while playing with touch controls`);
+        const ring = await page.evaluate(() => {
+          const r = document.querySelector('.tc-stick').getBoundingClientRect();
+          return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, r: r.width / 2 };
+        });
+        // 1. A press at the centre of the ring: no push, the aim stays put.
+        await centreAim();
+        await page.evaluate(() => (window.__pd = []));
+        let a = await aim();
+        await finger('touchStart', [[ring.cx, ring.cy]]);
+        await waitGame(page, 0.3);
+        let k = await knob();
+        let b = await aim();
+        const pd = await page.evaluate(() => window.__pd.map(({ x, y }) => [Math.round(x), Math.round(y)]));
+        res_.centre = { touchAt: [Math.round(ring.cx), Math.round(ring.cy)], pointerEventAt: pd[0], knob: k, aimMovedPx: Math.round((await motion(a, b)).px) };
+        await release();
+        if (pd[0] && Math.hypot(pd[0][0] - ring.cx, pd[0][1] - ring.cy) > 2) errs.push(`${view}: a touch at ${res_.centre.touchAt} reached the page as a pointer at ${pd[0]}`);
+        if (Math.hypot(...k) > 3) errs.push(`${view}: a press at the stick's centre put the knob at ${k}`);
+        if (res_.centre.aimMovedPx > 3) errs.push(`${view}: a press at the stick's centre moved the aim ${res_.centre.aimMovedPx} px`);
+        // 2. Each edge, pressed directly, pushes that way; then dragged in small steps (~300 ms) past the ring.
+        const speeds = {};
+        for (const [name, ux, uy] of dirs) {
+          await centreAim();
+          const edge = [ring.cx + ux * ring.r * 0.85, ring.cy + uy * ring.r * 0.85];
+          await finger('touchStart', [edge]);
+          await page.waitForTimeout(60);
+          const kEdge = await knob();
+          a = await aim();
+          await waitGame(page, 0.3);
+          b = await aim();
+          const mEdge = await motion(a, b);
+          for (let s = 1; s <= 10; s++) {
+            const d = ring.r * (0.85 + (0.75 * s) / 10); // out to 1.6 radii: off the ring
+            await finger('touchMove', [[ring.cx + ux * d, ring.cy + uy * d]]);
+            await page.waitForTimeout(30);
+          }
+          const kOut = await knob();
+          a = await aim();
+          await waitGame(page, 0.4);
+          b = await aim();
+          const mOut = await motion(a, b);
+          const drift = await release();
+          const kRest = await knob();
+          speeds[name] = mOut.speed;
+          const r = { edgeKnob: kEdge, edgeAimOffByDeg: Math.round(angle(mEdge.dir, [ux, uy])), outKnob: kOut, outAimOffByDeg: Math.round(angle(mOut.dir, [ux, uy])), outSpeedPxPerS: Math.round(mOut.speed), afterReleaseM: Number(drift.toFixed(2)) };
+          res_.directions[name] = r;
+          if (angle(unit(kEdge), [ux, uy]) > 10 || Math.abs(Math.hypot(...kEdge) - ring.r * 0.85) > 4) errs.push(`${view} ${name}: pressing the ${name} edge put the knob at ${kEdge}`);
+          if (mEdge.px < 5 || r.edgeAimOffByDeg > 25) errs.push(`${view} ${name}: pressing the ${name} edge moved the aim ${Math.round(mEdge.px)} px, ${r.edgeAimOffByDeg}° off`);
+          if (angle(unit(kOut), [ux, uy]) > 10 || Math.abs(Math.hypot(...kOut) - ring.r) > 4) errs.push(`${view} ${name}: dragged past the ring, the knob is at ${kOut} (should sit on the rim)`);
+          if (mOut.px < 20 || r.outAimOffByDeg > 25) errs.push(`${view} ${name}: dragging ${name} moved the aim ${Math.round(mOut.px)} px, ${r.outAimOffByDeg}° off`);
+          if (drift > 0.5) errs.push(`${view} ${name}: the aim kept moving ${drift.toFixed(1)} m after letting go`);
+          if (Math.hypot(...kRest) > 0.5) errs.push(`${view} ${name}: the knob stayed at ${kRest} after letting go`);
+        }
+        // 3. Proportional: half way out moves the aim at well under full speed (dead zone, then linear).
+        await centreAim();
+        await finger('touchStart', [[ring.cx, ring.cy]]);
+        for (let s = 1; s <= 10; s++) {
+          await finger('touchMove', [[ring.cx + (ring.r * 0.5 * s) / 10, ring.cy]]);
+          await page.waitForTimeout(30);
+        }
+        a = await aim();
+        await waitGame(page, 0.4);
+        b = await aim();
+        const half = await motion(a, b);
+        await release();
+        res_.halfSpeedRatio = Number((half.speed / speeds.right).toFixed(2));
+        if (!(res_.halfSpeedRatio > 0.25 && res_.halfSpeedRatio < 0.65)) errs.push(`${view}: half deflection moved the aim at ${res_.halfSpeedRatio} of full speed (expected about 0.43)`);
+        // 4. Chrome cancels the pointer mid-drag: the stick lets go (knob home, aim still), nothing stuck.
+        await centreAim();
+        await page.evaluate(() => (window.__pd = []));
+        await finger('touchStart', [[ring.cx, ring.cy]]);
+        for (let s = 1; s <= 5; s++) {
+          await finger('touchMove', [[ring.cx + (ring.r * 0.8 * s) / 5, ring.cy]]);
+          await page.waitForTimeout(30);
+        }
+        await page.evaluate(() => {
+          const { id, target } = window.__pd.at(-1);
+          target.dispatchEvent(new PointerEvent('pointercancel', { pointerId: id, pointerType: 'touch', bubbles: true }));
+        });
+        await page.waitForTimeout(100);
+        k = await knob();
+        a = await aim();
+        await waitGame(page, 0.3);
+        b = await aim();
+        res_.afterCancel = { knob: k, aimMovedM: Number(Math.hypot(b.x - a.x, b.z - a.z).toFixed(2)) };
+        await finger('touchEnd', []);
+        if (Math.hypot(...k) > 0.5 || res_.afterCancel.aimMovedM > 0.5) errs.push(`${view}: after a pointercancel the stick stayed pushed (${JSON.stringify(res_.afterCancel)})`);
+        // 5. Stick and FIRE together (FIRE first, then the stick, pushed up): steers and fires.
+        await aimAway(page);
+        const fireAt = await centreOf('.tc-fire');
+        const shots0 = await page.evaluate(() => window.__spooky.state().shots);
+        await finger('touchStart', [[...fireAt, 2]]);
+        await finger('touchStart', [[...fireAt, 2], [ring.cx, ring.cy, 1]]);
+        for (let s = 1; s <= 6; s++) {
+          await finger('touchMove', [[...fireAt, 2], [ring.cx, ring.cy - (ring.r * 0.6 * s) / 6, 1]]);
+          await page.waitForTimeout(30);
+        }
+        a = await aim();
+        await waitGame(page, 0.4);
+        b = await aim();
+        const mf = await motion(a, b);
+        await finger('touchEnd', []);
+        await page.waitForTimeout(200);
+        const shots1 = await page.evaluate(() => window.__spooky.state().shots);
+        res_.withFire = { aimMovedPx: Math.round(mf.px), offByDeg: Math.round(angle(mf.dir, [0, -1])), shots: shots1 - shots0 };
+        if (mf.px < 10 || res_.withFire.offByDeg > 25) errs.push(`${view}: stick with FIRE held did not steer up (${JSON.stringify(res_.withFire)})`);
+        if (res_.withFire.shots < 1) errs.push(`${view}: FIRE held with the stick fired nothing`);
+        // 6. A tap on the picture aims at the ground point under the finger.
+        await centreAim();
+        const target = await page.evaluate(() => {
+          const a = window.__spooky.info().aim;
+          for (const [ox, oz] of [[30, 0], [0, 30], [-30, 0], [0, -30], [20, 20], [-20, -20]]) {
+            const [x, y] = window.__spooky.screenOf(a.x + ox, a.z + oz);
+            if (document.elementFromPoint(x, y)?.classList.contains('game-canvas')) return { x: a.x + ox, z: a.z + oz, at: [x, y] };
+          }
+          return null;
+        });
+        if (!target) errs.push(`${view}: no clear spot on the picture to tap`);
+        else {
+          await tapAt(target.at);
+          const after = (await info(page)).aim;
+          res_.tap = { tappedAt: target.at.map(Math.round), wanted: [target.x, target.z], got: [Math.round(after.x), Math.round(after.z)], offM: Number(Math.hypot(after.x - target.x, after.z - target.z).toFixed(1)) };
+          if (res_.tap.offM > 3) errs.push(`${view}: a tap on the picture aimed ${res_.tap.offM} m from the spot tapped (${JSON.stringify(res_.tap)})`);
+        }
+        if ((await info(page)).screen !== 'playing') errs.push(`${view}: the mission stopped playing during the stick checks`);
+      };
+
+      await checks('as loaded');
+      out_.shots.asLoaded = `${out}/controls-stick-${deviceName.replace(/\W+/g, '-')}.png`;
+      await page.screenshot({ path: out_.shots.asLoaded });
+      // Turn the tablet round and check again (layout, ring position and the picture all change).
+      const vp = page.viewportSize();
+      await page.setViewportSize({ width: vp.height, height: vp.width });
+      await page.waitForTimeout(600);
+      await checks('turned round');
+      out_.shots.turned = `${out}/controls-stick-${deviceName.replace(/\W+/g, '-')}-turned.png`;
+      await page.screenshot({ path: out_.shots.turned });
     } catch (e) {
       errs.push(String(e));
     }
