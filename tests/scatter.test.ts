@@ -19,7 +19,7 @@ function mission(opts: MissionOptions): Mission {
   if (!r.ok) throw new Error(r.reason);
   return r.mission;
 }
-const sim = (opts: MissionOptions, o?: { scatter?: boolean }) => new Sim(mission(opts), map, graph, grid, o);
+const sim = (opts: MissionOptions, o?: { scatter?: boolean; drift?: boolean }) => new Sim(mission(opts), map, graph, grid, o);
 const runners = (s: Sim) => s.zombies.filter((z) => z.alive && (z.scatter ?? 0) > 0);
 /** Fire one gun at a point and play until it lands (and a moment more). */
 function shoot(s: Sim, gun: string, at: V2): SimEvent[] {
@@ -123,7 +123,9 @@ describe('spec 002: shelled hordes scatter, then regroup (Clear only)', () => {
     let scattered = 0;
     for (const d of [1, 3, 5]) {
       for (let seed = 1; seed <= 4; seed++) {
-        const s = sim({ type: 'clear', difficulty: d, seed });
+        // Without the drifting horde: it is never the target here, and once it overran the friendlies the sim stopped
+        // and the waits below never ended (the test hung). Every assertion is unchanged.
+        const s = sim({ type: 'clear', difficulty: d, seed }, { drift: false });
         // Not the horde that drifts to the friendlies (its anchor moves and it may chase them): a still one.
         const paths = hordePaths(s.mission);
         const still = s.mission.hordes.filter((h) => { const [a, b] = paths.get(`${h.centre.x},${h.centre.z}`)!; return a === b; });

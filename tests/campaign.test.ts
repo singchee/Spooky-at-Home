@@ -390,6 +390,32 @@ function smallWoodMap(): MapData {
   };
 }
 
+describe('single anchored clear missions are true to their place (BACKLOG 3.24)', () => {
+  it('a clear-tennis with a playground just outside the anchor buffer is refused, not built with 0 hordes on the courts', () => {
+    const base = makeSampleTown();
+    const court = base.features!.find((f) => f.category === 'tennis')!;
+    const m: MapData = {
+      ...base,
+      features: [...base.features!, ...[70, -70].map((dx, i) => ({ id: `f-test-pg2-${i}`, category: 'playground' as const, name: 'Test Playground', p: { x: court.p.x + dx, z: court.p.z }, pts: square(court.p.x + dx, court.p.z, 6) }))],
+    };
+    const g = buildRoadGraph(m);
+    const w = new WalkGrid(m);
+    let refused = 0;
+    for (let seed = 1; seed <= 6; seed++) {
+      const r = generateMission(m, g, w, { type: 'clear', difficulty: 2, seed, template: 'clear-tennis', anchor: court.id });
+      if (r.ok) expect(r.mission.hordes.some((h) => h.label === r.mission.anchor!.name), `seed ${seed}`).toBe(true);
+      else { refused++; expect(r.reason).toMatch(/can't gather/); }
+    }
+    expect(refused).toBeGreaterThan(0);
+  });
+
+  it('a forest sweep that cannot hold a horde is refused', () => {
+    const m = smallWoodMap();
+    const r = generateMission(m, buildRoadGraph(m), new WalkGrid(m), { type: 'clear', difficulty: 1, seed: nightSeed(1, 1), template: 'forest-sweep' });
+    expect(r.ok).toBe(false);
+  });
+});
+
 describe('campaign: anchored nights are true to their place (rule 9, campaign §9)', () => {
   it('every planned forest-sweep night has at least one horde labelled with the forest whose cold > 0', () => {
     const m = smallWoodMap();

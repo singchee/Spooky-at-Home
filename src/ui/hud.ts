@@ -22,7 +22,17 @@ const CROSSHAIRS: Record<string, string> = Object.fromEntries(
   ]),
 );
 
-export interface HudMarker { label: string; x: number; y: number; visible: boolean }
+export interface HudMarker {
+  label: string;
+  x: number;
+  y: number;
+  visible: boolean;
+  /** Search circles: pinned to the screen edge with an arrow when off screen; rpx is the circle's radius on screen. */
+  edge?: boolean;
+  rpx?: number;
+  /** Screen angle (radians, y down) from the centre towards the point, for pinning. */
+  dir?: number;
+}
 
 /**
  * Training night's mission (tutorialSteps.ts) carries this: the HUD hides the clock and the
@@ -95,9 +105,12 @@ export class Hud {
       if (m.type === 'defend') obj.push(`SAFEHOUSE ${Math.round(s.integrity * 100)}%`);
       if (m.type === 'clear' && s.survivorsTotal) obj.push(`FRIENDLIES ${s.survivorsAlive}`);
     }
-    if (s.coldAlive > 0) obj.push(coldHint(s.coldAlive, sensor, touch));
+    const cold = s.coldAlive > 0 ? coldHint(s.coldAlive, sensor, touch) : '';
+    if (cold) obj.push(cold);
     if (!training && !m.crowd) obj.push(`FRIENDLY FIRE ${s.friendlyHits}/${m.friendlyFireLimit}`);
-    this.objective.replaceChildren(...obj.map((o) => el('div', undefined, o)));
+    // When the cold-blooded ones are all that's left (Clear), their line stands out: that's the moment to switch view.
+    const coldOnly = !training && m.type === 'clear' && s.coldAlive > 0 && s.coldAlive === s.zombiesAlive;
+    this.objective.replaceChildren(...obj.map((o) => el('div', o === cold && coldOnly ? 'hud-cold-only' : undefined, o)));
     // Radio
     this.lines = this.lines.filter((l) => now - l.t < 12);
     this.radio.replaceChildren(...this.lines.map((l) => el('div', l.alarm ? 'alarm' : undefined, l.text)));
@@ -114,10 +127,34 @@ export class Hud {
   }
 
   setMarkers(ms: HudMarker[]): void {
+    const w = this.root.clientWidth || innerWidth;
+    const h = this.root.clientHeight || innerHeight;
     this.markers.replaceChildren(
-      ...ms.filter((m) => m.visible).map((m) => {
-        const d = el('div', 'hud-marker', m.label);
-        d.style.transform = `translate(${Math.round(m.x)}px, ${Math.round(m.y)}px)`;
+      ...ms.filter((m) => m.visible || m.edge).map((m) => {
+        if (!m.edge) {
+          const d = el('div', 'hud-marker', m.label);
+          d.style.transform = `translate(${Math.round(m.x)}px, ${Math.round(m.y)}px)`;
+          return d;
+        }
+        // Endgame search circle (label is our own text). On screen: a soft ring of the circle's real size.
+        if (m.visible) {
+          const d = el('div', 'hud-search', undefined);
+          const r = Math.max(18, Math.min(Math.max(w, h), m.rpx ?? 40));
+          d.style.width = d.style.height = `${Math.round(r * 2)}px`;
+          d.style.transform = `translate(${Math.round(m.x - r)}px, ${Math.round(m.y - r)}px)`;
+          // A ring bigger than the screen (zoomed in) keeps its label on screen, just inside the top edge.
+          const label = el('span', 'hud-search-label', m.label, d);
+          if (m.y - r < 40) label.style.top = `${Math.round(40 - (m.y - r))}px`;
+          return d;
+        }
+        // Off screen: pinned to the edge, an arrow pointing the way.
+        const a = m.dir ?? 0;
+        const cx = w / 2;
+        const cy = h / 2;
+        const k = Math.min((cx - 70) / Math.max(1e-6, Math.abs(Math.cos(a))), (cy - 60) / Math.max(1e-6, Math.abs(Math.sin(a))));
+        const d = el('div', 'hud-search-edge', m.label);
+        d.style.transform = `translate(${Math.round(cx + Math.cos(a) * k)}px, ${Math.round(cy + Math.sin(a) * k)}px)`;
+        d.style.setProperty('--a', `${a.toFixed(2)}rad`);
         return d;
       }),
     );
@@ -133,8 +170,8 @@ export class Hud {
     if (this.minimap.live) box.appendChild(this.minimap.live);
   }
 
-  updateMinimap(aircraft: V2, aim: V2, survivors: V2[], regroup: V2[] = []): void {
-    this.minimap?.update({ aircraft, aim, survivors, regroup });
+  updateMinimap(aircraft: V2, aim: V2, survivors: V2[], regroup: V2[] = [], search: { p: V2; r: number }[] = []): void {
+    this.minimap?.update({ aircraft, aim, survivors, regroup, search });
   }
 
   dispose(): void {

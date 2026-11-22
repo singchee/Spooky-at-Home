@@ -23,6 +23,8 @@ export interface SfxOutput {
   radio: AudioNode;
   noise?: AudioBuffer;
   duck?(depth: number, hold: number): void;
+  /** Pump the music and drone down on the audio clock (Mixer.punch). */
+  punch?(p: { depth: number; attack: number; hold: number; release: number }): void;
   radioStatic?(dur: number): void;
   kit?: Kit;
   resume?(): void;
@@ -58,6 +60,8 @@ export interface AudioDebug {
   /** Which parts are playing from the recorded files rather than generated. */
   recorded: { score: boolean; bed: boolean };
   assets: AssetStats | null;
+  /** Decoded recorded audio held in memory, bytes. */
+  assetBytes: number;
   voice: { said: number; overlaps: number; onAir: VoiceLine | null; waiting: number; log: VoiceLogEntry[] } | null;
   /** One-off clips (the intro): id, audio-clock start and end (end = when it really stopped). */
   clips: { id: string; start: number; end: number }[];
@@ -278,11 +282,12 @@ export class AudioEngine {
     let hiss = 0;
     return {
       ctx,
-      sfx: mixer.sfx,
+      sfx: mixer.weapons,
       radio: mixer.radio,
       noise,
       kit: sfxKit,
       duck: (d, h) => mixer.duck(d, h),
+      punch: (p) => mixer.punch(p),
       radioStatic: (dur) => radioStatic(ctx, mixer.radio, noise, dur, (hiss += 0.37), sfxKit),
       resume: () => this.unlock(),
       sample: (id) => this.bank?.get(id) ?? null,
@@ -382,6 +387,7 @@ export class AudioEngine {
       gains: this.mixer?.read() ?? null,
       recorded: { score: this.score instanceof RecordedScore, bed: !!this.bed },
       assets: this.bank?.stats() ?? null,
+      assetBytes: this.bank?.decodedBytes() ?? 0,
       voice: this.voice
         ? { said: this.voice.said, overlaps: this.voice.overlaps(), onAir: this.voice.queue.current?.line ?? null, waiting: this.voice.queue.waiting, log: this.voice.log.slice(-12) }
         : null,

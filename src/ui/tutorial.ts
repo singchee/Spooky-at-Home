@@ -7,7 +7,7 @@ import { Sim } from '../sim/sim';
 import { weaponById } from '../sim/weapons';
 import { mulberry32 } from '../util/rng';
 import { Game, LENS_RANGE, type GameAction } from '../game/game';
-import { STEP_TEXT, TOUCH_GLOSSARY, TutorialSteps, planLayout, trainingMission, type StepId, type TrainingLayout } from './tutorialSteps';
+import { STEP_TEXT, TOUCH_GLOSSARY, TRAINING_SIM, TutorialSteps, nightHelp, planLayout, trainingMission, type StepId, type TrainingLayout } from './tutorialSteps';
 import { el } from './dom';
 
 /**
@@ -80,8 +80,10 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
   const grid = new WalkGrid(map);
   const layout = planLayout(map, graph, grid);
   if (!layout) throw new Error('no room for the training ground');
-  // Training keeps today's hordes: shelled hordes don't scatter here yet (spec 002, open question 3).
-  const sim = new Sim(trainingMission(map, layout), map, graph, grid, { scatter: false });
+  // Training keeps today's hordes: shelled hordes don't scatter here yet (spec 002, open question 3). No horde drifts
+  // onto the friendlies either (a slow trainee must still have them for the last step), and the search help is
+  // started by the night step below rather than by the Clear endgame rules.
+  const sim = new Sim(trainingMission(map, layout), map, graph, grid, TRAINING_SIM);
   const steps = new TutorialSteps();
   const rng = mulberry32(0x7a11);
   let exited = false;
@@ -219,6 +221,7 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
     steps.send({ type: 'danger', on: dangerOn });
     steps.send({ type: 'lens', fov: lensFov(game, sim, aim) });
     steps.send({ type: 'tick', dt });
+    nightHelp(sim, steps, layout, dt);
 
     // Friendlies hit in training get patched up after a moment.
     for (let i = revive.length - 1; i >= 0; i--) {

@@ -70,6 +70,27 @@ export function mapFeatures(map: MapData): Feature[] {
 export const CHILD_CATEGORIES: readonly FeatureCategory[] = ['school', 'kindergarten', 'playground'];
 /** Landmark (poi) and building kinds that are never a safehouse. */
 export const CHILD_KINDS: readonly string[] = ['school', 'kindergarten', 'childcare', 'college'];
+/**
+ * A school, kindergarten, childcare, college or playground, by recon category or landmark kind.
+ * Owner decision #11: these are left out of the game, so nothing names or marks them on screen
+ * (briefing diorama, tactical map, in-flight landmarks).
+ */
+export function isChildPlaceKind(kind: string): boolean {
+  return (CHILD_CATEGORIES as readonly string[]).includes(kind) || CHILD_KINDS.includes(kind) || kind === 'childcare' || kind === 'playground';
+}
+/** Names that point at a child place even when the place is filed as something else (a school's oval). */
+const CHILD_NAME = /\b(school|schule|[eé]cole|kinder|kindergarten|kita|pre-?school|nursery|child ?care|day ?care|cr[eè]che|early (learning|years)|montessori|playground|play ?group|college)\b/i;
+/** Metres around a school, kindergarten or playground counted as its grounds. */
+const CHILD_GROUNDS = 10;
+
+/**
+ * A recon feature or landmark that must not be named or marked (owner decision #11): a child-place
+ * kind, a name that points at one, or a place inside a school's, kindergarten's or playground's grounds.
+ */
+export function isChildPlaceFeature(map: MapData, kind: string, name: string | undefined, p: V2): boolean {
+  return isChildPlaceKind(kind) || (!!name && CHILD_NAME.test(name)) || nearChildPlace(map, p, CHILD_GROUNDS);
+}
+
 /** Metres to keep between a mission's places and a school, kindergarten or playground. */
 export const CHILD_BUFFER = 50;
 

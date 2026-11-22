@@ -1,6 +1,6 @@
 import type { Feature, FeatureCategory, MapData, V2 } from '../map/types';
 import { bounds } from '../map/geom';
-import { CATEGORY_INFO, mapFeatures } from '../map/recon';
+import { CATEGORY_INFO, isChildPlaceFeature, mapFeatures } from '../map/recon';
 import { HORDE_WANDER, likelyWaveDirections, type Mission, type WaveDirection } from '../sim/missions';
 import { ORBIT } from '../sim/sim';
 import type { RoadGraph } from '../map/roadGraph';
@@ -264,9 +264,11 @@ export class TacticalMap {
     if (parks.length) svg('path', { d: parks.join(''), class: 'tm-park' }, g);
     if (woods.length) svg('path', { d: woods.join(''), fill: `url(#${id}-wood)`, class: 'tm-woods' }, g);
     if (water.length) svg('path', { d: water.join(''), class: 'tm-water' }, g);
-    // Outlines of sports grounds, schools, shops and the like.
+    // Outlines of sports grounds, shops and the like. Never schools, kindergartens or playgrounds
+    // (owner decision #11: child places are left out of the game, so the map doesn't mark them).
     const outlines: string[] = [];
     for (const f of mapFeatures(this.map)) {
+      if (isChildPlaceFeature(this.map, f.category, f.name, f.p)) continue;
       if (f.pts && f.pts.length >= 3 && f.category !== 'park' && f.category !== 'forest') outlines.push(polyD(f.pts, true));
     }
     if (outlines.length) svg('path', { d: outlines.join(''), class: 'tm-grounds', 'stroke-width': 0.9 * this.u }, g);
@@ -341,7 +343,8 @@ export class TacticalMap {
     const layer = svg('g', { class: 'tm-symbols' }, g);
     const anchorId = this.opts.mission?.anchor?.id ?? this.opts.highlight;
     const feats = [...mapFeatures(this.map)]
-      .filter((f) => Math.abs(f.p.x) <= this.half && Math.abs(f.p.z) <= this.half)
+      // No symbol or name for a school, kindergarten or playground (owner decision #11).
+      .filter((f) => !isChildPlaceFeature(this.map, f.category, f.name, f.p) && Math.abs(f.p.x) <= this.half && Math.abs(f.p.z) <= this.half)
       .sort((a, b) => (b.id === anchorId ? 1 : 0) - (a.id === anchorId ? 1 : 0) || CATEGORY_INFO[b.category].weight - CATEGORY_INFO[a.category].weight || (b.name ? 1 : 0) - (a.name ? 1 : 0) || (a.id < b.id ? -1 : 1))
       .slice(0, 80);
     const fs = TEXT_PX * u;
@@ -526,12 +529,14 @@ export class TacticalMap {
 
   // ---------- live layer (HUD minimap) ----------
   /** Moves the aircraft, aim point and survivors. Cheap: only the live layer is rebuilt. */
-  update(s: { aircraft?: V2; aim?: V2; survivors?: V2[]; regroup?: V2[] }): void {
+  update(s: { aircraft?: V2; aim?: V2; survivors?: V2[]; regroup?: V2[]; search?: { p: V2; r: number }[] }): void {
     const u = this.u;
     const lim = this.half * 0.97;
     this.dyn.replaceChildren();
     // Spec 002 feel M1: where a scattered horde will regroup, while its runners are out (the horde's wander circle).
     for (const p of s.regroup ?? []) svg('circle', { cx: r1(p.x), cy: r1(p.z), r: HORDE_WANDER, class: 'tm-horde live', 'stroke-width': 2 * u, 'stroke-dasharray': `${r1(4 * u)} ${r1(3 * u)}` }, this.dyn);
+    // Endgame search help: a soft circle round each group of stragglers (never the exact spot).
+    for (const a of s.search ?? []) svg('circle', { cx: r1(a.p.x), cy: r1(a.p.z), r: r1(Math.max(a.r, 10 * u)), class: 'tm-search live', 'stroke-width': 2.5 * u }, this.dyn);
     for (const p of s.survivors ?? []) svg('circle', { cx: r1(p.x), cy: r1(p.z), r: 4 * u, class: 'tm-friendly live', 'stroke-width': u }, this.dyn);
     if (s.aim) {
       const k = 9 * u;

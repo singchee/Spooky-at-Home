@@ -3,6 +3,7 @@ import { FEATURE_CATEGORIES } from '../map/types';
 import { makeSampleTown } from '../map/sample';
 import { addExtras, checkEnoughMap, classifyMapError, fetchOverpassTimed, geocode, joinParts, mapErrorMessage, parseOverpass, type DownloadProgress, type DownloadStats, type OverpassJson } from '../map/overpass';
 import { centroid } from '../map/geom';
+import type { LatLon } from '../map/project';
 import { isPresetFile, PRESET_URL, presetSeed, presetsByCountry, presetToMap, type PresetInfo } from '../map/presets';
 import type { MissionType } from '../sim/missions';
 import type { TemplateId } from '../map/recon';
@@ -615,6 +616,24 @@ function trim(m: MapData): MapData {
   return { ...m, buildings: sorted.slice(0, MAX_BUILDINGS) };
 }
 
+/** The centre and half-size a file was downloaded with: this game's fixture/preset metadata, or an Overpass `bbox`. */
+function storedCentre(data: unknown): { origin: LatLon; half: number } | null {
+  const d = data as Record<string, any>;
+  const num = (n: unknown) => typeof n === 'number' && Number.isFinite(n);
+  for (const m of [d.spooky_fixture, d.spooky_preset]) {
+    if (m && num(m.origin?.lat) && num(m.origin?.lon) && Math.abs(m.origin.lat) <= 90 && Math.abs(m.origin.lon) <= 180) {
+      return { origin: { lat: m.origin.lat, lon: m.origin.lon }, half: num(m.half) ? Math.min(HALF, Math.max(200, m.half)) : HALF };
+    }
+  }
+  const bb = d.bbox ?? d.bounds;
+  const lat = bb && [bb.minlat, bb.maxlat].every(num) ? [bb.minlat, bb.maxlat] : null;
+  const lon = bb && [bb.minlon, bb.maxlon].every(num) ? [bb.minlon, bb.maxlon] : null;
+  if (lat && lon && lat[1] > lat[0] && lon[1] > lon[0]) {
+    return { origin: { lat: (lat[0] + lat[1]) / 2, lon: (lon[0] + lon[1]) / 2 }, half: Math.min(HALF, ((lat[1] - lat[0]) * 110574) / 2) };
+  }
+  return null;
+}
+
 /** Accepts this game's saved maps, or raw Overpass JSON exported from overpass-turbo. */
 export function loadMapFile(data: unknown, filename: string): MapData {
   const d = data as Partial<MapData> & Partial<OverpassJson>;
@@ -650,17 +669,37 @@ export function loadMapFile(data: unknown, filename: string): MapData {
     });
   }
   if (Array.isArray(d.elements)) {
-    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-    for (const e of d.elements) {
-      const pts = e.geometry ?? (e.lat !== undefined && e.lon !== undefined ? [{ lat: e.lat, lon: e.lon }] : []);
-      for (const p of pts) {
-        minLat = Math.min(minLat, p.lat); maxLat = Math.max(maxLat, p.lat);
-        minLon = Math.min(minLon, p.lon); maxLon = Math.max(maxLon, p.lon);
+    const stored = storedCentre(data);
+    let origin: LatLon;
+    let halfM: number;
+    if (stored) {
+      origin = stored.origin;
+      halfM = stored.half;
+    } else {
+      // No stored centre: centre on the box round the buildings. Roads run on for kilometres and relation
+      // members and loose nodes lie far off, so using every node pushed most of a town out of the map.
+      const box = () => ({ minLat: Infinity, maxLat: -Infinity, minLon: Infinity, maxLon: -Infinity });
+      const grow = (b: ReturnType<typeof box>, p: { lat: number; lon: number } | null | undefined) => {
+        if (!p || !Number.isFinite(p.lat) || !Number.isFinite(p.lon)) return;
+        b.minLat = Math.min(b.minLat, p.lat); b.maxLat = Math.max(b.maxLat, p.lat);
+        b.minLon = Math.min(b.minLon, p.lon); b.maxLon = Math.max(b.maxLon, p.lon);
+      };
+      const bBox = box(), wayBox = box(), allBox = box();
+      for (const e of d.elements) {
+        const pts = e.geometry ?? (e.lat !== undefined && e.lon !== undefined ? [{ lat: e.lat, lon: e.lon }] : []);
+        const isWay = e.type === 'way';
+        for (const p of pts) {
+          grow(allBox, p);
+          if (isWay && e.tags?.building) grow(bBox, p);
+          if (isWay && (e.tags?.building || e.tags?.highway)) grow(wayBox, p);
+        }
       }
+      const centreBox = Number.isFinite(bBox.minLat) ? bBox : Number.isFinite(wayBox.minLat) ? wayBox : allBox;
+      if (!Number.isFinite(centreBox.minLat)) throw new Error('no coordinates');
+      const sizeBox = Number.isFinite(wayBox.minLat) ? wayBox : allBox;
+      origin = { lat: (centreBox.minLat + centreBox.maxLat) / 2, lon: (centreBox.minLon + centreBox.maxLon) / 2 };
+      halfM = Math.min(HALF, ((sizeBox.maxLat - sizeBox.minLat) * 110574) / 2);
     }
-    if (!Number.isFinite(minLat)) throw new Error('no coordinates');
-    const origin = { lat: (minLat + maxLat) / 2, lon: (minLon + maxLon) / 2 };
-    const halfM = Math.min(HALF, ((maxLat - minLat) * 110574) / 2);
     return trim(parseOverpass(d as OverpassJson, origin, Math.max(200, halfM), filename.replace(/\.json$/i, '')));
   }
   throw new Error('missing buildings/roads or elements');

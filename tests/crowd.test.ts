@@ -129,6 +129,23 @@ describe('crowd night: the child guardrail, every step (test 2)', () => {
   });
 });
 
+describe('crowd night: the endgame search help (Clear only) never starts', () => {
+  it('not on its own, not when asked: crowd zombies keep their own steering', () => {
+    const { g, grid } = of(sample);
+    const r = generateCrowd(sample, g, grid, { seed: 1, size: 'big' });
+    if (!r.ok) throw new Error(r.reason);
+    const sim = new Sim(r.mission, sample, g, grid, { search: true });
+    while (sim.t < 60) sim.step(1 / 30);
+    expect(sim.startSearch(() => true)).toBe(false);
+    for (const z of sim.living) if (z.alive) Object.assign(z, { alive: false, diedAt: sim.t });
+    sim.zombies.push({ id: sim.zombies.length, x: r.mission.crowd!.streams[0].at.x, z: r.mission.crowd!.streams[0].at.z, vx: 0, vz: 0, speed: 2, cold: false, alive: true, diedAt: -1, home: null, goal: null });
+    sim.kills += 1;
+    while (sim.t < 120) sim.step(1 / 30);
+    expect(sim.searchAreas()).toEqual([]);
+    expect(sim.searching()).toEqual([]);
+  }, 60_000);
+});
+
 describe('crowd night: where it is not offered, the reason is true', () => {
   it('a landmark at the end of one long road: too few ways in, and the reason says that (not schools)', () => {
     const rect = (x0: number, z0: number, x1: number, z1: number) => [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }];

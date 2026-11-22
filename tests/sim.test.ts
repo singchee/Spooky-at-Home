@@ -251,7 +251,10 @@ const EXPECTED_ESCORT_TRACE = 'dc9b389b';
 const EXPECTED_CLEAR_FINGERPRINT = '45b4ee67';
 const CLEAR_FINGERPRINT_WITHOUT_SCATTER_TEXT = '8af85e6';
 // Before the gap (80 m) they were b2ab636a and 486e254c.
-const EXPECTED_CLEAR_TRACE = 'a8aa6fd6';
+// 24511373 (fix/cold-endgame, a sim bug): milling zombies whose goal lay behind a wall crept into it for ever and stood
+// still (cold ones then vanished on thermal for good). They now pick goals they can walk to, slide off walls they meet
+// head-on, and walk round buildings back to a horde that drifted off. Was a8aa6fd6. The mission itself is unchanged.
+const EXPECTED_CLEAR_TRACE = '24511373';
 
 // Spec 001 step 1: locks today's single-mission Hold (mission and 30 s of play with no input) before the finale work.
 // c7cefb39 (3.16): defend waves are bigger from difficulty 2 (d3: 30 per wave, was 18; maxAlive 191, was 155).

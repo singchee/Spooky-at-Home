@@ -1,5 +1,5 @@
 // Headless browser playtest (gates G7, G8 and visual evidence).
-// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls|scatter|intro|crowd]
+// Usage: npm run build && node scripts/playtest.mjs [--scale 1|2] [--out reports/playtest] [--only safety|audio|wayin|tour|controls|scatter|endgame|intro|landmarks|presets|missions|crowd]
 // Starts `vite preview`, loads each mission type with the bot playing, switches cameras,
 // takes screenshots, and records console errors and draw calls. Chromium is preinstalled.
 // It also runs the photosensitivity flash checks and survivor-kit screenshots (`--only safety`
@@ -35,7 +35,8 @@ let exitCode = 0;
 try {
   await ready;
   const browser = await chromium.launch();
-  for (const type of only ? [] : ['clear', 'escort', 'defend']) {
+  // `--only missions`: just this short run of each mission type with the bot.
+  for (const type of only && only !== 'missions' ? [] : ['clear', 'escort', 'defend']) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: scale });
     const errors = [];
     page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
@@ -164,7 +165,6 @@ try {
       if (r.errors.length) exitCode = 1;
     }
   }
-  // The intro ("The Late Bulletin"): plays through on a controlled clock, captions, skip, flashes, reduced motion, leaks.
   // Famous places (3.27): each bundled preset opens from our own origin (no OpenStreetMap request) and reaches recon with the attribution.
   if (!only || only === 'presets') {
     for (const r of await presetChecks(browser)) {
@@ -172,8 +172,23 @@ try {
       if (r.errors.length) exitCode = 1;
     }
   }
+  // Endgame search help (owner's report): the soft circle on screen in thermal and night vision, and the edge arrow.
+  if (!only || only === 'endgame') {
+    for (const r of await endgameShots(browser)) {
+      results.push(r);
+      if (!r.ok) exitCode = 1;
+    }
+  }
+  // The intro ("The Late Bulletin"): plays through on a controlled clock, captions, skip, flashes, reduced motion, leaks.
   if (!only || only === 'intro') {
     for (const r of await introChecks(browser)) {
+      results.push(r);
+      if (r.errors.length) exitCode = 1;
+    }
+  }
+  // 3.19: landmark markers in white hot and night vision, on a desktop and a phone, clear of the HUD and touch controls.
+  if (!only || only === 'landmarks') {
+    for (const r of await landmarkChecks(browser)) {
       results.push(r);
       if (r.errors.length) exitCode = 1;
     }
@@ -245,6 +260,52 @@ async function scatterShots(browser) {
       res.push({ type: `scatter: ${template} d3, ${view}`, ok: !errs.length, errors: errs, shots });
       await page.close();
     }
+  }
+  return res;
+}
+
+/**
+ * Endgame search help: a clear-park d3 mission jumped to its last 2 cold-blooded stragglers (test hook), the help
+ * started, and the camera on the search circle in white-hot thermal and night vision, at t + 1 and 8 s (they walk),
+ * plus the camera turned away so the circle's edge arrow shows. Judged by eye; fails if no circle or marker shows.
+ */
+async function endgameShots(browser) {
+  const res = [];
+  for (const [view, setup] of [
+    ['thermal', async () => {}],
+    ['night', async (p) => { await p.evaluate(() => window.__spooky.setSensor('night')); }],
+  ]) {
+    const { page, errs } = await gamePage(browser, 'autostart=1&type=clear&template=clear-park&difficulty=3&seed=5', { viewport: { width: 1280, height: 720 } });
+    const shots = {};
+    // Coarse game steps: only the picture is judged here, and a loaded machine renders few frames a second.
+    await fixedStep(page, 1 / 15);
+    await setup(page);
+    await untilGameTime(page, (await gameTime(page)) + 1.5);
+    const left = await page.evaluate(() => window.__spooky.endgame(2));
+    const areas = await page.evaluate(() => window.__spooky.searchAreas());
+    if (!left || !areas.length) errs.push('no stragglers or no search circle');
+    const c = areas[0]?.p ?? { x: 0, z: 0 };
+    await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [c.x, c.z]);
+    const t0 = await gameTime(page);
+    for (const dt of [1, 8]) {
+      await untilGameTime(page, t0 + dt);
+      await fixedStep(page, 0);
+      await page.waitForTimeout(400);
+      shots[`t${dt}`] = `${out}/endgame-${view}-t${dt}.png`;
+      await page.screenshot({ path: shots[`t${dt}`] });
+      if ((await page.locator('.hud-search').count()) < 1) errs.push(`t+${dt}: no search circle on screen`);
+      await fixedStep(page, 1 / 15);
+    }
+    // Look away: the circle is off screen, so its marker pins to the edge with an arrow.
+    await page.evaluate(([x, z]) => window.__spooky.aimAt(-x, -z), [c.x, c.z]);
+    await untilGameTime(page, (await gameTime(page)) + 0.5);
+    await fixedStep(page, 0);
+    await page.waitForTimeout(400);
+    shots.edge = `${out}/endgame-${view}-edge.png`;
+    await page.screenshot({ path: shots.edge });
+    if ((await page.locator('.hud-search-edge').count()) < 1) errs.push('no edge arrow with the circle off screen');
+    res.push({ type: `endgame search help: clear-park d3, ${view}`, ok: !errs.length, errors: errs, shots });
+    await page.close();
   }
   return res;
 }
@@ -3017,6 +3078,111 @@ async function presetChecks(browser) {
   return res;
 }
 
+// ---------- Landmark markers (BACKLOG 3.19) ----------
+// At 1280x720 (mouse) and 390x844 (touch): aim near the densest cluster of landmarks with the 105's wide
+// lens, screenshot white hot and night vision, and check: 1-6 labels, 14 px+ outlined text, fully on
+// screen, never over each other, the HUD panels, the reticle, mission markers or the touch controls;
+// never a school, kindergarten, childcare or playground; and "Show landmarks" off hides them all.
+async function landmarkChecks(browser) {
+  const res = [];
+  const CHILD = /school|kindergarten|childcare|child care|playground|nursery|preschool|college|wattle hill/i;
+  const views = [
+    ['desktop', { width: 1280, height: 720 }, false],
+    ['phone', { width: 390, height: 844 }, true],
+  ];
+  for (const [name, viewport, touch] of views) {
+    const { page, errs } = await gamePage(browser, 'autostart=1&type=clear&difficulty=1&seed=7', { viewport, deviceScaleFactor: scale, ...(touch ? { hasTouch: true, isMobile: true } : {}) });
+    page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
+    const out_ = { type: `landmarks (${name} ${viewport.width}x${viewport.height})`, errors: errs, shots: {}, labels: {} };
+    try {
+      if (touch && !(await info(page)).touch) {
+        const cdp = await page.context().newCDPSession(page);
+        const t = Date.now() / 1000;
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', timestamp: t, touchPoints: [{ x: viewport.width / 2, y: viewport.height * 0.3, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', timestamp: t + 0.08, touchPoints: [] });
+        await page.waitForTimeout(300);
+      }
+      if (touch) {
+        if (!(await info(page)).touch) errs.push('touch controls did not come on');
+        else await page.waitForSelector('.touch-controls:not([hidden]) .tc-fire');
+      }
+      // The 105's wide lens, aimed beside the densest cluster of places (so the pins sit off the reticle).
+      await page.keyboard.press('3');
+      const places = await page.evaluate(() => window.__spooky.landmarks());
+      if (!places.length) errs.push('no landmarks listed for the sample town');
+      const bad = places.filter((p) => CHILD.test(p.label));
+      if (bad.length) errs.push(`child places listed: ${bad.map((p) => p.label).join(', ')}`);
+      const near = (p) => places.filter((q) => Math.hypot(q.x - p.x, q.z - p.z) < 140).length;
+      const best = [...places].sort((a, b) => near(b) - near(a))[0];
+      if (best) {
+        const others = places.filter((q) => Math.hypot(q.x - best.x, q.z - best.z) < 140);
+        const c = { x: others.reduce((s, q) => s + q.x, 0) / others.length, z: others.reduce((s, q) => s + q.z, 0) / others.length };
+        await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [c.x + 35, c.z + 35]);
+      }
+      for (const [sensor, key] of [['thermal', 'whiteHot'], ['night', 'night']]) {
+        await page.evaluate((s) => window.__spooky.setSensor(s), sensor);
+        await page.waitForTimeout(1500);
+        if (sensor === 'thermal' && (await info(page)).polarity) errs.push('expected white hot');
+        // The gunship keeps circling: wait (up to 15 s) until a landmark is on screen, then hold the
+        // picture still (0 s game steps) so the screenshot and the measurements show the same frame.
+        await page.waitForFunction(() => [...document.querySelectorAll('.hud-landmark')].some((e) => !e.hidden), null, { timeout: 15000, polling: 50 }).catch(() => {});
+        await page.evaluate(() => window.__spooky.fixedStep(0));
+        await page.waitForTimeout(250);
+        out_.shots[key] = `${out}/landmarks-${name}-${key}.png`;
+        await page.screenshot({ path: out_.shots[key] });
+        const st = await page.evaluate(() => {
+          const shown = [...document.querySelectorAll('.hud-landmark')].filter((e) => !e.hidden && getComputedStyle(e).display !== 'none');
+          return shown.map((e) => {
+            const l = e.querySelector('.lm-label');
+            const cs = getComputedStyle(l);
+            const r = l.getBoundingClientRect();
+            return { text: l.textContent, font: parseFloat(cs.fontSize), stroke: cs.webkitTextStrokeWidth, shadow: cs.textShadow, opacity: Number(getComputedStyle(e).opacity), r: [r.left, r.top, r.right, r.bottom], vw: innerWidth, vh: innerHeight };
+          });
+        });
+        out_.labels[key] = st.map((l) => l.text);
+        if (st.length < 1) errs.push(`${key}: no landmark on screen`);
+        if (st.length > 6) errs.push(`${key}: ${st.length} landmarks on screen (max 6)`);
+        for (const l of st) {
+          if (l.font < 14) errs.push(`${key}: "${l.text}" at ${l.font} px (min 14)`);
+          if (!(parseFloat(l.stroke) > 0) && (!l.shadow || l.shadow === 'none')) errs.push(`${key}: "${l.text}" has no outline`);
+          if (l.opacity < 0.25) errs.push(`${key}: "${l.text}" shown at opacity ${l.opacity}`);
+          if (CHILD.test(l.text)) errs.push(`${key}: child place on screen: "${l.text}"`);
+          if (l.r[0] < 0 || l.r[1] < 0 || l.r[2] > l.vw || l.r[3] > l.vh) errs.push(`${key}: "${l.text}" not fully on screen`);
+        }
+        st.forEach((a, i) => st.forEach((b, j) => {
+          if (j > i && a.r[0] < b.r[2] && a.r[2] > b.r[0] && a.r[1] < b.r[3] && a.r[3] > b.r[1]) errs.push(`${key}: "${a.text}" overlaps "${b.text}"`);
+        }));
+        const blockers = [...hudPanels(), '.hud-keys', '.hud-cross', '.hud-marker', '.touch-controls:not([hidden]) .tc-stick', '.touch-controls:not([hidden]) .tc-btn', '.touch-controls:not([hidden]) .tc-fire'];
+        errs.push(...(await overlaps(page, '.hud-landmark:not([hidden]) .lm-label, .hud-landmark:not([hidden]) .lm-pin', blockers)).map((e) => `${key}: ${e}`));
+        await page.evaluate(() => window.__spooky.fixedStep(null));
+      }
+      // Settings → "Show landmarks" off hides them all (keyboard and mouse run).
+      if (!touch) {
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.overlay .card.pause');
+        await page.click('.overlay button:has-text("Settings")');
+        await page.click('.settings-panel label:has-text("Show landmarks")');
+        await page.click('.settings-panel button:has-text("Done")');
+        await page.waitForTimeout(400);
+        await page.keyboard.press('Escape');
+        await waitInfo(page, () => window.__spooky.info().screen === 'playing');
+        await page.waitForTimeout(300);
+        const left = await page.evaluate(() => [...document.querySelectorAll('.hud-landmark .lm-label')].filter((e) => e.getBoundingClientRect().width > 0).length);
+        if (left) errs.push(`"Show landmarks" off: ${left} landmarks still showing`);
+        const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('spooky.settings') ?? '{}').showLandmarks);
+        if (saved !== false) errs.push(`"Show landmarks" off was not saved (${saved})`);
+        out_.shots.off = `${out}/landmarks-${name}-off.png`;
+        await page.screenshot({ path: out_.shots.off });
+        await page.evaluate(() => localStorage.removeItem('spooky.settings'));
+      }
+    } catch (e) {
+      errs.push(String(e));
+    }
+    res.push(out_);
+    await page.close();
+  }
+  return res;
+}
 // ---------------------------------------------------------------------------------------------
 // Spec 003 (Horde Night, a crowd mode): flash scenarios A, B and C for the safety checks, and the
 // crowd section (--only crowd): screenshots at the surge, draw calls, triangles, frame times,

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { MapData, V2 } from '../map/types';
 import { centroid, pointInPolygon } from '../map/geom';
-import { CATEGORY_INFO, mapFeatures } from '../map/recon';
+import { CATEGORY_INFO, isChildPlaceKind, mapFeatures } from '../map/recon';
 import { likelyWaveDirections, type Mission, type WaveDirection } from '../sim/missions';
 import { ORBIT } from '../sim/sim';
 import type { RoadGraph } from '../map/roadGraph';
@@ -204,8 +204,6 @@ export interface LabelSpec {
 
 /** Longest label, in characters (longer OpenStreetMap names are cut with an ellipsis). */
 const LABEL_MAX = 26;
-/** Places never labelled (owner decision #11). Childcare is mapped as a kindergarten. */
-const CHILD_PLACES = new Set<string>(['school', 'kindergarten', 'playground']);
 const clip = (s: string) => (s.length > LABEL_MAX ? `${s.slice(0, LABEL_MAX - 1)}…` : s);
 
 /**
@@ -244,7 +242,7 @@ export function labelSpecs(map: MapData, m: Mission, waves: WaveDirection[], box
   if (m.anchor && inside(m.anchor.p, box)) out.push({ id: `f:${m.anchor.id}`, text: clip(m.anchor.name), kind: 'anchor', p: m.anchor.p, y: heightAt(m.anchor.p) + 4, priority: 78 });
   const seen = new Set<string>();
   for (const f of mapFeatures(map)) {
-    if (!f.name || f.id === anchorId || !inside(f.p, box) || CATEGORY_INFO[f.category].weight < 4 || CHILD_PLACES.has(f.category)) continue;
+    if (!f.name || f.id === anchorId || !inside(f.p, box) || CATEGORY_INFO[f.category].weight < 4 || isChildPlaceKind(f.category)) continue;
     // A place mapped twice (outline and point) gets one label.
     if (seen.has(f.name)) continue;
     seen.add(f.name);

@@ -184,18 +184,22 @@ describe('recorded effects', () => {
   });
 
   it('uses the recorded sample when loaded and the synthesised sound when not', () => {
+    // Every shot also gets its weight layer (weight.ts): one sub oscillator and one noise body.
     const { out, made } = fakeOutput({ [SFX.fire105]: buf(4), [SFX.explosion]: buf(4) });
     const sfx = new Sfx(() => out);
     sfx.unlock();
     sfx.fire('105');
     sfx.impact('105');
     expect(made.buffers).toBe(2);
-    expect(made.oscillators).toBe(0);
+    expect(made.oscillators).toBe(2); // the two weight subs
+    expect(made.noise).toBe(2); // their bodies only: no generated bang under the recorded ones
     sfx.fire('40'); // not loaded: synthesised
-    expect(made.oscillators).toBe(1);
+    expect(made.oscillators).toBe(3);
+    expect(made.noise).toBe(4); // weight body + the generated bang
     sfx.muted = true;
     sfx.fire('105');
     expect(made.buffers).toBe(2);
+    expect(made.oscillators).toBe(3);
   });
 
   it('friendly fire always sounds the synthesised two-tone; the recorded alarm is layered under it', () => {
@@ -217,7 +221,9 @@ describe('recorded effects', () => {
       sfx.fire('25');
       rounds++;
     }
-    expect(made.noise).toBe(rounds);
+    // A crack per round, plus one weight body per weight layer (one sub oscillator each, gated like the burst).
+    expect(made.noise).toBe(rounds + made.oscillators);
+    expect(made.oscillators).toBeLessThanOrEqual(Math.ceil(2 / RETRIGGER_25));
     expect(made.buffers).toBeGreaterThanOrEqual(4);
     expect(made.buffers).toBeLessThanOrEqual(Math.ceil(2 / RETRIGGER_25));
   });
@@ -455,3 +461,48 @@ function fakeOutput(samples: Record<string, AudioBuffer>) {
   };
   return { out, made, ctx };
 }
+
+// BACKLOG 3.6b: five 60 s stereo music stems decoded to ~140 MB. Loops are now kept mono.
+describe('decoded music memory (3.6b)', () => {
+  const RATE = 48_000;
+  const fakeBuf = (channels: number, length: number, fill?: (c: number) => number): AudioBuffer => {
+    const data = Array.from({ length: channels }, (_, c) => new Float32Array(length).fill(fill ? fill(c) : 0));
+    return { duration: length / RATE, length, sampleRate: RATE, numberOfChannels: channels, getChannelData: (c: number) => data[c] } as unknown as AudioBuffer;
+  };
+  const fetcher: Fetcher = async () => ({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(8) });
+  const load = async (withCreate: boolean) => {
+    const decoder = {
+      decodeAudioData: async () => fakeBuf(2, 60 * RATE, (c) => (c === 0 ? 0.5 : -0.1)),
+      ...(withCreate ? { createBuffer: (ch: number, len: number) => fakeBuf(ch, len) } : {}),
+    };
+    const bank = new AssetBank(decoder, fetcher, 'audio/', 2, () => undefined);
+    const ids = [...TRACKS.menu.ids, ...TRACKS.mission.ids]; // four 60 s loops
+    await bank.request(ids);
+    return { bank, ids };
+  };
+
+  it('keeps the 60 s music loops mono: half the decoded bytes, same length and average level', async () => {
+    const before = await load(false); // a decoder that cannot make buffers keeps stereo (the old behaviour)
+    const after = await load(true);
+    const mb = (n: number) => Math.round(n / 1e6);
+    console.log(`decoded music loops: ${mb(before.bank.decodedBytes())} MB stereo -> ${mb(after.bank.decodedBytes())} MB mono`);
+    expect(after.bank.decodedBytes()).toBe(before.bank.decodedBytes() / 2);
+    const b = after.bank.get(after.ids[0])!;
+    expect(b.numberOfChannels).toBe(1);
+    expect(b.length).toBe(60 * RATE);
+    expect(b.getChannelData(0)[100]).toBeCloseTo(0.2, 5); // (0.5 + -0.1) / 2
+  });
+
+  it('leaves stings and effects alone', async () => {
+    const decoder = {
+      decodeAudioData: async () => fakeBuf(2, 1000),
+      createBuffer: () => {
+        throw new Error('should not downmix');
+      },
+    };
+    const bank = new AssetBank(decoder, fetcher, 'audio/', 2, () => undefined);
+    await bank.request([MUSIC.stingWin, SFX.squelch]);
+    expect(bank.get(MUSIC.stingWin)!.numberOfChannels).toBe(2);
+    expect(bank.get(SFX.squelch)!.numberOfChannels).toBe(2);
+  });
+});

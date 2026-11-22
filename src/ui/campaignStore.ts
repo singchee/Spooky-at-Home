@@ -79,6 +79,8 @@ export class CampaignStore {
   private persistent: boolean;
   /** Places whose key storage would reject: kept for this session, never written. */
   private memoryOnly = new Set<string>();
+  /** Set when storage could not be read, or holds a newer version of the data than this build knows: never write over it. */
+  private noWrite = false;
 
   constructor(
     private store: KeyValueStore | null,
@@ -102,10 +104,17 @@ export class CampaignStore {
       // A corrupt value starts fresh; a read that throws means the browser won't keep anything.
       if (!(e instanceof SyntaxError)) {
         this.persistent = false;
+        this.noWrite = true; // what storage holds is unknown: don't replace it with only this session's places
         return null;
       }
     }
     const out: Record<string, PlaceEntry> = {};
+    if (isObj(raw) && typeof raw.v === 'number' && raw.v > VERSION) {
+      // Written by a newer build: keep this session's progress in memory and leave their data alone.
+      this.persistent = false;
+      this.noWrite = true;
+      return out;
+    }
     if (isObj(raw) && raw.v === VERSION && isObj(raw.places)) {
       for (const [k, p] of Object.entries(raw.places)) {
         if (PLACE_KEY.test(k) && validPlace(p)) out[k] = { updated: p.updated, levels: Object.fromEntries(Object.entries(p.levels).map(([b, r]) => [b, clean(r!)])) };
@@ -133,10 +142,12 @@ export class CampaignStore {
     return this.load();
   }
 
-  private save(): void {
+  /** `latest` is the place just written: trimming never removes it, even if the clock went backwards. */
+  private save(latest?: string): void {
     const all = this.load();
-    const keys = Object.keys(all).filter((k) => !this.memoryOnly.has(k)).sort((a, b) => all[a].updated - all[b].updated);
-    for (const k of keys.slice(0, Math.max(0, keys.length - MAX_PLACES))) delete all[k];
+    if (this.noWrite) return;
+    const keys = Object.keys(all).filter((k) => !this.memoryOnly.has(k) && k !== latest).sort((a, b) => all[a].updated - all[b].updated);
+    for (const k of keys.slice(0, Math.max(0, keys.length - (latest && !this.memoryOnly.has(latest) ? MAX_PLACES - 1 : MAX_PLACES)))) delete all[k];
     const stored = Object.fromEntries(Object.entries(all).filter(([k]) => !this.memoryOnly.has(k)));
     try {
       this.store?.setItem(CAMPAIGN_KEY, JSON.stringify({ v: VERSION, places: stored }));
@@ -166,7 +177,7 @@ export class CampaignStore {
     entry.updated = this.now();
     delete all[place]; // re-insert, so the newest come last
     all[place] = entry;
-    this.save();
+    this.save(place);
   }
 
   /**
