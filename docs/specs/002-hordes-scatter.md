@@ -122,6 +122,96 @@ If the d5 band can't be reached without regroup delays so long that the end turn
 ---
 ## Technical design  *(added by tech-lead)*
 
+*Reviewed against feat/phase-3 at ede92b6 (3.15 solid buildings, 3.16 bigger waves, spec 001 core merged). `npm run typecheck` is clean. Numbers marked "measured" come from probes run against this tree (a scratch copy with the gap set to 99 m), not from estimates.*
+
+### 1. Where it lives
+| File | Change |
+|---|---|
+| `src/sim/missions.ts` | New `SCATTER_LEASH = 45`. `HORDE_CHILD_GAP = Math.max(HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH) + MAX_KILL_REACH + CHILD_FIRE_CLEARANCE` (= 99). `shelterSpotFor` already uses the constant for the spot (+ `SHELTER_SPREAD`) and the drift segment, so it follows automatically. Clear briefings gain the Story Writer's scatter sentence (text only: `missionFingerprint` excludes text). |
+| `src/sim/sim.ts` | Scatter lives here and nowhere else: a branch in `updateShells` (105 impacts only) that marks runners, and a branch in `updateZombies` that moves them. New optional `Zombie` fields `scatter` (0 none, 1 flee, 2 lurk, 3 return) and `scatterT`. New constructor option `{ scatter?: boolean }`, default `mission.type === 'clear'`. Its own stream: `mulberry32(hashString('scatter|' + map + '|' + seed + '|' + type + '|' + difficulty))`. A new `SimEvent` `{ type: 'line'; id: RadioLineId }` for `few-left` and `cold-leftovers`. The first scatter reuses the existing `radio` event. |
+| `src/ui/tutorial.ts` | `new Sim(..., { scatter: false })`: Training opts out, one argument. |
+| `src/game/game.ts` | One `case 'line'` that shows the caption and plays the voice clip where `recorded`. Nothing else. That keeps contact with the 3.9 sensor branch to a few lines. |
+| `src/sim/bot.ts` | `BotSkill.guns?: string[]` so the balance runner can field a 105-only bot. The default is unchanged. |
+| `tests/balance/balance.test.ts` | Gains a template dimension (the four Clear templates), kills by weapon (from `impact` events), and `SKILL=only105`. |
+
+Layering: everything new is in `src/sim` (no three.js, no DOM). `tests/layering.test.ts` keeps guarding that.
+
+### 2. Data flow
+```
+fire('105') → shell lands (updateShells)
+  kills (unchanged, main rng) → for each surviving horde zombie, if mission scatters and d < 2 × r (32 m):
+     scatter = 1, heading = away from impact + wobble (scatter rng), flee for FLEE_S, then lurk
+     regroupAt = t + delay(d, difficulty, template) (scatter rng)
+     first scatter of the mission → emit radio "…drift back to {label}"
+updateZombies, per runner (survivor chase still comes first, unchanged):
+  flee: move along heading at FLEE_MUL × speed
+  lurk: shamble in place
+  t ≥ regroupAt: return (walk to anchor at the normal shamble speed); within HORDE_WANDER → scatter = 0, goal = null (milling resumes)
+  every scatter move passes isBlocked() AND the leash rule below
+checkResult/state → zombiesAlive ≤ 5 → emit line few-left | cold-leftovers (once each)
+```
+**The leash rule (makes the guardrail a proof, not a hope).** A runner's move is accepted only if it ends within `SCATTER_LEASH` of its anchor's current position, *or* it reduces the distance to that anchor. Otherwise the runner slides along the leash as it does along walls, or stops and turns to lurk. For a still horde, that keeps every runner within 45 m of its gathering point. For the drifting horde the anchor moves along the segment centre → shelter. Distance to a segment is convex, so a step towards a point on the segment never takes a runner farther than 45 m from the segment. The guardrail already checks that segment with `HORDE_CHILD_GAP`. Milling (non-runner) movement is untouched, so no-input Clear is byte-identical.
+
+**The regroup place on the radio has to be true.** For a still horde, use `h.label` (as briefed). For the drifting horde, once its anchor has moved more than `HORDE_WANDER`, use `placeLabel(map, anchor)` at the moment of the first scatter (runners regroup on the horde, which has moved). Map text reaches the screen through `hud.say`, so `textContent`.
+
+### 3. Determinism
+- All scatter randomness comes from the new stream. The main `rng` draw order is unchanged until the first 105 lands, so **Clear with no input is identical before and after the scatter commit.**
+- Timers and speeds scale by `dt`. There's no wall-clock time. Regroup delays are seeded, not adaptive.
+- **Correction to "How we'll know":** the wider gap changes Clear *mission generation* on purpose. Measured on the sample town: 60 of 240 Clear missions (4 templates × d1–5 × seeds 1–12) move a horde, the shelter spot or the drift line, including `classic-clear` d3 seed 42. On the school-heavy town it's 84 of 240. `missionFingerprint` doesn't include horde positions, so campaign night records still match. Clear's no-input trace is therefore locked **after** the gap commit and must not move in the scatter commit.
+
+**Fingerprints and traces**
+| Hash | Status |
+|---|---|
+| `EXPECTED_FINGERPRINT` (escort d3 s42, `4c4d8d66`) | must not change |
+| `EXPECTED_DEFEND_FINGERPRINT` (`c7cefb39`) | must not change |
+| `EXPECTED_DEFEND_TRACE` (`3be0b14`) | must not change |
+| **New** `EXPECTED_ESCORT_TRACE` (escort d3 s42, 30 s, no input) | added in commit 1. The spec assumes Escort has a trace hash, but it doesn't today. Must not change afterwards. |
+| **New** `EXPECTED_CLEAR_FINGERPRINT` + `EXPECTED_CLEAR_TRACE` (classic-clear d3 s42, 30 s, no input) | added in commit 1 with the 99 m gap (they differ from a pre-gap value by design; say so in the PR). Must not change in the scatter commit. |
+| A scripted Clear trace (same seed, one 105 at a fixed point at t = 20 s, 40 s of play) | new in the scatter commit. Run twice it gives the same hash, and it differs from the no-input trace. |
+
+**Bests:** nothing in `src/ui/bests.ts` or the campaign store has shipped (`main` has neither file). If 002 ships in the same release as 001, the stale-best risk is moot. `/preflight` confirms that. If they ship apart, add a rules tag to the Clear `bestKey` kind and bump the campaign store `VERSION`.
+
+### 4. Failure modes (no new external input)
+| Case | What happens |
+|---|---|
+| A real map where the 99 m gap leaves fewer than 2 horde spots | The generator already returns its own reason, and recon doesn't offer that template. Measured: **the sample town loses no Clear template at any difficulty** (0 of 240 fail at 80 m or at 99 m). On the school-heavy town the same 120 fail at both gaps (that town has no tennis club or forest), so the gap adds no failures. `/map-check` reports the real fixtures. If it's more than a few, shrink `SCATTER_LEASH`, never the gap (spec rule 5). |
+| Runner boxed in by buildings | `isBlocked` slide, as for milling. If every way is blocked, it lurks, then returns (always allowed, because it shortens the leash). |
+| Anchor itself unreachable from a runner (river) | The return phase uses straight-line steering, like milling. If no progress for `STUCK_S`, the runner drops to `scatter = 0` and mills where it is. That spot is still inside the leash, so the guardrail still holds. |
+| Horde wiped except one runner | Normal. `few-left` / `cold-leftovers` fire. |
+
+### 5. Performance
+Per 105 impact there's one extra pass over living zombies (≤ 6 hordes × 33 at d5 ≈ 200). Per step it's O(1) per runner. That's far under 0.05 ms, and the 1,000-zombie budget test is unaffected (defend, no hordes). No render cost: runners are ordinary zombies (the view already shows fast movers as running).
+
+### 6. Test plan (write these first, and watch the scatter ones fail before the sim change)
+**Unit / sim (`tests/sim.test.ts`, `tests/scatter.test.ts`):**
+1. *Only the 105, only Clear, only hordes*: a 40 and a 25 on a horde mark no runners. A 105 in a defend or escort sim marks none. `new Sim(.., { scatter: false })` marks none. **Fails first.**
+2. *Away from the impact*: every runner's heading has a positive dot product with (runner − impact).
+3. *Leash*: across the four Clear templates × d1/3/5 × 4 seeds with the human bot firing, every runner position is ≤ `SCATTER_LEASH` + 0.01 m from its horde's path (its centre, or the drift segment for the drifting horde).
+4. *Regroup*: one 105 at t = 20 s, nothing else. Every surviving runner has `scatter === 0` and is within `HORDE_WANDER` + 2 m of its anchor by `regroupAt + leash / minSpeed + 5 s`.
+5. *Determinism*: the hash table in §3.
+6. *Intel*: briefing horde count, sizes and cold counts equal the sim's starting zombies, all templates (pinned here for scatter).
+7. *Lines*: `few-left` fires once at ≤ 5 alive. `cold-leftovers` beats it when all the remaining are cold.
+
+**Guardrail (`tests/guardrail.test.ts`):**
+- The static test reads `SCATTER_LEASH` from the code: `Math.max(HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH) + reach105 + CHILD_FIRE_CLEARANCE`, and expects ≥ 99.
+- **New "in play, firing" test**: school-heavy town, `classic-clear` and `clear-park` (the only Clear templates it builds), d1/d3/d5, seeds 1–4, step 1/30, 180 s. **Two shooters per run**: (a) `Bot(SKILL.human)`; (b) an adversary that fires every 105 at the point 12 m on the far side of a horde *from its nearest child place*, so runners flee straight at the school. Every living horde zombie is checked every step. `worst ≥ reach105 + CHILD_FIRE_CLEARANCE − 2` (the existing half-cell allowance). The adversary is the real proof, because the bot never aims to cause harm.
+
+**Balance (`/balance`, `BALANCE=1 SEEDS=12`)**, per Clear template × d1–5: win %, median length, kill share by weapon, and the same with `SKILL=only105`. Procedure: (1) run at the starting numbers (`SCATTER_LEASH` 45, regroup 15–25 s scaled by difficulty, flee 3–4 s at ~2.2× shamble). (2) Tune only regroup delay and flee speed until the d1 and d5 bands and "40 + 25 ≥ ⅓ of kills at d3–5" hold. (3) If d5 still wins too often, the lever is Clear's `timeLimit` (owner approved), nothing else. (4) Escort and Hold rows must be identical to the pre-change run (same table, byte for byte). Report to the Game Director before any other lever.
+
+**Playtest scenario (`/playtest`)**: `?type=clear&difficulty=3&seed=…&autostart=1` with the template hook. Use `__spooky.fireAt('105', horde)`, then screenshot at t + 3 s and t + 15 s in white-hot, black-hot and night vision, at normal zoom and ×2, on `clear-park` and `forest-sweep`. Also the pillar-3 forest check.
+
+### 7. Smallest first step
+**Commit 1: "Leash before scatter".** Add `SCATTER_LEASH` and the recomputed `HORDE_CHILD_GAP`, the static guardrail test reading the leash, the new escort trace hash, and the new Clear fingerprint and no-input trace (classic-clear d3 s42, post-gap). Escort, defend and defend-trace hashes stay unchanged in the same run. There's no sim behaviour change. This commit proves the go/no-go the spec cares about: what the wider gap costs on real maps (run `/map-check` on it). Commit 2 is the scatter itself, with tests 1–7 and the firing guardrail test, and the Clear hashes from commit 1 still pass.
+
+### Verdict: **APPROVED WITH CHANGES**
+1. Reword the determinism line: "Clear with no input is unchanged" holds across the scatter commit, not across the gap change, which moves 25% of sample-town Clear missions by design (measured).
+2. The leash is a hard move rule measured from the horde's *path* (the anchor, or the drift segment), as in §2, not a soft target.
+3. The firing guardrail test includes the adversarial 105 shooter, not only the bot.
+4. Add an escort trace hash before anything changes (the spec assumes one exists).
+5. Training opts out with a Sim option, not with mission data, so no fingerprint moves.
+6. The regroup place named on the radio is the drifting horde's *current* place when that horde has moved (hard rule 9).
+7. Land 002 before 003. Both edit `updateShells`/`updateZombies`, and 003 rebases on it.
+
 ## Feel & access  *(added by feel-designer)*
 
 ## Owner decision (22 Nov 2026)
