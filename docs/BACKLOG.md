@@ -44,7 +44,14 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 | 3.11 | Controls: touch controls on phones and tablets, on-screen hotkeys (R weapon, Q view, Esc pause/briefing), unlimited 25 mm | review, playtest, feel, balance | in-progress |
 | 3.12 | Remember places on this device; suburb-level place names (no house numbers); real load timings | review, playtest | in-progress |
 | 3.13 | World dressing: roofs, parked cars, rooftop clutter (after T4 lands) | review, playtest | todo |
-| 3.14 | Three Nights campaign (spec 001, owner approved) | plan, review, playtest, feel, balance | planning |
+| 3.14 | Three Nights campaign (spec 001, owner approved) | plan, review, playtest, feel, balance | core merged; review FAIL (1 blocker: flavour lines can contradict the briefing), fixes queued |
+| 3.15 | Zombies walk into buildings and vanish: buildings must block movement (owner playtest, 22 Nov) | review, balance, map-check | in-progress |
+| 3.16 | Waves too small at level 2: more and bigger hordes per difficulty (owner playtest) | balance, player-test | in-progress |
+| 3.17 | Gun sounds: more weight and bass; the 25/40/105 sound hollow (owner playtest) | playtest, player-test | todo |
+| 3.18 | Rounds arrive from the gunship off-screen, not from mid-screen (owner playtest; with 3.9) | playtest, feel | in-progress |
+| 3.19 | HUD markers on landmarks from the map analysis (tennis club, park…); never schools or other child places (decision #11) | review, playtest, feel | todo |
+
+**Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game
 No school, kindergarten, childcare or playground missions, and none near them (#11 closed).
