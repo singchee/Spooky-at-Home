@@ -35,6 +35,9 @@ export interface Zombie {
   scatterDir?: V2;
   /** Seconds walking back without getting closer. */
   stuckT?: number;
+  /** Seconds a horde zombie has made no headway, and the short detour it takes once wedged (see UNSTICK_S). */
+  blockedT?: number;
+  unstick?: { dir: V2; until: number };
 }
 
 /** Spec 002 (Balance Analyst's numbers). A 105 scatters surviving horde zombies within this multiple of its lethal radius. */
@@ -55,6 +58,24 @@ export const FOREST_REGROUP = 0.8;
 export const RETURN_MUL = 1;
 /** A runner that can't get closer to its horde for this long gives up and mills where it is (still inside the leash). */
 export const STUCK_S = 6;
+/**
+ * A zombie heading into a wall slides along it. If the slide keeps less than this share of its step, it is walking
+ * into the wall nearly head-on (its goal is inside or behind a building): it picks a new goal instead. Without this
+ * it crept a hundredth of a millimetre a step towards that goal for ever and stood still, which on grass made a
+ * cold-blooded one invisible on thermal and motionless on night vision (owner's "can't find the last ones").
+ */
+export const SLIDE_MIN = 0.3;
+/**
+ * A horde zombie farther than HORDE_WANDER + LEFT_BEHIND from its anchor has been left behind (a building between it
+ * and the drifting horde): it walks back along the horde's flow field instead of heading straight into the wall.
+ */
+export const LEFT_BEHIND = 4;
+/** Tries at a milling goal the zombie can walk straight to, before it settles for one it can't. */
+export const GOAL_TRIES = 4;
+/** A horde zombie that makes no headway for this long (wedged in a corner) walks its horde's flow field for 3-5 s. */
+export const UNSTICK_S = 2;
+/** A horde's flow field is rebuilt once its anchor has drifted this far (metres). */
+export const FIELD_REFRESH = 6;
 /** A Clear in-mission line (radio script section C), with how many contacts are left for its caption. */
 export type ClearLine = Extract<LineId, 'few-left' | 'cold-leftovers'>;
 
@@ -200,10 +221,12 @@ export class Sim {
       this.hordeOf.set(anchors[k], k);
     });
     mission.hordes.forEach((h, k) => {
+      // Only on ground the horde can walk to: never walled into a courtyard or a gap between buildings (owner's report).
+      const field = this.hordeField(k);
       for (let i = 0; i < h.count; i++) {
         const a = this.rng() * Math.PI * 2;
         const r = Math.sqrt(this.rng()) * HORDE_SPREAD;
-        this.spawnZombie(grid.nearestFree({ x: h.centre.x + Math.cos(a) * r, z: h.centre.z + Math.sin(a) * r }), i < h.cold, anchors[k]);
+        this.spawnZombie(this.reachable(field, { x: h.centre.x + Math.cos(a) * r, z: h.centre.z + Math.sin(a) * r }, h.centre), i < h.cold, anchors[k]);
       }
     });
     // Clear missions: after the grace period, the horde nearest the sheltering friendlies drifts toward them,
@@ -232,6 +255,34 @@ export class Sim {
     if (mission.waves) this.waveTimer = FIRST_WAVE; // first wave arrives quickly
     this.shelterGrace = Math.max(15, 45 - 6 * mission.difficulty);
     this.noSpawn = mission.waves ? noWaveSpawn(map, graph) : new Uint8Array(graph.nodes.length);
+  }
+
+  /** Walking steps to each horde's anchor (-1 = can't get there). Computed on first use, again once the anchor drifts. */
+  private fields = new Map<number, { at: V2; f: Int32Array }>();
+  private hordeField(k: number): Int32Array {
+    const a = this.hordes[k].anchor;
+    let e = this.fields.get(k);
+    if (!e || dist(e.at, a) > FIELD_REFRESH) {
+      const p = this.grid.nearestFree(a, 30);
+      e = { at: { ...a }, f: this.grid.flowField([this.grid.idx(p.x, p.z)]) };
+      this.fields.set(k, e);
+    }
+    return e.f;
+  }
+
+  /** The free spot nearest p that a field reaches (falls back to the nearest free spot to `home`). */
+  private reachable(field: Int32Array, p: V2, home: V2): V2 {
+    const g = this.grid;
+    const ok = (q: V2) => !g.isBlocked(q.x, q.z) && g.fieldAt(field, q.x, q.z) >= 0;
+    if (ok(p)) return { ...p };
+    for (let r = g.cell; r <= 60; r += g.cell) {
+      const steps = Math.max(16, Math.ceil((2 * Math.PI * r) / g.cell));
+      for (let a = 0; a < steps; a++) {
+        const q = { x: p.x + Math.cos((a / steps) * Math.PI * 2) * r, z: p.z + Math.sin((a / steps) * Math.PI * 2) * r };
+        if (ok(q)) return q;
+      }
+    }
+    return g.nearestFree(home);
   }
 
   /** Aircraft position: a steady left-hand orbit around the mission's centre. */
@@ -577,15 +628,24 @@ export class Sim {
         } else dir = grid.downhill(this.safeField, z.x, z.z);
       } else if (z.scatter && z.home) {
         dir = this.runnerDir(z, dt);
+      } else if (z.home && this.hordeOf.has(z.home) && Math.hypot(z.home.x - z.x, z.home.z - z.z) > HORDE_WANDER + LEFT_BEHIND) {
+        // Left behind (owner's report: frozen against a wall while the horde drifted off): walk round, not into, the wall.
+        z.goal = null;
+        dir = this.walkDir(this.hordeField(this.hordeOf.get(z.home)!), z, z.speed * 0.45 * dt) ?? { x: (z.home.x - z.x) / Math.hypot(z.home.x - z.x, z.home.z - z.z), z: (z.home.z - z.z) / Math.hypot(z.home.x - z.x, z.home.z - z.z) };
       } else if (z.home) {
         // Mill around the horde's gathering point.
         if (!z.goal || Math.hypot(z.goal.x - z.x, z.goal.z - z.z) < 2) {
-          const a = this.rng() * Math.PI * 2;
-          const r = this.rng() * HORDE_WANDER;
-          z.goal = { x: z.home.x + Math.cos(a) * r, z: z.home.z + Math.sin(a) * r };
+          // A spot it can walk straight to (a few tries): goals behind a wall pinned zombies to it (owner's report).
+          for (let tries = 0; tries < GOAL_TRIES; tries++) {
+            const a = this.rng() * Math.PI * 2;
+            const r = this.rng() * HORDE_WANDER;
+            z.goal = { x: z.home.x + Math.cos(a) * r, z: z.home.z + Math.sin(a) * r };
+            if (this.clearLine(z, z.goal)) break;
+          }
         }
-        const d = Math.hypot(z.goal.x - z.x, z.goal.z - z.z) || 1;
-        dir = { x: (z.goal.x - z.x) / d, z: (z.goal.z - z.z) / d };
+        const goal = z.goal!;
+        const d = Math.hypot(goal.x - z.x, goal.z - z.z) || 1;
+        dir = { x: (goal.x - z.x) / d, z: (goal.z - z.z) / d };
       }
       if (!dir) {
         const a = this.rng() * Math.PI * 2;
@@ -598,18 +658,86 @@ export class Sim {
         this.moveRunner(z, dir, run, dt);
         continue;
       }
+      // Wedged against a wall (a slanted corner, or goals behind a thin wall): walk the horde's flow field round it
+      // for a moment, or, walled off from the horde, take a seeded free heading.
+      if (z.home && !near && z.unstick && this.t < z.unstick.until) {
+        const k = this.hordeOf.get(z.home);
+        dir = (k !== undefined && this.walkDir(this.hordeField(k), z, z.speed * 0.45 * dt)) || z.unstick.dir;
+      }
       const sp = near ? z.speed * 1.45 : z.home ? z.speed * 0.45 : z.speed;
+      const x0 = z.x;
+      const z0 = z.z;
       const nx = z.x + dir.x * sp * dt;
       const nz = z.z + dir.z * sp * dt;
       if (!grid.isBlocked(nx, nz)) {
         z.x = nx;
         z.z = nz;
-      } else if (!grid.isBlocked(nx, z.z)) z.x = nx;
-      else if (!grid.isBlocked(z.x, nz)) z.z = nz;
-      else z.goal = null;
+      } else if (!grid.isBlocked(nx, z.z)) {
+        if (Math.abs(dir.x) < SLIDE_MIN) z.goal = null;
+        z.x = nx;
+      } else if (!grid.isBlocked(z.x, nz)) {
+        if (Math.abs(dir.z) < SLIDE_MIN) z.goal = null;
+        z.z = nz;
+      } else z.goal = null;
+      if (z.home && !near) this.unstick(z, Math.hypot(z.x - x0, z.z - z0) < 0.1 * sp * dt, dt);
       z.vx = dir.x * sp;
       z.vz = dir.z * sp;
     }
+  }
+
+  /**
+   * Downhill in a flow field, but only towards a neighbouring cell the next step can really take: the field is
+   * coarse (3 m cells), and a slanted wall can close the way to the lowest cell while a nearly-as-low one is open.
+   */
+  private walkDir(field: Int32Array, p: V2, step: number): V2 | null {
+    const g = this.grid;
+    const k = g.idx(p.x, p.z);
+    if (k < 0 || field[k] < 0) return null;
+    const i = k % g.n;
+    const j = (k - i) / g.n;
+    let best: V2 | null = null;
+    let bv = Infinity;
+    for (let dj = -1; dj <= 1; dj++) {
+      for (let di = -1; di <= 1; di++) {
+        if (!di && !dj) continue;
+        const ii = i + di;
+        const jj = j + dj;
+        if (ii < 0 || jj < 0 || ii >= g.n || jj >= g.n) continue;
+        const v = field[jj * g.n + ii];
+        if (v < 0 || v > field[k] || v >= bv) continue;
+        const dx = g.cx(ii) - p.x;
+        const dz = g.cz(jj) - p.z;
+        const len = Math.hypot(dx, dz) || 1;
+        const u = { x: dx / len, z: dz / len };
+        if (g.isBlocked(p.x + u.x * step, p.z + u.z * step)) continue;
+        best = u;
+        bv = v;
+      }
+    }
+    return best;
+  }
+
+  /** True if nothing solid lies on the straight line from a to b (checked every metre). */
+  private clearLine(a: V2, b: V2): boolean {
+    const n = Math.ceil(dist(a, b));
+    for (let i = 1; i <= n; i++) if (this.grid.isBlocked(a.x + ((b.x - a.x) * i) / n, a.z + ((b.z - a.z) * i) / n)) return false;
+    return true;
+  }
+
+  /** Count time a horde zombie makes no headway; after UNSTICK_S it takes a seeded free heading for a moment. */
+  private unstick(z: Zombie, still: boolean, dt: number): void {
+    z.blockedT = still ? (z.blockedT ?? 0) + dt : 0;
+    if (z.blockedT < UNSTICK_S) return;
+    z.blockedT = 0;
+    const g = this.grid;
+    const free: V2[] = [];
+    for (let a = 0; a < 16; a++) {
+      const u = { x: Math.cos((a * Math.PI) / 8), z: Math.sin((a * Math.PI) / 8) };
+      if ([0.1, 0.3, 0.6, 1].every((r) => !g.isBlocked(z.x + u.x * r, z.z + u.z * r))) free.push(u);
+    }
+    if (!free.length) return;
+    z.unstick = { dir: free[Math.floor(this.srng() * free.length)], until: this.t + 3 + this.srng() * 2 };
+    z.goal = null;
   }
 
   /** A scattered zombie's heading: flee, then lurk, then walk back and rejoin the milling (spec 002). */
@@ -662,12 +790,15 @@ export class Sim {
     if (ok(nx, nz)) {
       z.x = nx;
       z.z = nz;
-    } else if (ok(nx, z.z)) z.x = nx;
-    else if (ok(z.x, nz)) z.z = nz;
-    else {
+    } else if (ok(nx, z.z)) {
+      z.x = nx;
+      if (Math.abs(dir.x) < SLIDE_MIN) headOn(z);
+    } else if (ok(z.x, nz)) {
+      z.z = nz;
+      if (Math.abs(dir.z) < SLIDE_MIN) headOn(z);
+    } else {
       moved = false;
-      if (z.scatter === 1) z.scatter = 2; // ran into a wall or the end of the leash: lurk there
-      z.goal = null;
+      headOn(z); // ran into a wall or the end of the leash: lurk there
     }
     z.vx = moved ? dir.x * sp : 0;
     z.vz = moved ? dir.z * sp : 0;
@@ -768,6 +899,12 @@ function destination(end: V2, map: MapData, safehouse: V2[] | undefined): V2[] |
 function gaussian(r: Rng): number {
   const u = Math.max(1e-9, r());
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r());
+}
+
+/** A runner blocked, or creeping along a wall it's walking into (SLIDE_MIN): stop fleeing, or pick a new lurking spot. */
+function headOn(z: Zombie): void {
+  if (z.scatter === 1) z.scatter = 2;
+  z.goal = null;
 }
 
 /** 0 = north, then clockwise in eighths. */
