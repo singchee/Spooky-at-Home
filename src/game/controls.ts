@@ -132,6 +132,19 @@ export function stickDeflection(dx: number, dy: number, radius: number): [number
   return [(dx / r) * m, (dy / r) * m];
 }
 
+/**
+ * The stick for a finger at (x, y), given the ring's box, both in the same space (client CSS px, as
+ * PointerEvent.clientX/Y and getBoundingClientRect give them): the deflection (see stickDeflection) and
+ * where to draw the knob (px from the ring centre, held on the rim).
+ */
+export function stickAt(x: number, y: number, ring: { left: number; top: number; width: number; height: number }): { vec: [number, number]; knob: [number, number] } {
+  const radius = ring.width / 2;
+  const dx = x - (ring.left + radius);
+  const dy = y - (ring.top + ring.height / 2);
+  const k = Math.min(1, radius / Math.max(1, Math.hypot(dx, dy)));
+  return { vec: stickDeflection(dx, dy, radius), knob: [dx * k, dy * k] };
+}
+
 /** How far (screen px) the aim moves this frame for a stick deflection: proportional to it, scaled by dt. */
 export function stickNudge(d: [number, number], dt: number): [number, number] {
   return [d[0] * STICK_SPEED * dt, d[1] * STICK_SPEED * dt];
