@@ -86,6 +86,9 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 
 | 3.42 | World campaign through the famous places (owner idea): a fixed tour (e.g. Sydney → London → Paris → Rome → Tokyo → New York), each city a short chain of missions built around its landmark area. Chief's note: because preset maps are fixed, these missions can be **hand-tuned** (positions, waves, bosses, radio lines) like Zombie Gunship's levels, unlike the generated Three Nights; reuse spec 001's campaign engine (planning, saved progress, previously-on, tally) and cutscene-free radio briefings (3.35); bosses (3.36) as city finales; loadout unlocks (3.29) as rewards. Same rules: tone exclusions, school guardrail, intel always true | pitch, plan, balance, story, sound | next after Three Nights screens |
 
+| 3.43 | Finish the Sydney, London, Rome and Tokyo presets: two cloud rounds failed (kumi 502/504 after 2–5 min; overpass-api.de resets connections from the cloud). Retry in a quiet window (night UTC), or from the owner's connection via a "Save this map file" export on the recon screen (new, small: exports the downloaded map as a file the build step accepts). Note: scripts/build-presets.mjs rewrites maps/preset-exclusions.json from only the places it finds, so merge, don't overwrite, the New York and Paris entries | map-check, playtest | todo |
+| 3.44 | Finer walk grid (or sub-cell wall tests) so zombies can't wedge in footprints thinner than 3 m (about 4 still stuck on Adelaide CBD after 3.32) | review, balance | todo |
+
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game
