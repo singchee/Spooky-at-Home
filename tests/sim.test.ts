@@ -188,15 +188,18 @@ describe('committed fingerprint: single-mission defend (locked before spec 001 t
   });
 });
 // Spec 001 step 1: locks today's single-mission Hold (mission and 30 s of play with no input) before the finale work.
-const EXPECTED_DEFEND_FINGERPRINT = 'bdca4d43';
+// c7cefb39 (3.16): defend waves are bigger from difficulty 2 (d3: 30 per wave, was 18; maxAlive 191, was 155).
+const EXPECTED_DEFEND_FINGERPRINT = 'c7cefb39';
 // a5be7ad0 (3.15): buildings are solid. Zombies can no longer stand in the outer band of a footprint, so their
 // spawn spots and paths to the safehouse wall differ slightly; the mission itself (bdca4d43) is unchanged.
-const EXPECTED_DEFEND_TRACE = 'a5be7ad0';
+// 3be0b14 (3.16): the bigger defend waves above put more zombies on the ground in the first 30 s.
+const EXPECTED_DEFEND_TRACE = '3be0b14';
 
 // 3dd039a3 (phase 3.2): waves vary within a mission (WavePlan.kinds) and the intel says how. Stripped of those two, it is still 7de5904e.
 // be9b7fe7 (phase 3.8): escort routes may not pass within 50 m of a school, kindergarten or playground, so homes whose
 // shortest road passed one now have a longer, clear road (or drop out), and the seeded pick lands on a different home.
-const EXPECTED_FINGERPRINT = 'be9b7fe7';
+// 4c4d8d66 (3.16): escort waves are bigger from difficulty 2 (d3: 28 per wave, was 12; maxAlive 276, was 120).
+const EXPECTED_FINGERPRINT = '4c4d8d66';
 
 describe('regressions from the phase 1 playtest', () => {
   it('escort ambushes never spawn on top of survivors (was: 3.5% of missions lost by second 5)', () => {
