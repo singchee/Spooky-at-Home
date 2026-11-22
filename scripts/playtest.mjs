@@ -3369,7 +3369,7 @@ async function highriseChecks(browser) {
       await fixedStep(page, 1 / 60);
       await startMeter(page, 'canvas.game-canvas');
       const t0 = await gameTime(page);
-      await untilGameTime(page, t0 + 20);
+      await untilGameTime(page, t0 + 20, 900000); // 1200 frames: slow on a software renderer
       const frames = await stopMeter(page);
       const cuts = await page.evaluate(() => {
         window.__sweepStop = true;
