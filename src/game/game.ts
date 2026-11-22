@@ -18,6 +18,7 @@ import { measureThreat, threatIntensity } from '../audio/intensity';
 import { VoiceDirector } from '../audio/voice';
 import { waveCall } from './waveCall';
 import { getSettings, onSettingsChange, updateSettings } from '../ui/settings';
+import { reducedMotion } from '../ui/motion';
 import { openSettingsPanel } from '../ui/settingsPanel';
 import { bestKey, bests, formatBest, formatTime, missionKind } from '../ui/bests';
 import { gradeMission, scoreInput } from '../sim/score';
@@ -63,8 +64,6 @@ interface TestHooks {
   screenOf?: (x: number, z: number) => [number, number];
 }
 
-/** The OS asks for reduced motion (live: it can change while the page is open). */
-const reducedMotionQuery: MediaQueryList | null = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 
 /** What the player just did, or what the simulation just reported. */
 export type GameAction =
@@ -836,7 +835,7 @@ export class Game {
    * reduce flicker.
    */
   private applyKick(fovDeg: number): void {
-    if (this.reduceFlicker || reducedMotionQuery?.matches) return;
+    if (this.reduceFlicker || reducedMotion()) return;
     const k = this.effects.shakePx(this.clock);
     if (!k.x && !k.y) return;
     const cam = this.camera;

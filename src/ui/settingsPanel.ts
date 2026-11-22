@@ -2,6 +2,7 @@ import { defaultSettings, getSettings, onSettingsChange, updateSettings, type Se
 import { el } from './dom';
 import { placeCache } from './placeCache';
 import { forgetWaits } from './loadEstimate';
+import { deviceWantsReduced } from './motion';
 
 /**
  * The settings panel: volumes, mouse, comfort. Opens over the pause screen, the front page or the menu.
@@ -56,6 +57,9 @@ export const TOGGLES: readonly ToggleDef[] = [
   { key: 'showHotkeys', label: 'Show key hints', group: 'controls', hint: 'The strip of keys along the bottom of a mission (not shown with touch controls)' },
   { key: 'reduceFlicker', label: 'Reduce flicker', group: 'comfort', hint: 'No camera kick from the 105, and camera switches fade instead of flashing static' },
 ];
+
+/** One-of-many settings (radio groups). */
+export const CHOICES = [{ key: 'motion', label: 'Motion', group: 'comfort' }] as const;
 
 const GROUPS: { id: 'sound' | 'controls' | 'comfort'; title: string }[] = [
   { id: 'sound', title: 'Sound' },
@@ -125,6 +129,29 @@ export function openSettingsPanel(parent: HTMLElement, o: SettingsPanelOptions =
       }
       input.addEventListener('change', () => updateSettings({ [d.key]: input.checked } as Partial<Settings>));
       sync.push((s) => (input.checked = s[d.key]));
+    }
+    if (g.id === 'comfort') {
+      // Motion: follow the device, or force full / reduced (BACKLOG 3.30).
+      const set = el('fieldset', 'settings-motion', undefined, box);
+      el('legend', undefined, CHOICES[0].label, set);
+      const choices: { v: Settings['motion']; text: () => string }[] = [
+        { v: 'device', text: () => `Follow my device (currently: ${deviceWantsReduced() ? 'reduced' : 'full'})` },
+        { v: 'full', text: () => 'Full motion' },
+        { v: 'reduced', text: () => 'Reduced motion' },
+      ];
+      for (const c of choices) {
+        const lab = el('label', undefined, undefined, set);
+        const r = el('input', undefined, undefined, lab);
+        r.type = 'radio';
+        r.name = `${id}-motion`;
+        r.value = c.v;
+        const span = el('span', undefined, c.text(), lab);
+        r.addEventListener('change', () => r.checked && updateSettings({ motion: c.v }));
+        sync.push((s) => {
+          r.checked = s.motion === c.v;
+          span.textContent = c.text();
+        });
+      }
     }
   }
   // Places kept on this device (BACKLOG 3.12). Only a count and a size are shown here, never the places.

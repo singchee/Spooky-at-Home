@@ -343,8 +343,9 @@ button:disabled { opacity: 0.5; }
   .lh-cross { display: none; } /* no room for it above the title */
 }
 @media (prefers-reduced-motion: reduce) {
-  .lh-rec::before { animation: none; }
+  :root:not(.motion-full) .lh-rec::before { animation: none; }
 }
+:root.motion-reduced .lh-rec::before { animation: none; }
 /* ---------- Scout, recon and custom screens (menu.ts) ---------- */
 /* A column: the "← Front page" bar sits in the flow above the card, so it can't cover a heading. */
 .menu { flex-direction: column; justify-content: flex-start; align-items: center; }
@@ -396,9 +397,11 @@ button:disabled { opacity: 0.5; }
 .scout-msg p { margin: 0; }
 .scout-alt { margin-top: 14px; }
 @media (prefers-reduced-motion: reduce) {
-  .scout-sweep:not([data-mode='determinate']):not([data-mode='estimate']) span { animation: none; width: 100%; opacity: 0.6; }
-  .scout-sweep span { transition: none; }
+  :root:not(.motion-full) .scout-sweep:not([data-mode='determinate']):not([data-mode='estimate']) span { animation: none; width: 100%; opacity: 0.6; }
+  :root:not(.motion-full) .scout-sweep span { transition: none; }
 }
+:root.motion-reduced .scout-sweep:not([data-mode='determinate']):not([data-mode='estimate']) span { animation: none; width: 100%; opacity: 0.6; }
+:root.motion-reduced .scout-sweep span { transition: none; }
 @media (max-width: 640px) {
   .scout-go { width: 100%; }
   .scout-alt > * { flex: 1 1 100%; }
@@ -429,7 +432,8 @@ button:disabled { opacity: 0.5; }
 /* Crosshair inside the ring (or on the target): the ring fades so it can't hide a figure a few pixels wide. */
 .coach-marker::after { transition: opacity 0.2s; }
 .coach-marker.inside::after { opacity: 0; }
-@media (prefers-reduced-motion: reduce) { .coach-bar span, .coach-marker::after { transition: none; } }
+@media (prefers-reduced-motion: reduce) { :root:not(.motion-full) .coach-bar span, :root:not(.motion-full) .coach-marker::after { transition: none; } }
+:root.motion-reduced .coach-bar span, :root.motion-reduced .coach-marker::after { transition: none; }
 .coach-stay { display: none; }
 /* Paused: the coach shrinks to its title so it doesn't cover the pause card... */
 .coach.paused .coach-body, .coach.paused .coach-hint, .coach.paused .coach-bar { display: none; }
@@ -534,7 +538,8 @@ button:disabled { opacity: 0.5; }
 .tt-pulse { animation: tt-pulse 1.25s ease-in-out infinite alternate; }
 @keyframes tt-pulse { from { opacity: 0.5; } to { opacity: 1; } }
 .tmap-tour.still .tt-pulse { animation: none; }
-@media (prefers-reduced-motion: reduce) { .tt-pulse { animation: none; } }
+@media (prefers-reduced-motion: reduce) { :root:not(.motion-full) .tt-pulse { animation: none; } }
+:root.motion-reduced .tt-pulse { animation: none; }
 /* ---------- Controls (3.11): key-hints strip, touch controls, touch-sized menus ---------- */
 .hud-keys kbd { font: inherit; font-weight: 700; color: #fff; }
 .hud-keys .hk-sep { color: var(--muted); }
@@ -632,3 +637,13 @@ button:disabled { opacity: 0.5; }
 .la-intro:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .landing-enter { animation: landing-enter 0.8s ease-out both; }
 @keyframes landing-enter { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---------- Motion note (still frames because the device asks) and Settings motion choice ---------- */
+.motion-note { margin: 0; padding: 6px 10px; font-size: 14px; line-height: 1.4; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; }
+.intro-motion-note { position: absolute; left: 16px; top: 16px; z-index: 2; max-width: calc(100% - 200px); background: rgba(0, 0, 0, 0.6); border-radius: 8px; }
+.motion-link { min-height: 48px; min-width: 48px; padding: 4px 12px; background: transparent; border: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font-size: 14px; }
+.motion-link:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.settings-motion { border: 0; margin: 4px 0; padding: 0; min-width: 0; }
+.settings-motion legend { color: var(--ink); padding: 0; }
+.settings-motion label { display: flex; align-items: center; gap: 10px; min-height: 48px; cursor: pointer; }
+.settings-motion input[type=radio] { width: 22px; height: 22px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); }

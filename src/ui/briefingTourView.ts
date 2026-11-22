@@ -3,7 +3,8 @@ import { polylineLength } from '../map/geom';
 import type { Mission } from '../sim/missions';
 import type { BriefingDiorama } from './briefingDiorama';
 import { el } from './dom';
-import { getSettings, onSettingsChange } from './settings';
+import { onSettingsChange } from './settings';
+import { wantsStill as stillNow, onMotionChange, buildMotionNote } from './motion';
 import { blendPose, easeInOut, markTourSeen, pointAlong, stopAt, tourTimeline, type Pose, type TourMark, type TourStop, type TourTimeline } from './briefingTour';
 import { TOUR_TEXT } from './briefingTourText';
 
@@ -20,8 +21,7 @@ const DRIFT = 0.06;
 /** Turn between stops that don't ask for a particular side, radians. */
 const STEP_TURN = 0.5;
 
-const reducedMotionQuery: MediaQueryList | null = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
-const wantsStill = () => !!reducedMotionQuery?.matches || getSettings().reduceFlicker;
+const wantsStill = stillNow;
 
 type Finish = 'end' | 'skip' | 'interrupt';
 
@@ -88,10 +88,7 @@ export class BriefingTour {
     window.addEventListener('keydown', onKey);
     this.cleanups.push(() => window.removeEventListener('keydown', onKey));
     const motion = () => this.syncMode();
-    if (reducedMotionQuery) {
-      reducedMotionQuery.addEventListener('change', motion);
-      this.cleanups.push(() => reducedMotionQuery.removeEventListener('change', motion));
-    }
+    this.cleanups.push(onMotionChange(motion));
     this.cleanups.push(onSettingsChange(motion));
 
     this.mode = wantsStill() ? 'steps' : 'anim';
@@ -368,6 +365,10 @@ export class BriefingTour {
       return b;
     };
     if (this.mode === 'steps') {
+      const note = buildMotionNote(() => {
+        if (this.mode === 'anim') this.play(); // the switch already ran syncMode; restart the flight
+      });
+      if (note) this.ctrl.append(note);
       btn('tour-back', TOUR_TEXT.ui.back, () => this.goTo(this.idx - 1), (b) => (b.disabled = this.idx <= 0));
       btn('tour-next', this.idx === n - 1 ? TOUR_TEXT.ui.whole : TOUR_TEXT.ui.next, () => this.goTo(this.idx + 1), (b) => (b.disabled = this.idx >= n));
       if (this.idx >= n) this.stepEl.textContent = TOUR_TEXT.ui.whole;
