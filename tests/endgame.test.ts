@@ -6,6 +6,7 @@ import { WalkGrid } from '../src/map/grid';
 import { parseOverpass } from '../src/map/overpass';
 import { generateMission, type MissionOptions } from '../src/sim/missions';
 import { Sim } from '../src/sim/sim';
+import { Bot, SKILL } from '../src/sim/bot';
 import { planLayout, trainingMission } from '../src/ui/tutorialSteps';
 import type { MapData } from '../src/map/types';
 import { schoolHeavyTown } from './worldFixture';
@@ -84,5 +85,53 @@ describe('cause 1: a milling zombie whose goal is behind a wall freezes there fo
     const keys = [...stuck.keys()];
     expect(keys.filter((k) => k.startsWith('sample'))).toEqual([]);
     expect(keys.length, keys.join(', ')).toBeLessThanOrEqual(6);
+  }, 240_000);
+});
+
+describe('cause 2: hordes placed past the edge of the playable map, or walled into a pocket', () => {
+  it('every horde zombie starts inside 90% of the half-width, on ground connected to its horde', () => {
+    const bad: string[] = [];
+    for (const name of ['sample', 'school', 'adelaide-cbd', 'gundagai', 'west-hobart']) {
+      const t = town(name);
+      const lim = t.map.half * 0.9;
+      for (const template of ['classic-clear', 'clear-tennis', 'clear-park', 'forest-sweep'] as const) {
+        for (const d of [1, 3, 5]) {
+          for (let seed = 1; seed <= 8; seed++) {
+            const sim = clearSim(t, { type: 'auto', difficulty: d, seed, template });
+            if (!sim) continue;
+            const fields = new Map<object, Int32Array>();
+            for (const z of sim.zombies) {
+              const tag = `${name} ${template} d${d} s${seed} z${z.id}`;
+              if (Math.abs(z.x) > lim || Math.abs(z.z) > lim) bad.push(`${tag} edge`);
+              let f = fields.get(z.home!);
+              if (!f) fields.set(z.home!, (f = t.grid.flowField([t.grid.idx(z.home!.x, z.home!.z)])));
+              if (t.grid.fieldAt(f, z.x, z.z) < 0) bad.push(`${tag} pocket`);
+            }
+          }
+        }
+      }
+    }
+    expect(bad.slice(0, 10)).toEqual([]);
+  }, 240_000);
+
+  it('with the human bot firing, no zombie ever leaves 90% of the half-width (gundagai and west-hobart)', () => {
+    for (const name of ['gundagai', 'west-hobart']) {
+      const t = town(name);
+      const lim = t.map.half * 0.9;
+      for (const template of ['clear-park', 'forest-sweep', 'classic-clear'] as const) {
+        for (const d of [2, 4]) {
+          for (let seed = 1; seed <= 4; seed++) {
+            const sim = clearSim(t, { type: 'auto', difficulty: d, seed, template });
+            if (!sim) continue;
+            const bot = new Bot(sim, SKILL.human);
+            while (sim.phase === 'running') {
+              bot.step(1 / 30);
+              sim.step(1 / 30);
+              for (const z of sim.zombies) if (z.alive) expect(Math.max(Math.abs(z.x), Math.abs(z.z)), `${name} ${template} d${d} s${seed} z${z.id}`).toBeLessThanOrEqual(lim);
+            }
+          }
+        }
+      }
+    }
   }, 240_000);
 });

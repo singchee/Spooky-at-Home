@@ -5,7 +5,7 @@ import type { WalkGrid } from '../map/grid';
 import { hashString, mulberry32, type Rng } from '../util/rng';
 import { nearChildPlace } from '../map/recon';
 import { placeLabel } from './missions';
-import { CHILD_FIRE_CLEARANCE, FIRST_WAVE, HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH, WAVE_KINDS, type Mission, type WaveKind } from './missions';
+import { CHILD_FIRE_CLEARANCE, FIRST_WAVE, HORDE_EDGE, HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH, WAVE_KINDS, type Mission, type WaveKind } from './missions';
 import type { LineId } from './campaignText';
 import { KILL_REACH, MAX_KILL_REACH, WEAPONS, weaponById, type WeaponDef } from './weapons';
 
@@ -779,8 +779,13 @@ export class Sim {
     const home = z.home!;
     const before = this.pathDist(k, z);
     const was = Math.hypot(home.x - z.x, home.z - z.z);
+    const edge = this.map.half * HORDE_EDGE;
+    const out = Math.max(Math.abs(z.x), Math.abs(z.z));
     const ok = (x: number, zz: number) => {
       if (this.grid.isBlocked(x, zz)) return false;
+      // Never out past HORDE_EDGE, where the picture fades and the camera can't follow (owner's report).
+      const o = Math.max(Math.abs(x), Math.abs(zz));
+      if (o > edge && o > out) return false;
       const d = this.pathDist(k, { x, z: zz });
       return d <= SCATTER_LEASH || d <= before;
     };
