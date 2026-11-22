@@ -109,6 +109,70 @@ export function nearChildPlace(map: MapData, p: V2, buffer = CHILD_BUFFER): bool
   return childZones(map).some((z) => zoneDist(p, z) < buffer);
 }
 
+/** Twice the signed area of a, b, c: which side of a->b the point c is on. */
+const orient = (a: V2, b: V2, c: V2) => (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
+
+/** Shortest distance between segments a-b and c-d (0 when they cross). */
+function segSegDist(a: V2, b: V2, c: V2, d: V2): number {
+  const o1 = orient(a, b, c);
+  const o2 = orient(a, b, d);
+  const o3 = orient(c, d, a);
+  const o4 = orient(c, d, b);
+  if (((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0))) return 0;
+  return Math.min(distToSegment(a, c, d), distToSegment(b, c, d), distToSegment(c, a, b), distToSegment(d, a, b));
+}
+
+/** Distance from the segment a-b to a zone: 0 if it enters the outline, else to its edge (or its point). */
+function zoneSegDist(a: V2, b: V2, z: ChildZone): number {
+  if (!z.pts) return distToSegment(z.p, a, b);
+  if (pointInPolygon(a, z.pts) || pointInPolygon(b, z.pts)) return 0;
+  let d = Infinity;
+  for (let i = 0, j = z.pts.length - 1; i < z.pts.length; j = i++) d = Math.min(d, segSegDist(a, b, z.pts[j], z.pts[i]));
+  return d;
+}
+
+/** Axis-aligned box around each zone (its outline, or its point), cached alongside the zones. */
+const boxCache = new WeakMap<ChildZone, { minX: number; maxX: number; minZ: number; maxZ: number }>();
+function zoneBox(z: ChildZone) {
+  let b = boxCache.get(z);
+  if (!b) {
+    const pts = z.pts ?? [z.p];
+    b = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+    for (const q of pts) {
+      b.minX = Math.min(b.minX, q.x);
+      b.maxX = Math.max(b.maxX, q.x);
+      b.minZ = Math.min(b.minZ, q.z);
+      b.maxZ = Math.max(b.maxZ, q.z);
+    }
+    boxCache.set(z, b);
+  }
+  return b;
+}
+
+/**
+ * True when any part of the straight line a-b passes inside, or within `buffer` metres of, a school,
+ * kindergarten or playground. Used to keep survivors' walking routes clear of them (PLAN §9).
+ */
+export function segmentNearChildPlace(map: MapData, a: V2, b: V2, buffer = CHILD_BUFFER): boolean {
+  const minX = Math.min(a.x, b.x) - buffer;
+  const maxX = Math.max(a.x, b.x) + buffer;
+  const minZ = Math.min(a.z, b.z) - buffer;
+  const maxZ = Math.max(a.z, b.z) + buffer;
+  for (const z of childZones(map)) {
+    const bx = zoneBox(z);
+    if (bx.maxX < minX || bx.minX > maxX || bx.maxZ < minZ || bx.minZ > maxZ) continue;
+    if (zoneSegDist(a, b, z) < buffer) return true;
+  }
+  return false;
+}
+
+/** True when any leg of a route (a polyline) passes within `buffer` metres of a school, kindergarten or playground. */
+export function routeNearChildPlace(map: MapData, route: V2[], buffer = CHILD_BUFFER): boolean {
+  if (route.length === 1) return nearChildPlace(map, route[0], buffer);
+  for (let i = 1; i < route.length; i++) if (segmentNearChildPlace(map, route[i - 1], route[i], buffer)) return true;
+  return false;
+}
+
 /** True when an outline contains a school, kindergarten or playground (a park with a playground in it). */
 export function containsChildPlace(map: MapData, pts: V2[] | undefined): boolean {
   if (!pts || pts.length < 3) return false;

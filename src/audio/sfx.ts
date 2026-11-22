@@ -1,10 +1,32 @@
 import { audio, type SfxOutput } from './engine';
 import { DUCK } from './mix';
+import { SFX } from './assets';
+import type { PlayOpts } from './samples';
 
 /**
- * Small synthesised sound effects (no audio files). Starts only after a user gesture, as browsers
- * require. By default they play through the page's shared audio engine (sfx and radio buses, with
- * the music ducked under each shot); given a bare AudioContext (tests) they play straight to it.
+ * The 25 mm fires 12 rounds a second: each round keeps its short synthesised crack, and the
+ * recorded burst is laid under it at most this often (s) while the trigger is held. 2.4 a second,
+ * under the comfort limit of 3.
+ */
+export const RETRIGGER_25 = 0.42;
+
+/** How each recorded effect plays: level, voice cap, slice and variation. */
+export const SAMPLE_PLAY: Record<string, Omit<PlayOpts, 'group'>> = {
+  [SFX.fire25]: { max: 2, gain: 0.9, duration: RETRIGGER_25 + 0.08, fade: 0.08, jitter: 0.08, cents: 60, db: 1.5 },
+  [SFX.fire40]: { max: 4, gain: 0.5, duration: 1.2, fade: 0.3, cents: 50, db: 1.5 },
+  [SFX.fire105]: { max: 2, gain: 0.75, cents: 40, db: 1 },
+  [SFX.explosion]: { max: 3, gain: 0.85, cents: 60, db: 1.5 },
+  /** A 40 mm round landing: the explosion, smaller (faster and quieter). */
+  'boom40': { max: 4, gain: 0.3, rate: 1.4, duration: 1.6, fade: 0.5, cents: 80, db: 2 },
+  /** Two pulses of the recorded alarm (0.4 s on, 0.35 s off: 1.3 a second), under the synthesised two-tone. */
+  [SFX.alarm]: { max: 1, gain: 0.2, duration: 1.3, fade: 0.15, cents: 0, db: 0 },
+};
+
+/**
+ * Sound effects. Starts only after a user gesture, as browsers require. By default they play
+ * through the page's shared audio engine (sfx and radio buses, with the music ducked under each
+ * shot), using the recorded samples once they have loaded and synthesised sound until then (or if
+ * they never do); given a bare AudioContext (tests) they are all synthesised, straight to it.
  */
 export class Sfx {
   private out: SfxOutput | null = null;
@@ -13,6 +35,8 @@ export class Sfx {
   muted = false;
   /** Audio-clock time until which the friendly-fire alarm is sounding; radio blips wait it out. */
   private alarmUntil = -1;
+  /** Audio-clock time from which the next 25 mm recorded burst may start. */
+  private next25 = -1;
 
   constructor(private makeContext: () => AudioContext | SfxOutput | null = () => audio.output()) {}
 
@@ -82,12 +106,28 @@ export class Sfx {
     this.out?.duck?.(d[0], d[1]);
   }
 
+  /** Play a recorded sample on the sfx bus if it has loaded. False: use the synthesised sound. */
+  private sample(id: string, how = id): boolean {
+    const o = this.out;
+    if (!o || this.muted || !o.samples) return false;
+    const buf = o.sample?.(id);
+    if (!buf) return false;
+    o.samples.play(buf, o.sfx, { group: how, ...SAMPLE_PLAY[how] });
+    return true;
+  }
+
   fire(weapon: string): void {
-    if (weapon === '25') this.burst(2200, 0.06, 0.12);
-    else if (weapon === '40') {
-      this.burst(900, 0.25, 0.35);
-      this.thump(140, 70, 0.25, 0.25);
-    } else {
+    if (weapon === '25') {
+      const o = this.out;
+      const rec = !!o?.sample?.(SFX.fire25);
+      this.burst(2200, 0.06, rec ? 0.08 : 0.12);
+      if (rec && o!.ctx.currentTime >= this.next25 && this.sample(SFX.fire25)) this.next25 = o!.ctx.currentTime + RETRIGGER_25;
+    } else if (weapon === '40') {
+      if (!this.sample(SFX.fire40)) {
+        this.burst(900, 0.25, 0.35);
+        this.thump(140, 70, 0.25, 0.25);
+      }
+    } else if (!this.sample(SFX.fire105)) {
       this.burst(300, 0.9, 0.7);
       this.thump(90, 38, 0.9, 0.55);
     }
@@ -96,8 +136,9 @@ export class Sfx {
 
   impact(weapon: string): void {
     if (weapon === '25') this.burst(700, 0.12, 0.05);
-    else if (weapon === '40') this.burst(400, 0.4, 0.15);
-    else {
+    else if (weapon === '40') {
+      if (!this.sample(SFX.explosion, 'boom40')) this.burst(400, 0.4, 0.15);
+    } else if (!this.sample(SFX.explosion)) {
       this.burst(160, 1.4, 0.35);
       this.thump(60, 28, 1.6, 0.45);
     }
@@ -112,7 +153,9 @@ export class Sfx {
     const o = this.out;
     if (!o || this.muted) return;
     const t = o.ctx.currentTime;
-    this.alarmUntil = t + 0.5;
+    // The square-wave two-tone below is the specified friendly-fire cue and always plays; the
+    // recorded alarm, if loaded, is layered under it (two slow pulses) and holds radio blips off too.
+    this.alarmUntil = this.sample(SFX.alarm) ? t + (SAMPLE_PLAY[SFX.alarm].duration ?? 1.3) : t + 0.5;
     for (const [i, f] of [[0, 880], [1, 660], [2, 880], [3, 660]]) {
       const osc = o.ctx.createOscillator();
       const g = o.ctx.createGain();

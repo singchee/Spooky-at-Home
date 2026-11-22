@@ -96,3 +96,11 @@ idea ──/pitch──► spec (docs/specs/NNN-name.md)
 ## Keeping the crew honest
 - `/debrief` tracks, per check: findings raised, findings that were real, and bugs that escaped to you anyway. A role that finds nothing real for 4 weeks gets simplified or cut. A check that only makes things *look* checked is worse than no check.
 - Watch for Goodhart's law (when a measure becomes a target, it stops being a good measure). If balance agents tune missions to hit a win-rate number, the number improves and the fun may not. Human playtest notes outrank bot statistics.
+
+## Roster decisions (2026-11-21, owner delegated: "if overengineered, cut them")
+- **No new agents.** The Mission Designer and Privacy & Licensing Officer were proposed and declined. Evidence: the crew already has 13 roles, the two gaps are narrow, and every finished agent costs roughly 200–300k tokens. Their jobs are folded in instead:
+  - **Mission shape** (pacing, wave choreography, the 3-night campaign structure) → the **Game Director**, with the Story Writer for the words.
+  - **Privacy and licensing** → a fixed checklist in `/preflight` (step 7), run on every release.
+- **No roles cut yet.** Idle roles cost nothing (they only run when invoked). `/debrief` applies the rule above: a role that finds nothing real for 4 weeks gets cut.
+- **Human playtest kit**: real players outrank every bot here. See `docs/PLAYTEST-KIT.md`.
+

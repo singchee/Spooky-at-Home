@@ -94,8 +94,14 @@ export function nearestNode(g: RoadGraph, p: V2, maxDist = Infinity): number {
   return best;
 }
 
-/** Shortest road distance from `src` to every node. */
-export function dijkstra(g: RoadGraph, src: number): { d: Float64Array; prev: Int32Array } {
+/** What it costs to travel an edge from node `from`. Infinity closes the edge. */
+export type EdgeCost = (from: number, e: Edge) => number;
+
+/**
+ * Shortest road distance from `src` to every node. With `cost`, edges are weighed by it instead of
+ * their length (Infinity = closed), so routes can steer clear of places (see `avoidingEdges`).
+ */
+export function dijkstra(g: RoadGraph, src: number, cost?: EdgeCost): { d: Float64Array; prev: Int32Array } {
   const d = new Float64Array(g.nodes.length).fill(Infinity);
   const prev = new Int32Array(g.nodes.length).fill(-1);
   const heap = new MinHeap();
@@ -104,7 +110,7 @@ export function dijkstra(g: RoadGraph, src: number): { d: Float64Array; prev: In
   while (heap.size) {
     const u = heap.pop()!;
     for (const e of g.adj[u]) {
-      const nd = d[u] + e.w;
+      const nd = d[u] + (cost ? cost(u, e) : e.w);
       if (nd < d[e.to]) {
         d[e.to] = nd;
         prev[e.to] = u;
@@ -113,6 +119,24 @@ export function dijkstra(g: RoadGraph, src: number): { d: Float64Array; prev: In
     }
   }
   return { d, prev };
+}
+
+/**
+ * An edge cost that closes every edge `near(a, b)` flags (its two end points), so `dijkstra` finds the
+ * shortest route that avoids those places altogether, or none. Each edge is tested once, both ways.
+ */
+export function avoidingEdges(g: RoadGraph, near: (a: V2, b: V2) => boolean): EdgeCost {
+  const n = g.nodes.length;
+  const memo = new Map<number, boolean>();
+  return (u, e) => {
+    const key = Math.min(u, e.to) * n + Math.max(u, e.to);
+    let closed = memo.get(key);
+    if (closed === undefined) {
+      closed = near(g.nodes[u], g.nodes[e.to]);
+      memo.set(key, closed);
+    }
+    return closed ? Infinity : e.w;
+  };
 }
 
 export function pathFromPrev(prev: Int32Array, target: number): number[] {

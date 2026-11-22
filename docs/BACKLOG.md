@@ -34,10 +34,24 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 
 | # | Item | Needs checks | Status |
 |---|---|---|---|
-| 3.5 | Briefing diorama: blocky 3D model of the mission area with landmark labels and mission markers | review, playtest, feel | in-progress |
-| 3.6 | Recorded audio wired in (ElevenLabs music, effects, 20 radio lines; generated score as fallback) | review, playtest, player-test | in-progress |
-| 3.7 | "Hello, home" flyover: 15–20 s skippable thermal approach labelling real public landmarks (owner approved #9) | review, playtest, feel | todo |
-| 3.8 | School guardrail gaps: escort routes avoid schools, straggler starts clear of them, wider horde spacing (owner decision #11) | review, map-check | todo |
+| 3.5 | Briefing diorama: blocky 3D model of the mission area with landmark labels and mission markers | review, playtest, feel | merged to phase 3 |
+| 3.6 | Recorded audio wired in (ElevenLabs music, effects, 20 radio lines; generated score as fallback) | review, playtest, player-test | merged to phase 3 |
+| 3.6b | Audio memory on phones: decoded audio is about 140 MB (five 60 s stereo music stems). Stream or mono-mix the music so a tablet isn't killed for memory | review, playtest | todo (before release) |
+| 3.7 | Guided briefing walk-through (was the "Hello, home" flyover; owner: "the briefing doesn't walk through the area") | review, playtest, feel | in-progress |
+| 3.8 | School guardrail gaps: escort routes avoid schools, straggler starts clear of them, wider horde spacing (owner decision #11) | review, map-check | merged to phase 3 |
+| 3.9 | Sensor look: slanted, zoomed-in gunship camera; grain, scanlines, bloom, hot edges; textured ground (owner: "just blocks", bar: Zombie Gunship quality, no copying) | review, playtest, feel | in-progress |
+| 3.10 | People: rigged 3D zombie and survivor models (npm package, licence chain to confirm), instanced animation, thermal body heat | review, playtest, feel, licence | in-progress |
+| 3.11 | Controls: touch controls on phones and tablets, on-screen hotkeys (R weapon, Q view, Esc pause/briefing), unlimited 25 mm | review, playtest, feel, balance | in-progress |
+| 3.12 | Remember places on this device; suburb-level place names (no house numbers); real load timings | review, playtest | in-progress |
+| 3.13 | World dressing: roofs, parked cars, rooftop clutter (after T4 lands) | review, playtest | todo |
+| 3.14 | Three Nights campaign (spec 001, owner approved) | plan, review, playtest, feel, balance | core merged; review FAIL (1 blocker: flavour lines can contradict the briefing), fixes queued |
+| 3.15 | Zombies walk into buildings and vanish: buildings must block movement (owner playtest, 22 Nov) | review, balance, map-check | in-progress |
+| 3.16 | Waves too small at level 2: more and bigger hordes per difficulty (owner playtest) | balance, player-test | in-progress |
+| 3.17 | Gun sounds: more weight and bass; the 25/40/105 sound hollow (owner playtest) | playtest, player-test | todo |
+| 3.18 | Rounds arrive from the gunship off-screen, not from mid-screen (owner playtest; with 3.9) | playtest, feel | in-progress |
+| 3.19 | HUD markers on landmarks from the map analysis (tennis club, park…); never schools or other child places (decision #11) | review, playtest, feel | todo |
+
+**Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game
 No school, kindergarten, childcare or playground missions, and none near them (#11 closed).

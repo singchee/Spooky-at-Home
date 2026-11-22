@@ -11,11 +11,12 @@ import { SensorShader, type SensorId } from '../render/sensors';
 import { AgentsView } from './agentsView';
 import { Effects } from './effects';
 import { Hud } from '../ui/hud';
-import { briefingMap } from '../ui/tacticalMap';
+import { briefingVisuals } from '../ui/briefingDiorama';
 import { el } from '../ui/dom';
 import { Sfx } from '../audio/sfx';
 import { audio } from '../audio/engine';
 import { measureThreat, threatIntensity } from '../audio/intensity';
+import { VoiceDirector } from '../audio/voice';
 import { waveCall } from './waveCall';
 import { getSettings, onSettingsChange, updateSettings } from '../ui/settings';
 import { openSettingsPanel } from '../ui/settingsPanel';
@@ -136,6 +137,8 @@ export class Game {
   private camUp = new THREE.Vector3();
   /** Test hook only (see TestHooks.fixedStep): seconds per frame, or null for real time. */
   private fixedDt: number | null = null;
+  /** The briefing's map and 3D diorama (disposed when the briefing closes). */
+  private briefingView: { dispose(): void } | null = null;
 
   constructor(private container: HTMLElement, private map: MapData, sim: Sim, private opts: GameOptions) {
     this.sim = sim;
@@ -217,7 +220,9 @@ export class Game {
     const m = this.sim.mission;
     this.overlay.replaceChildren();
     const card = el('div', 'card briefing', undefined, this.overlay);
-    card.appendChild(briefingMap(this.map, m, this.sim.graph));
+    const visuals = briefingVisuals(this.map, m, this.sim.graph);
+    this.briefingView = visuals;
+    card.appendChild(visuals.el);
     el('div', 'card-kicker', `MISSION · DIFFICULTY ${m.difficulty} · SEED ${m.seed}`, card);
     el('h2', undefined, m.title, card);
     for (const line of m.briefing) el('p', undefined, line, card);
@@ -233,6 +238,8 @@ export class Game {
   }
 
   private start(): void {
+    this.briefingView?.dispose();
+    this.briefingView = null;
     this.screen = 'playing';
     this.overlay.style.display = 'none';
     this.hud.say(`Spooky, Ground. ${this.sim.mission.title}. You're cleared hot.`, this.clock);
@@ -493,11 +500,14 @@ export class Game {
   /** Kills waiting to be called in (merged over KILL_MERGE seconds), and which line goes next. */
   private waveCall = 0;
   private killCall = { n: 0, at: -1, next: -1 };
+  /** Recorded radio voice: flavour under the on-screen radio text (src/audio/voice.ts). */
+  private voice: VoiceDirector | null = null;
 
   private handleEvents(events: SimEvent[]): void {
     const now = this.clock;
     const kc = this.killCall;
     if (kc.next < 0) kc.next = this.sim.mission.seed % KILL_LINES.length;
+    (this.voice ??= new VoiceDirector((line) => audio.say(line), this.sim.mission.seed)).update(events, this.sim);
     for (const e of events) {
       this.opts.onAction?.({ type: 'sim', event: e });
       switch (e.type) {
@@ -542,6 +552,7 @@ export class Game {
     }
     if (kc.at >= 0 && now - kc.at >= KILL_MERGE) {
       this.radio(KILL_LINES[kc.next](kc.n));
+      this.voice?.bigKill();
       kc.next = (kc.next + 1) % KILL_LINES.length;
       kc.at = -1;
       kc.n = 0;
@@ -686,6 +697,7 @@ export class Game {
     audio.release('mission');
     this.offSettings();
     this.closeSettings?.();
+    this.briefingView?.dispose();
     for (const [t, type, fn] of this.listeners) t.removeEventListener(type, fn);
     if (document.pointerLockElement) document.exitPointerLock?.();
     this.world.dispose();

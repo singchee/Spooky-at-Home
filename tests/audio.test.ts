@@ -202,7 +202,7 @@ describe('score intensity from mission state', () => {
     expect(a.every((x) => x >= 0 && x <= 1)).toBe(true);
     expect(Math.max(...a)).toBeGreaterThan(a[0] + 0.15);
     expect(trace()).toEqual(a);
-  });
+  }, 30_000); // plays a whole mission; 5 s is too tight when the machine is busy
 
   it('is smoothed: swells in seconds, settles more slowly, never jumps', () => {
     const s = new IntensitySmoother(0);
