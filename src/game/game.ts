@@ -22,6 +22,7 @@ import { getSettings, onSettingsChange, updateSettings } from '../ui/settings';
 import { openSettingsPanel } from '../ui/settingsPanel';
 import { bestKey, bests, formatBest, formatTime, missionKind } from '../ui/bests';
 import { gradeMission, scoreInput } from '../sim/score';
+import { LINES, captionText, line } from '../sim/campaignText';
 import { effectiveReduceFlicker, mouseAimDelta } from './input';
 import { KEYS_SENTENCE, TOUCH_SENTENCE, keyAction, nextView, viewLabel, type ControlAction } from './controls';
 import { TouchControls } from './touchControls';
@@ -645,6 +646,10 @@ export class Game {
           break;
         case 'radio':
           this.radio(e.text);
+          break;
+        case 'line': // spec 002: few-left / cold-leftovers, captioned (the spoken words, then the count) and voiced
+          this.radio(captionText(line(e.id, e.id === 'few-left' ? `Nearly there: ${e.left} left.` : `${e.left} left, all cold-blooded.`)));
+          if (LINES[e.id].recorded) audio.say(e.id);
           break;
         case 'result':
           audio.sting(e.won);

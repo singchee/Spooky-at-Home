@@ -62,6 +62,9 @@ export const RULES: Record<VoiceLine, LineRule> = {
   'good-effect': { priority: L, cooldown: 12 },
   'former-neighbours': { priority: L, cooldown: 12 },
   'splash-residents': { priority: L, cooldown: 12 },
+  // Spec 002: once per mission each (the sim says them once); P2 in the radio script: dropped if not started within 3 s.
+  'few-left': { priority: N, cooldown: 600, maxWait: 3 },
+  'cold-leftovers': { priority: N, cooldown: 600, maxWait: 3 },
 };
 
 export type Decision = 'queued' | 'preempt' | 'dropped';

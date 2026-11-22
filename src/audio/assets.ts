@@ -49,6 +49,9 @@ export const VOICE_LINES = [
   'survivors-moving',
   'mission-complete',
   'mission-failed',
+  // Radio script section C, wired by spec 002 (Clear: the last few contacts).
+  'few-left',
+  'cold-leftovers',
 ] as const;
 export type VoiceLine = (typeof VOICE_LINES)[number];
 export const voiceAsset = (line: VoiceLine): string => `voice/${line}`;
