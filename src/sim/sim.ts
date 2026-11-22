@@ -1,11 +1,12 @@
 import type { MapData, V2 } from '../map/types';
-import { dist, pointAlong, pointInPolygon, polylineLength } from '../map/geom';
+import { dist, distToSegment, pointAlong, pointInPolygon, polylineLength } from '../map/geom';
 import type { RoadGraph } from '../map/roadGraph';
 import type { WalkGrid } from '../map/grid';
 import { hashString, mulberry32, type Rng } from '../util/rng';
 import { nearChildPlace } from '../map/recon';
 import { placeLabel } from './missions';
-import { CHILD_FIRE_CLEARANCE, FIRST_WAVE, HORDE_SPREAD, HORDE_WANDER, WAVE_KINDS, type Mission, type WaveKind } from './missions';
+import { CHILD_FIRE_CLEARANCE, FIRST_WAVE, HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH, WAVE_KINDS, type Mission, type WaveKind } from './missions';
+import type { LineId } from './campaignText';
 import { KILL_REACH, MAX_KILL_REACH, WEAPONS, weaponById, type WeaponDef } from './weapons';
 
 /**
@@ -24,7 +25,38 @@ export interface Zombie {
   diedAt: number;
   home: V2 | null;
   goal: V2 | null;
+  /** Clear missions (spec 002): 0 or unset = with its horde, 1 = fleeing a 105 hit, 2 = lurking, 3 = walking back. */
+  scatter?: 0 | 1 | 2 | 3;
+  /** When a scattered zombie starts back to its horde (sim time, s). */
+  scatterT?: number;
+  /** Fleeing until this time (s). */
+  fleeUntil?: number;
+  /** The way it ran: unit vector away from the impact, with a seeded wobble. */
+  scatterDir?: V2;
+  /** Seconds walking back without getting closer. */
+  stuckT?: number;
 }
+
+/** Spec 002 (Balance Analyst's numbers). A 105 scatters surviving horde zombies within this multiple of its lethal radius. */
+export const SCATTER_REACH = 2;
+/** Fleeing: this multiple of a zombie's walking speed, for FLEE_S plus up to FLEE_JITTER seconds. */
+export const FLEE_MUL = 2.2;
+export const FLEE_S = 3;
+export const FLEE_JITTER = 1;
+/** Up to this many radians either side of straight away from the impact. */
+export const SCATTER_WOBBLE = 0.5;
+/** Seconds from the hit to heading back: REGROUP_S + REGROUP_PER_D per difficulty above 1, plus up to REGROUP_JITTER. */
+export const REGROUP_S = 15;
+export const REGROUP_PER_D = 1.5;
+export const REGROUP_JITTER = 4;
+/** Forest sweep regroups sooner (cold runners under trees are the hardest to find; spec 002 pillar 3). */
+export const FOREST_REGROUP = 0.8;
+/** Walking back: this multiple of a zombie's walking speed (lurking uses the idle shamble, 0.45). */
+export const RETURN_MUL = 1;
+/** A runner that can't get closer to its horde for this long gives up and mills where it is (still inside the leash). */
+export const STUCK_S = 6;
+/** A Clear in-mission line (radio script section C), with how many contacts are left for its caption. */
+export type ClearLine = Extract<LineId, 'few-left' | 'cold-leftovers'>;
 
 export interface Survivor {
   id: number;
@@ -58,6 +90,7 @@ export type SimEvent =
   | { type: 'survivor-home' }
   | { type: 'wave'; count: number; cold: number; from: string; place: string; kind: WaveKind }
   | { type: 'radio'; text: string }
+  | { type: 'line'; id: ClearLine; left: number }
   | { type: 'result'; won: boolean; reason: string };
 
 export interface WeaponState {
@@ -140,8 +173,18 @@ export class Sim {
   private doors: (V2[] | null)[] = [];
   /** A horde creeping toward the sheltering friendlies (clear missions). */
   private drift: { anchor: V2; target: V2; speed: number } | null = null;
+  /** Shelled hordes scatter (spec 002): on for Clear unless the caller opts out (Training night). */
+  readonly scatterOn: boolean;
+  /** Scatter's own seeded stream, so the main stream is untouched until a 105 lands (hard rule 1). */
+  private srng: Rng;
+  /** Each horde: its movable anchor, where it gathered, and the place its runners are told they regroup at. */
+  private hordes: { anchor: V2; origin: V2; label: string; regroup: string }[] = [];
+  private hordeOf = new Map<V2, number>();
+  private scatterSaid = false;
+  private fewSaid = false;
+  private coldSaid = false;
 
-  constructor(mission: Mission, map: MapData, graph: RoadGraph, grid: WalkGrid) {
+  constructor(mission: Mission, map: MapData, graph: RoadGraph, grid: WalkGrid, opts: { scatter?: boolean } = {}) {
     this.mission = mission;
     this.map = map;
     this.graph = graph;
@@ -150,6 +193,12 @@ export class Sim {
     this.weapons = WEAPONS.map((w) => ({ id: w.id, ammo: w.magazine, cooldown: 0, reloading: 0 }));
     // Each horde mills around its own movable anchor (a copy, so the mission data never changes).
     const anchors = mission.hordes.map((h) => ({ ...h.centre }));
+    this.scatterOn = opts.scatter ?? mission.type === 'clear';
+    this.srng = mulberry32(hashString(`scatter|${mission.mapName}|${mission.seed}|${mission.type}|${mission.difficulty}`));
+    mission.hordes.forEach((h, k) => {
+      this.hordes.push({ anchor: anchors[k], origin: { ...h.centre }, label: h.label, regroup: h.label });
+      this.hordeOf.set(anchors[k], k);
+    });
     mission.hordes.forEach((h, k) => {
       for (let i = 0; i < h.count; i++) {
         const a = this.rng() * Math.PI * 2;
@@ -276,6 +325,7 @@ export class Sim {
     this.updateSurvivors(dt);
     this.updateWaves(dt);
     this.updateZombies(dt);
+    this.updateLines();
     this.checkResult();
   }
 
@@ -298,6 +348,7 @@ export class Sim {
         }
       }
       this.kills += kills;
+      if (this.scatterOn && sh.weapon.id === '105') this.scatter(sh.to, r);
       for (const s of this.survivors) {
         if (!s.alive || s.home) continue;
         const d = Math.hypot(s.x - sh.to.x, s.z - sh.to.z);
@@ -314,6 +365,54 @@ export class Sim {
       this.emit({ type: 'impact', weapon: sh.weapon.id, x: sh.to.x, z: sh.to.z, kills });
     }
     this.shells = keep;
+  }
+
+  /** Spec 002: every horde zombie a 105 left standing within SCATTER_REACH x its lethal radius runs (scatter stream only). */
+  private scatter(at: V2, r: number): void {
+    const count = new Map<number, number>();
+    for (const z of this.zombies) {
+      if (!z.alive || !z.home) continue;
+      const k = this.hordeOf.get(z.home);
+      if (k === undefined) continue;
+      const dx = z.x - at.x;
+      const dz = z.z - at.z;
+      const d = Math.hypot(dx, dz);
+      if (d >= r * SCATTER_REACH) continue;
+      const base = d > 0.01 ? Math.atan2(dz, dx) : this.srng() * Math.PI * 2;
+      const a = base + (this.srng() - 0.5) * 2 * SCATTER_WOBBLE;
+      z.scatter = 1;
+      z.scatterDir = { x: Math.cos(a), z: Math.sin(a) };
+      z.fleeUntil = this.t + FLEE_S + this.srng() * FLEE_JITTER;
+      const forest = this.mission.template === 'forest-sweep' ? FOREST_REGROUP : 1;
+      z.scatterT = this.t + (REGROUP_S + REGROUP_PER_D * (this.mission.difficulty - 1) + this.srng() * REGROUP_JITTER) * forest;
+      z.stuckT = 0;
+      z.goal = null;
+      count.set(k, (count.get(k) ?? 0) + 1);
+    }
+    // The place runners are told they'll come back to is always true (PLAN §5a): where the horde gathered,
+    // or for the drifting horde once it has moved, where it is now.
+    for (const k of count.keys()) {
+      const h = this.hordes[k];
+      h.regroup = dist(h.anchor, h.origin) > HORDE_WANDER ? placeLabel(this.map, h.anchor) : h.label;
+    }
+    if (!this.scatterSaid && count.size) {
+      this.scatterSaid = true;
+      const k = [...count.entries()].reduce((a, b) => (b[1] > a[1] ? b : a))[0];
+      this.emit({ type: 'radio', text: `They're scattering. They'll drift back to ${this.hordes[k].regroup}.` });
+    }
+  }
+
+  /** Metres from a point to its horde's path: the gathering point, or the line the drifting horde has walked. */
+  private pathDist(k: number, p: V2): number {
+    const h = this.hordes[k];
+    return distToSegment(p, h.origin, h.anchor);
+  }
+
+  /** Where scattered hordes will regroup, while any of their runners are out (feel M1: the in-flight marker). */
+  regroupPoints(): { label: string; p: V2 }[] {
+    const out = new Set<number>();
+    for (const z of this.zombies) if (z.alive && z.scatter && z.home) out.add(this.hordeOf.get(z.home)!);
+    return [...out].sort((a, b) => a - b).map((k) => ({ label: this.hordes[k].regroup, p: { ...this.hordes[k].anchor } }));
   }
 
   private updateSurvivors(dt: number): void {
@@ -476,6 +575,8 @@ export class Sim {
           this.integrity -= 0.02 * dt;
           dir = { x: 0, z: 0 };
         } else dir = grid.downhill(this.safeField, z.x, z.z);
+      } else if (z.scatter && z.home) {
+        dir = this.runnerDir(z, dt);
       } else if (z.home) {
         // Mill around the horde's gathering point.
         if (!z.goal || Math.hypot(z.goal.x - z.x, z.goal.z - z.z) < 2) {
@@ -491,6 +592,12 @@ export class Sim {
         dir = { x: Math.cos(a), z: Math.sin(a) };
       }
       // Shamble when idle, lunge when a survivor is close.
+      if (z.scatter && z.home) {
+        // Runners (spec 002): flee fast, lurk at a shamble, walk back; the leash holds whatever they do.
+        const run = near ? z.speed * 1.45 : z.speed * (z.scatter === 1 ? FLEE_MUL : z.scatter === 3 ? RETURN_MUL : 0.45);
+        this.moveRunner(z, dir, run, dt);
+        continue;
+      }
       const sp = near ? z.speed * 1.45 : z.home ? z.speed * 0.45 : z.speed;
       const nx = z.x + dir.x * sp * dt;
       const nz = z.z + dir.z * sp * dt;
@@ -502,6 +609,96 @@ export class Sim {
       else z.goal = null;
       z.vx = dir.x * sp;
       z.vz = dir.z * sp;
+    }
+  }
+
+  /** A scattered zombie's heading: flee, then lurk, then walk back and rejoin the milling (spec 002). */
+  private runnerDir(z: Zombie, dt: number): V2 {
+    const home = z.home!;
+    if (z.scatter === 1 && this.t >= z.fleeUntil!) {
+      z.scatter = 2;
+      z.goal = null;
+    }
+    if (z.scatter !== 3 && this.t >= z.scatterT!) {
+      z.scatter = 3;
+      z.stuckT = 0;
+    }
+    if (z.scatter === 1) return z.scatterDir!;
+    if (z.scatter === 2) {
+      if (!z.goal || Math.hypot(z.goal.x - z.x, z.goal.z - z.z) < 1) {
+        const a = this.srng() * Math.PI * 2;
+        const r = 2 + this.srng() * 4;
+        z.goal = { x: z.x + Math.cos(a) * r, z: z.z + Math.sin(a) * r };
+      }
+      const d = Math.hypot(z.goal.x - z.x, z.goal.z - z.z) || 1;
+      return { x: (z.goal.x - z.x) / d, z: (z.goal.z - z.z) / d };
+    }
+    const d = Math.hypot(home.x - z.x, home.z - z.z);
+    if (d <= HORDE_WANDER) {
+      z.scatter = 0;
+      z.goal = null;
+    }
+    z.stuckT = (z.stuckT ?? 0) + dt;
+    return d > 0.01 ? { x: (home.x - z.x) / d, z: (home.z - z.z) / d } : { x: 0, z: 0 };
+  }
+
+  /**
+   * The leash (spec 002 rule 3, a hard move rule): a runner's move is taken only if it ends within SCATTER_LEASH of
+   * its horde's path, or no farther from it than before. Otherwise it slides along walls and the leash, or stops.
+   */
+  private moveRunner(z: Zombie, dir: V2, sp: number, dt: number): void {
+    const k = this.hordeOf.get(z.home!)!;
+    const home = z.home!;
+    const before = this.pathDist(k, z);
+    const was = Math.hypot(home.x - z.x, home.z - z.z);
+    const ok = (x: number, zz: number) => {
+      if (this.grid.isBlocked(x, zz)) return false;
+      const d = this.pathDist(k, { x, z: zz });
+      return d <= SCATTER_LEASH || d <= before;
+    };
+    const nx = z.x + dir.x * sp * dt;
+    const nz = z.z + dir.z * sp * dt;
+    let moved = true;
+    if (ok(nx, nz)) {
+      z.x = nx;
+      z.z = nz;
+    } else if (ok(nx, z.z)) z.x = nx;
+    else if (ok(z.x, nz)) z.z = nz;
+    else {
+      moved = false;
+      if (z.scatter === 1) z.scatter = 2; // ran into a wall or the end of the leash: lurk there
+      z.goal = null;
+    }
+    z.vx = moved ? dir.x * sp : 0;
+    z.vz = moved ? dir.z * sp : 0;
+    if (z.scatter === 3) {
+      // Walking back but getting no closer (a river, a fenced block): give up and mill here, inside the leash.
+      if (Math.hypot(home.x - z.x, home.z - z.z) < was - 1e-6) z.stuckT = 0;
+      else if ((z.stuckT ?? 0) >= STUCK_S) {
+        z.scatter = 0;
+        z.goal = null;
+      }
+    }
+  }
+
+  /** Clear (radio script section C): `few-left` once at 5 or fewer, `cold-leftovers` once when all that's left is cold. */
+  private updateLines(): void {
+    if (!this.scatterOn) return;
+    let left = 0;
+    let cold = 0;
+    for (const z of this.zombies) {
+      if (!z.alive) continue;
+      left++;
+      if (z.cold) cold++;
+    }
+    if (left === 0 || left > 5) return;
+    if (cold === left && !this.coldSaid) {
+      this.coldSaid = true;
+      this.fewSaid = true; // beats few-left
+      this.emit({ type: 'line', id: 'cold-leftovers', left });
+    } else if (!this.fewSaid) {
+      this.fewSaid = true;
+      this.emit({ type: 'line', id: 'few-left', left });
     }
   }
 

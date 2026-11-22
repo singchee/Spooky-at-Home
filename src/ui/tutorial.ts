@@ -80,7 +80,8 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
   const grid = new WalkGrid(map);
   const layout = planLayout(map, graph, grid);
   if (!layout) throw new Error('no room for the training ground');
-  const sim = new Sim(trainingMission(map, layout), map, graph, grid);
+  // Training keeps today's hordes: shelled hordes don't scatter here yet (spec 002, open question 3).
+  const sim = new Sim(trainingMission(map, layout), map, graph, grid, { scatter: false });
   const steps = new TutorialSteps();
   const rng = mulberry32(0x7a11);
   let exited = false;
