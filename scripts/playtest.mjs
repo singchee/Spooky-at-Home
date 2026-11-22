@@ -884,7 +884,8 @@ async function audioChecks(browser) {
     const loaded = await read();
     out.assets = loaded?.assets;
     out.recorded = loaded?.recorded;
-    if (!(loaded?.assets?.ready === 34) || loaded.assets.failed || loaded.assets.pending) errors.push(`recorded audio not all loaded: ${JSON.stringify(loaded?.assets)}`);
+    // 36: spec 002 added the few-left and cold-leftovers voice lines (was 34).
+    if (!(loaded?.assets?.ready === 36) || loaded.assets.failed || loaded.assets.pending) errors.push(`recorded audio not all loaded: ${JSON.stringify(loaded?.assets)}`);
     if (!loaded?.recorded?.score || !loaded?.recorded?.bed) errors.push(`recorded score/bed not playing: ${JSON.stringify(loaded?.recorded)}`);
 
     // Radio voice: a barrage of requests plays one line at a time; CHECK FIRE cuts in.
