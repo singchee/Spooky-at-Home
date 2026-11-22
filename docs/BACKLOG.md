@@ -57,7 +57,7 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 | 3.24 | Generator bug: an anchored clear (e.g. tennis club) can build with 0 hordes at the place while its briefing names it ("0 hordes are on the courts"); the campaign now rejects these, single missions don't | review, map-check | todo |
 | 3.25 | Campaign store nits: first read throws → save overwrites with this session's places; clock going backwards can trim the newest place; an older build overwrites v2 data | review | todo |
 
-| 3.26 | Estimated wait while OpenStreetMap prepares the area ("Usually about 1–3 min · 0:42 so far"), from this device's own past loads | review, playtest | in-progress |
+| 3.26 | Estimated wait while OpenStreetMap prepares the area ("Usually about 1–3 min · 0:42 so far"), from this device's own past loads | review, playtest | merged to phase 3 |
 
 **Owner, 22 Nov (map source):** Overpass stays the only map source. The OpenFreeMap hybrid is dropped (research kept in docs/research/openfreemap-trial.md); no new host for the game.
 
