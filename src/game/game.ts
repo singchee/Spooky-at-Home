@@ -26,6 +26,8 @@ import { LINES, captionText, line } from '../sim/campaignText';
 import { effectiveReduceFlicker, mouseAimDelta } from './input';
 import { KEYS_SENTENCE, TOUCH_SENTENCE, keyAction, nextView, viewLabel, type ControlAction } from './controls';
 import { TouchControls } from './touchControls';
+import { LandmarkLayer } from '../ui/landmarkLayer';
+import { landmarkList, type Landmark } from '../ui/landmarks';
 
 /** The browser game: renders the simulation, handles input, camera, sound and screens. */
 export interface GameOptions {
@@ -62,6 +64,8 @@ interface TestHooks {
   aimOffset?: () => [number, number];
   /** Where a ground point appears on screen now, CSS px (the touch stick checks measure which way the aim moved). */
   screenOf?: (x: number, z: number) => [number, number];
+  /** The places that may get a landmark marker (3.19), most relevant first. */
+  landmarks?: () => { id: string; label: string; x: number; z: number }[];
 }
 
 
@@ -122,6 +126,9 @@ export class Game {
   private agents = new AgentsView();
   private effects = new Effects();
   private hud: Hud;
+  /** In-flight landmark markers (3.19): public places from the recon, never child places. */
+  private landmarks: LandmarkLayer;
+  private landmarkPlaces: Landmark[];
   private sfx = sharedSfx;
   private bot: Bot | null;
   private overlay: HTMLDivElement;
@@ -199,6 +206,8 @@ export class Game {
 
     this.hud = new Hud(container, map.attribution);
     this.hud.setMinimap(map, sim.mission);
+    this.landmarks = new LandmarkLayer(this.hud.root, container);
+    this.landmarkPlaces = landmarkList(map, sim.mission);
     this.overlay = el('div', 'overlay', undefined, container);
     this.bot = opts.bot ? new Bot(sim, SKILL.human) : null;
     if (opts.sensor) this.sensor = opts.sensor;
@@ -206,6 +215,7 @@ export class Game {
     const applySettings = () => {
       this.calm = effectiveReduceFlicker(opts.reduceFlicker, getSettings());
       this.post.uniforms.calm.value = this.calm ? 1 : 0;
+      this.landmarks.setEnabled(getSettings().showLandmarks);
     };
     applySettings();
     this.offSettings = onSettingsChange(applySettings);
@@ -241,6 +251,7 @@ export class Game {
         const p = this.screenPos({ x, z }, 0);
         return [p.x, p.y];
       };
+      hooks.landmarks = () => this.landmarkPlaces.map((l) => ({ id: l.id, label: l.label, x: l.p.x, z: l.p.z }));
       hooks.holdFire = (on) => {
         this.firing = on && this.screen === 'playing';
       };
@@ -826,7 +837,21 @@ export class Game {
       this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose(), this.touch.active);
       this.hud.updateMinimap(ac, this.aim, this.sim.survivors.filter((s) => s.alive && !s.home), this.sim.regroupPoints().map((g) => g.p));
     }
-    this.hud.setMarkers(this.markers());
+    const markers = this.markers();
+    this.hud.setMarkers(markers);
+    this.updateLandmarks(fov, markers);
+  }
+
+  /** Landmark markers this frame (3.19): projected here, decluttered and drawn by the layer. */
+  private updateLandmarks(fovDeg: number, markers: { x: number; y: number; visible: boolean }[]): void {
+    const c = this.renderer.domElement;
+    const range = this.camera.position.distanceTo(new THREE.Vector3(this.aim.x, 0, this.aim.z));
+    const viewHalf = range * Math.tan(THREE.MathUtils.degToRad(fovDeg / 2)) * Math.max(1, (c.clientWidth || 1) / (c.clientHeight || 1));
+    const items = this.landmarkPlaces.map((l) => {
+      const s = this.screenPos(l.p, 2);
+      return { id: l.id, label: l.label, priority: l.priority, x: s.x, y: s.y, visible: s.visible, aimDist: Math.hypot(l.p.x - this.aim.x, l.p.z - this.aim.z) };
+    });
+    this.landmarks.update(items, { now: performance.now() / 1000, zoom: this.zoom, viewHalf, markers });
   }
 
   /**
@@ -929,7 +954,7 @@ export class Game {
     this.disposed = true;
     // Test hooks must not outlive this game (they'd point at a dead one).
     const hooks = window.__spooky as TestHooks | undefined;
-    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf'] as const) delete hooks[k];
+    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf', 'landmarks'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
     audio.release('mission');
     this.offSettings();
