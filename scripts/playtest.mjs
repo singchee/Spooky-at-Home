@@ -956,12 +956,23 @@ async function wayInChecks(browser) {
   const sendJson = (route, body, status = 200) => route.fulfill({ status, headers: cors, contentType: 'application/json', body: JSON.stringify(body) });
   const isGeocode = (url) => url.includes('nominatim.openstreetmap.org');
   const foundPlace = (route) => sendJson(route, [{ lat: String(OCEAN.lat), lon: String(OCEAN.lon), display_name: `${PLACE}, Nowhere` }]);
+  /** The map comes in two parts (3.23): the core, then the extras (trees, street lamps, bus routes). */
+  const isExtras = (route) => (route.request().postData() ?? '').includes('street_lamp');
+  /** Trees, lamps and a bus route for the ocean town: only looks, never missions. */
+  function oceanExtras() {
+    const els = [];
+    let id = 100000;
+    for (let k = 0; k < 60; k++) els.push({ type: 'node', id: id++, ...oceanLL(-480 + (k % 10) * 100 + 8, -480 + Math.floor(k / 10) * 100 + 8), tags: { natural: 'tree' } });
+    for (let k = 0; k < 20; k++) els.push({ type: 'node', id: id++, ...oceanLL(-500 + k * 50, 2), tags: { highway: 'street_lamp' } });
+    els.push({ type: 'relation', id: id++, tags: { route: 'bus', ref: '7', name: 'Reef Loop' }, members: [{ type: 'way', ref: 1, role: '', geometry: [oceanLL(0, -520), oceanLL(0, 520)] }] });
+    return { elements: els };
+  }
   /** How the fake OpenStreetMap answers in each scenario. */
   const OSM = {
     ok: (delay) => async (route, url) => {
       if (isGeocode(url)) return foundPlace(route);
       await new Promise((r) => setTimeout(r, delay));
-      return sendJson(route, oceanTown()).catch(() => undefined); // the page may have cancelled meanwhile
+      return sendJson(route, isExtras(route) ? oceanExtras() : oceanTown()).catch(() => undefined); // the page may have cancelled meanwhile
     },
     offline: () => (route) => route.abort('internetdisconnected'),
     notFound: () => (route, url) => (isGeocode(url) ? sendJson(route, []) : route.abort('failed')),
@@ -981,6 +992,8 @@ async function wayInChecks(browser) {
     const page = await browser.newPage({ viewport, deviceScaleFactor: scale });
     const errs = [];
     const osmCalls = [];
+    /** Per OSM call: 'geocode', 'core' or 'extras'. */
+    const osmParts = [];
     page.on('pageerror', (e) => errs.push(String(e)));
     // A refused request logs "Failed to load resource" in the console: expected here, not a page error.
     page.on('console', (m) => m.type() === 'error' && !/Failed to load resource/.test(m.text()) && errs.push(m.text()));
@@ -989,14 +1002,89 @@ async function wayInChecks(browser) {
       if (url.startsWith(`http://localhost:${PORT}/`)) return route.continue();
       if (OSM_HOST.test(url)) {
         osmCalls.push(url);
+        osmParts.push(isGeocode(url) ? 'geocode' : isExtras(route) ? 'extras' : 'core');
         return answer(route, url);
       }
       errs.push(`request to a host that isn't allowed: ${url}`);
       return route.abort('blockedbyclient');
     });
     if (path) await page.goto(`http://localhost:${PORT}${path}`); // null: the caller navigates
-    return { page, errs, osmCalls };
+    return { page, errs, osmCalls, osmParts };
   }
+
+  /**
+   * For the streaming scenarios (3.23): a stand-in for fetch() to the OSM hosts, inside the page, so an
+   * answer can arrive slowly, in pieces, with or without its size, or never. Playwright's route.fulfill
+   * sends a body all at once. Every other request still goes through wayInPage's route check.
+   * plan[part][host] (or plan[part].any): 'hang' (no answer until cancelled), 'fail', or
+   * { delay: ms before the first byte, chunks, gap: ms between chunks, length: send Content-Length }.
+   */
+  function slowOsm({ plan, town, extras, geocode }) {
+    const real = window.fetch.bind(window);
+    window.__osm = [];
+    const wait = (ms, signal) => new Promise((res, rej) => {
+      const t = setTimeout(res, ms);
+      signal?.addEventListener('abort', () => {
+        clearTimeout(t);
+        rej(new DOMException('aborted', 'AbortError'));
+      });
+    });
+    window.fetch = async (input, init = {}) => {
+      const url = String(input?.url ?? input);
+      const m = /^https:\/\/(nominatim\.openstreetmap\.org|overpass-api\.de|overpass\.kumi\.systems)\//.exec(url);
+      if (!m) return real(input, init);
+      const host = m[1];
+      const part = host.startsWith('nominatim') ? 'geocode' : String(init.body ?? '').includes('street_lamp') ? 'extras' : 'core';
+      window.__osm.push({ host, part, at: Date.now() });
+      const signal = init.signal;
+      if (part === 'geocode') return new Response(JSON.stringify(geocode), { headers: { 'content-type': 'application/json' } });
+      const how = plan[part]?.[host] ?? plan[part]?.any ?? 'fail';
+      if (how === 'hang') await new Promise((_, rej) => signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))));
+      if (how === 'fail') {
+        await wait(300, signal);
+        throw new TypeError('Failed to fetch');
+      }
+      await wait(how.delay, signal); // the server working out the area
+      const bytes = new TextEncoder().encode(JSON.stringify(part === 'core' ? town : extras));
+      const size = Math.ceil(bytes.length / how.chunks);
+      let i = 0;
+      const body = new ReadableStream({
+        async pull(c) {
+          try {
+            if (i) await wait(how.gap, signal);
+          } catch (e) {
+            c.error(e);
+            return;
+          }
+          if (i * size >= bytes.length) c.close();
+          else c.enqueue(bytes.slice(i * size, ++i * size));
+        },
+      });
+      return new Response(body, { headers: { 'content-type': 'application/json', ...(how.length ? { 'content-length': String(bytes.length) } : {}) } });
+    };
+  }
+  const slowPlan = (plan) => ({ plan, town: oceanTown(), extras: oceanExtras(), geocode: [{ lat: String(OCEAN.lat), lon: String(OCEAN.lon), display_name: `${PLACE}, Nowhere` }] });
+  /** Waits until the extras have either arrived or quietly failed on the recon screen. */
+  const extrasSettled = (page) => page.waitForFunction(() => {
+    const n = document.querySelector('.recon .recon-extras');
+    return !!n && (n.hidden || /added/.test(n.textContent ?? ''));
+  }, null, { timeout: 20000 });
+  const readoutState = (page) => page.evaluate(() => ({
+    text: document.querySelector('.scout-load-text:not([hidden])')?.textContent ?? null,
+    server: document.querySelector('.scout-server:not([hidden])')?.textContent ?? null,
+    elapsed: document.querySelector('.scout-elapsed')?.textContent ?? null,
+    mode: document.querySelector('.scout-sweep')?.dataset.mode ?? null,
+    width: document.querySelector('.scout-sweep span')?.style.width ?? '',
+    anim: getComputedStyle(document.querySelector('.scout-sweep span')).animationName,
+    stage: document.querySelector('.scout-stages li[data-state=active]')?.textContent ?? null,
+    role: document.querySelector('.scout-progress')?.getAttribute('role') ?? null,
+    hiddenFromSr: document.querySelector('.scout-load')?.getAttribute('aria-hidden') === 'true',
+    cancel: document.querySelector('.scout-cancel')?.getBoundingClientRect().height ?? 0,
+  }));
+  const secs = (clock) => {
+    const m = /^(\d+):(\d\d)$/.exec(clock ?? '');
+    return m ? Number(m[1]) * 60 + Number(m[2]) : NaN;
+  };
 
   /** Type a place and send it (Enter, or the main button). Records each loading stage as it becomes active. */
   async function scoutFor(page, text, how = 'enter') {
@@ -1192,7 +1280,7 @@ async function wayInChecks(browser) {
   //    OpenStreetMap request and says it came from this device; Refresh downloads it again (map only);
   //    Forget this place and Forget all saved places (Settings) remove it. Still the stubbed OSM.
   {
-    const { page, errs, osmCalls } = await wayInPage(browser, desktop, OSM.ok(300));
+    const { page, errs, osmCalls, osmParts } = await wayInPage(browser, desktop, OSM.ok(300));
     const toRecon = async (text) => {
       await scoutFor(page, text);
       await page.waitForSelector('.menu .recon .recon-cards > *', { timeout: 20000 });
@@ -1207,7 +1295,10 @@ async function wayInChecks(browser) {
 
     await toRecon('Test Reef');
     const first = await note();
+    // The extras follow the core (3.23); once they're in, the saved copy is complete.
+    await extrasSettled(page).catch(() => errs.push('the extras never settled after the first scout'));
     const afterFirst = osmCalls.length;
+    if (osmParts.join(',') !== 'geocode,core,extras') errs.push(`first scout: expected a search, the core and the extras: ${osmParts.join(',')}`);
     if (!/^Saved on this device, so next time it opens instantly/.test(first ?? '')) errs.push(`no "saved on this device" note after a download: ${first}`);
     if (!/never sent anywhere/.test(first ?? '')) errs.push(`no privacy note by the saved place: ${first}`);
     if (afterFirst < 2) errs.push(`first scout didn't search and download: ${osmCalls.join(', ')}`);
@@ -1223,11 +1314,13 @@ async function wayInChecks(browser) {
     shots.saved = `${out}/wayin-saved-place-desktop.png`;
     await page.screenshot({ path: shots.saved });
 
-    // Refresh: downloads the map again (no new place search), and keeps it.
+    // Refresh: downloads the map again (no new place search), and keeps it. Since 3.23 "the map" is two
+    // requests: the core once, then the extras once.
     await page.click('.recon-refresh');
     await page.waitForSelector('.menu .recon .recon-cards > *', { timeout: 20000 });
-    const refreshed = osmCalls.slice(afterFirst);
-    if (refreshed.length !== 1 || isGeocode(refreshed[0])) errs.push(`Refresh should download the map once and not search again: ${refreshed.join(', ')}`);
+    await extrasSettled(page).catch(() => errs.push('the extras never settled after Refresh'));
+    const refreshed = osmParts.slice(afterFirst);
+    if (refreshed.join(',') !== 'core,extras') errs.push(`Refresh should download the core once and the extras once, and not search again: ${refreshed.join(', ')}`);
     if (!/^Saved on this device/.test((await note()) ?? '')) errs.push(`after Refresh: ${await note()}`);
 
     // Forget this place: gone, and the next scout downloads afresh.
@@ -1260,7 +1353,7 @@ async function wayInChecks(browser) {
 
   // 7. A browser that refuses storage (private window, blocked site data) still scouts, just without saving.
   {
-    const { page, errs, osmCalls } = await wayInPage(browser, desktop, OSM.ok(200), null);
+    const { page, errs, osmParts } = await wayInPage(browser, desktop, OSM.ok(200), null);
     await page.addInitScript(() => {
       Object.defineProperty(window, 'indexedDB', { get() { throw new DOMException('blocked', 'SecurityError'); } });
     });
@@ -1273,8 +1366,157 @@ async function wayInChecks(browser) {
       if (await page.$('.recon-saved')) errs.push('claims the place is saved when storage is blocked');
       if (i === 0) await page.click('.recon-change');
     }
-    if (osmCalls.length !== 4) errs.push(`expected two searches and two downloads without storage: ${osmCalls.length}`);
+    // Two searches and two map downloads (core); each scout's extras may or may not have been asked for yet.
+    const count = (p) => osmParts.filter((x) => x === p).length;
+    if (count('geocode') !== 2 || count('core') !== 2) errs.push(`expected two searches and two downloads without storage: ${osmParts.join(',')}`);
     res.push({ type: 'way in: storage blocked (private window)', errors: errs });
+    await page.close();
+  }
+
+  // 8. The honest download readout and the two-part load (3.23, 3.20, 3.22), with answers that arrive slowly.
+  const WAITING = "OpenStreetMap is preparing your area — this can take a minute or two when it's busy";
+  const missionTitles = (page) => page.$$eval('.recon .mission-card h4', (hs) => hs.map((h) => h.textContent).join(' | '));
+
+  // 8a. A slow server, then a download of unknown size: "preparing" with a running clock and a moving bar, then
+  //     bytes. Recon comes on the core; the extras arrive later and change the map, not the missions.
+  {
+    const { page, errs } = await wayInPage(browser, desktop, OSM.none(), null);
+    await page.addInitScript(slowOsm, slowPlan({
+      core: { any: { delay: 4000, chunks: 12, gap: 450, length: false } },
+      extras: { any: { delay: 3500, chunks: 3, gap: 200, length: true } },
+    }));
+    await page.goto(`http://localhost:${PORT}/?screen=scout`);
+    await page.evaluate(() => {
+      window.__spoken = [];
+      new MutationObserver(() => window.__spoken.push(document.querySelector('.scout-spoken')?.textContent)).observe(document.querySelector('.scout-spoken'), { childList: true, characterData: true, subtree: true });
+    });
+    const shots = {};
+    await scoutFor(page, 'Test Reef');
+    await page.waitForFunction((w) => document.querySelector('.scout-load-text:not([hidden])')?.textContent === w, WAITING, { timeout: 10000 });
+    const w1 = await readoutState(page);
+    await page.waitForTimeout(2100);
+    const w2 = await readoutState(page);
+    if (w1.mode !== 'waiting' || w1.anim !== 'scout-sweep') errs.push(`while the server works: a moving bar, not a fill (${w1.mode}, ${w1.anim})`);
+    if (!/^Downloading streets and buildings…$/.test(w1.stage ?? '')) errs.push(`stage while waiting: ${w1.stage}`);
+    if (!/Asking overpass-api\.de/.test(w1.server ?? '')) errs.push(`doesn't say which server: ${w1.server}`);
+    if (!(secs(w2.elapsed) >= secs(w1.elapsed) + 1)) errs.push(`the elapsed clock doesn't run: ${w1.elapsed} → ${w2.elapsed}`);
+    if (/%/.test(JSON.stringify(w2))) errs.push('a percentage while nothing is known');
+    if (w1.role !== 'status' || !w1.hiddenFromSr) errs.push('readout: the busy numbers should be hidden from screen readers, with a status line instead');
+    if (w1.cancel < 44) errs.push(`Cancel is too small to tap: ${w1.cancel}px`);
+    shots.waiting = `${out}/wayin-progress-waiting-desktop.png`;
+    await page.screenshot({ path: shots.waiting });
+    await page.waitForFunction(() => /^Downloading… \d+ KB$/.test(document.querySelector('.scout-load-text')?.textContent ?? ''), null, { timeout: 10000 });
+    const b = await readoutState(page);
+    if (b.mode !== 'bytes' || b.width) errs.push(`unknown size: bytes and a moving bar, never a fill (${b.mode}, ${b.width})`);
+    if (!/overpass-api\.de is answering/.test(b.server ?? '')) errs.push(`server while downloading: ${b.server}`);
+    shots.bytes = `${out}/wayin-progress-bytes-desktop.png`;
+    await page.screenshot({ path: shots.bytes });
+    await page.waitForSelector('.menu .recon .recon-cards > *', { timeout: 20000 });
+    const before = await missionTitles(page);
+    const pending = await page.textContent('.recon .recon-extras');
+    if (!/still on their way/.test(pending ?? '')) errs.push(`recon doesn't say the extras are coming: ${pending}`);
+    const treesBefore = await page.$$eval('.recon .tm-tree', (t) => t.length);
+    shots.reconPending = `${out}/wayin-recon-extras-pending-desktop.png`;
+    await page.screenshot({ path: shots.reconPending });
+    await extrasSettled(page).catch(() => errs.push('the extras never arrived'));
+    const after = await page.evaluate(() => ({
+      note: document.querySelector('.recon .recon-extras')?.textContent ?? '',
+      counts: document.querySelector('.recon .recon-counts')?.textContent ?? '',
+      trees: document.querySelectorAll('.recon .tm-tree').length,
+      bus: document.querySelectorAll('.recon .recon-code.fam-transport').length,
+      timing: document.querySelector('.recon .recon-timing:not([hidden])')?.textContent ?? '',
+    }));
+    if (!/added/.test(after.note) || !/60 mapped trees · 20 street lamps/.test(after.counts) || !after.trees || treesBefore || !after.bus) errs.push(`the extras didn't merge into the map: ${JSON.stringify({ ...after, treesBefore })}`);
+    if ((await missionTitles(page)) !== before) errs.push(`the extras changed the suggested missions: ${before} → ${await missionTitles(page)}`);
+    if (!/^Loaded in [\d:.]+(?: s)? \(server \S+ s, download \S+ s, build \S+ s\) from overpass-api\.de · trees, lamps and bus routes \S+ s later$/.test(after.timing)) errs.push(`timing line: ${after.timing}`);
+    const spoken = await page.evaluate(() => window.__spoken.filter(Boolean));
+    if (spoken.length > 6) errs.push(`screen readers hear the readout too often (${spoken.length} times for 12 chunks): ${spoken.join(' / ')}`);
+    if (!spoken.some((s) => /Waiting for OpenStreetMap/.test(s)) || !spoken.some((s) => /Downloading/.test(s))) errs.push(`screen readers miss a stage: ${spoken.join(' / ')}`);
+    shots.reconAdded = `${out}/wayin-recon-extras-added-desktop.png`;
+    await page.screenshot({ path: shots.reconAdded });
+    res.push({ type: 'way in: slow server, streamed bytes, extras merge later (desktop)', errors: errs, timing: after.timing, spoken: spoken.join(' / '), shots });
+    await page.close();
+  }
+
+  // 8b. A known size on a phone: a fill that only grows, "x KB of y KB"; reduced motion: a still bar.
+  for (const reduced of [false, true]) {
+    const { page, errs } = await wayInPage(browser, phone, OSM.none(), null);
+    if (reduced) await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.addInitScript(slowOsm, slowPlan({ core: { any: { delay: 2500, chunks: 10, gap: 500, length: true } }, extras: { any: { delay: 500, chunks: 1, gap: 0, length: true } } }));
+    await page.goto(`http://localhost:${PORT}/?screen=scout`);
+    await scoutFor(page, 'Test Reef', 'click');
+    await page.waitForFunction((w) => document.querySelector('.scout-load-text')?.textContent === w, WAITING, { timeout: 10000 });
+    const w = await readoutState(page);
+    if (reduced && w.anim !== 'none') errs.push(`reduced motion: the bar still moves (${w.anim})`);
+    if (!reduced && w.anim !== 'scout-sweep') errs.push(`the bar doesn't move while waiting (${w.anim})`);
+    await page.waitForFunction(() => /^Downloading… \d+ KB of \d+ KB$/.test(document.querySelector('.scout-load-text')?.textContent ?? ''), null, { timeout: 10000 });
+    const widths = [];
+    for (let i = 0; i < 4; i++) {
+      const s = await readoutState(page);
+      if (s.mode === 'determinate') widths.push(parseFloat(s.width));
+      await page.waitForTimeout(450);
+    }
+    if (widths.length < 2 || widths.some((v, i) => !(v >= 0 && v <= 100) || (i && v < widths[i - 1]))) errs.push(`a known size: the fill should only grow, 0–100%: ${widths.join(', ')}`);
+    const tag = reduced ? 'phone-reduced-motion' : 'phone';
+    const shot = `${out}/wayin-progress-known-size-${tag}.png`;
+    await page.screenshot({ path: shot });
+    errs.push(...(await overlapCheck(page, '.menu-back', ['.scout .card-kicker', '.scout h1'])));
+    await page.waitForSelector('.menu .recon .recon-cards > *', { timeout: 20000 });
+    res.push({ type: `way in: download of known size (${tag})`, errors: errs, widths: widths.join(', '), shots: { progress: shot } });
+    await page.close();
+  }
+
+  // 8c. The first server never answers: after 45 s the game says so and asks the other one (never both at once).
+  //     The page clock is fast-forwarded past the limit rather than waited out.
+  {
+    const { page, errs } = await wayInPage(browser, desktop, OSM.none(), null);
+    await page.clock.install();
+    await page.addInitScript(slowOsm, slowPlan({
+      core: { 'overpass-api.de': 'hang', 'overpass.kumi.systems': { delay: 1500, chunks: 4, gap: 300, length: true } },
+      extras: { 'overpass.kumi.systems': { delay: 500, chunks: 1, gap: 0, length: true } },
+    }));
+    await page.goto(`http://localhost:${PORT}/?screen=scout`);
+    await scoutFor(page, 'Test Reef');
+    await page.waitForFunction((w) => document.querySelector('.scout-load-text')?.textContent === w, WAITING, { timeout: 10000 });
+    await page.clock.fastForward('00:46');
+    await page.waitForFunction(() => /kumi/.test(document.querySelector('.scout-server')?.textContent ?? ''), null, { timeout: 10000 });
+    const f = await readoutState(page);
+    if (!/^ · No answer from overpass-api\.de within 45 seconds, so now asking overpass\.kumi\.systems$/.test(f.server ?? '')) errs.push(`fallback not explained: ${f.server}`);
+    if (!(secs(f.elapsed) >= 46)) errs.push(`elapsed clock after the wait: ${f.elapsed}`);
+    const shot = `${out}/wayin-progress-fallback-desktop.png`;
+    await page.screenshot({ path: shot });
+    await page.waitForSelector('.menu .recon .recon-cards > *', { timeout: 20000 });
+    await extrasSettled(page).catch(() => errs.push('extras never settled after a fallback'));
+    const calls = await page.evaluate(() => window.__osm.filter((c) => c.part !== 'geocode'));
+    const order = calls.map((c) => `${c.part}@${c.host}`).join(', ');
+    if (order !== 'core@overpass-api.de, core@overpass.kumi.systems, extras@overpass.kumi.systems') errs.push(`servers asked: ${order}`);
+    if (calls.length >= 2 && calls[1].at - calls[0].at < 45000) errs.push(`the second server was asked before the first one's 45 s were up (${calls[1].at - calls[0].at} ms)`);
+    const timing = await page.textContent('.recon .recon-timing');
+    if (!/^Loaded in [\d:.]+(?: s)? \(server 4\d s, .* from overpass\.kumi\.systems/.test(timing ?? '')) errs.push(`timing line after a fallback: ${timing}`);
+    res.push({ type: 'way in: first server times out, the other answers', errors: errs, order, timing, shots: { fallback: shot } });
+    await page.close();
+  }
+
+  // 8d. The extras fail: nothing to see. No error, no alert, and the same missions.
+  {
+    const { page, errs } = await wayInPage(browser, desktop, OSM.none(), null);
+    await page.addInitScript(slowOsm, slowPlan({ core: { any: { delay: 300, chunks: 2, gap: 100, length: true } }, extras: { any: 'fail' } }));
+    await page.goto(`http://localhost:${PORT}/?screen=scout`);
+    await scoutFor(page, 'Test Reef');
+    await page.waitForSelector('.menu .recon .recon-cards > *', { timeout: 20000 });
+    const before = await missionTitles(page);
+    await extrasSettled(page).catch(() => errs.push('failed extras left a note on screen'));
+    await page.waitForTimeout(300);
+    const st = await page.evaluate(() => ({
+      alerts: [...document.querySelectorAll('[role=alert]')].filter((e) => !e.closest('[hidden]') && e.textContent?.trim()).map((e) => e.textContent),
+      note: document.querySelector('.recon .recon-extras:not([hidden])')?.textContent ?? null,
+      recon: !!document.querySelector('.menu .recon'),
+      extrasAsked: window.__osm.filter((c) => c.part === 'extras').length,
+    }));
+    if (st.alerts.length || st.note || !st.recon) errs.push(`failed extras weren't silent: ${JSON.stringify(st)}`);
+    if (st.extrasAsked < 1 || st.extrasAsked > 2) errs.push(`extras asked ${st.extrasAsked} times (one per server at most)`);
+    if ((await missionTitles(page)) !== before) errs.push('failed extras changed the missions');
+    res.push({ type: 'way in: extras fail silently', errors: errs });
     await page.close();
   }
   return res;

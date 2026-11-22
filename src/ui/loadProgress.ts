@@ -22,6 +22,7 @@ export function formatClock(ms: number): string {
 /** A finished duration: "0.4 s", "8 s", "1:42". */
 export function formatDuration(ms: number): string {
   const s = Math.max(0, ms) / 1000;
+  if (s < 0.05) return '<0.1 s';
   if (s < 1) return `${s.toFixed(1)} s`;
   if (s < 60) return `${Math.round(s)} s`;
   return formatClock(ms);
@@ -57,7 +58,7 @@ export function readout(p: DownloadProgress, elapsedMs: number, what = 'the map'
   const server = p.movedOn ? `${cap(p.movedOn)}, so now asking ${p.host}` : `Asking ${p.host}`;
   const clock = spokenClock(elapsedMs);
   if (p.stage === 'waiting') {
-    return { text: WAITING_TEXT, server, bar: 'waiting', fraction: null, spoken: `Waiting for OpenStreetMap to prepare ${what}, ${clock} so far.` };
+    return { text: WAITING_TEXT, server, bar: 'waiting', fraction: null, spoken: elapsedMs < 1000 ? `Waiting for OpenStreetMap to prepare ${what}.` : `Waiting for OpenStreetMap to prepare ${what}, ${clock} so far.` };
   }
   const fraction = progressFraction(p.bytes, p.total);
   const text = fraction !== null ? `Downloading… ${formatBytes(p.bytes)} of ${formatBytes(p.total!)}` : `Downloading… ${formatBytes(p.bytes)}`;
@@ -66,7 +67,11 @@ export function readout(p: DownloadProgress, elapsedMs: number, what = 'the map'
     server: p.movedOn ? server : `${p.host} is answering`,
     bar: fraction !== null ? 'determinate' : 'bytes',
     fraction,
-    spoken: fraction !== null ? `Downloading ${what}, ${Math.floor(fraction * 100)} percent.` : `Downloading ${what}, ${formatBytes(p.bytes).replace('MB', 'megabytes').replace('KB', 'kilobytes')} so far.`,
+    spoken: !p.bytes
+      ? `Downloading ${what}.`
+      : fraction !== null
+        ? `Downloading ${what}, ${Math.floor(fraction * 100)} percent.`
+        : `Downloading ${what}, ${formatBytes(p.bytes).replace('MB', 'megabytes').replace('KB', 'kilobytes')} so far.`,
   };
 }
 

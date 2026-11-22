@@ -247,8 +247,10 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
     fetchOverpassTimed(place, HALF, c.signal, { part: 'extras', preferHost })
       .then(async ({ json }) => {
         if (c.signal.aborted) return;
-        // Once a mission has started, the map it flies is left alone; the copy on this device still gets them.
-        if (alive && map === m) {
+        // The copy on this device first (only if it's still saved: Forget wins), so a scout right after finds it complete.
+        await cache.update(place.lat, place.lon, joinParts(core, json));
+        // Once a mission has started, the map it flies is left alone.
+        if (alive && map === m && !c.signal.aborted) {
           addExtras(m, json, place);
           if (loadInfo?.map === m) {
             loadInfo.extras = 'added';
@@ -257,7 +259,6 @@ export function showMenu(parent: HTMLElement, onStart: (c: MenuChoice) => void, 
           recon?.extras('added');
           if (loadInfo?.map === m && loadInfo.timing) recon?.timing(loadInfo.timing);
         }
-        await cache.update(place.lat, place.lon, joinParts(core, json));
       })
       .catch(() => {
         if (c.signal.aborted) return;

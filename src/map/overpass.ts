@@ -351,8 +351,8 @@ export async function fetchOverpassTimed(origin: LatLon, half: number, signal?: 
       const kind = classifyMapError(err);
       kinds.push(kind);
       movedOn = gaveUp === 'wait'
-        ? `${host} didn't answer within ${Math.round(limit / 1000)} seconds`
-        : kind === 'offline' ? `couldn't reach ${host}` : `${host} was too busy`;
+        ? `no answer from ${host} within ${Math.round(limit / 1000)} seconds`
+        : kind === 'offline' ? `couldn't reach ${host}` : `the server at ${host} was too busy`;
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', cancel);

@@ -146,7 +146,7 @@ describe('per-server time limits (3.20)', () => {
     expect(calls.map((c) => c.timeout)).toEqual([45, 75]);
     expect(stats).toMatchObject({ host: HOSTS[1], attempts: 2 });
     expect(stats.waitMs).toBeGreaterThanOrEqual(45_000);
-    expect(seen.find((s) => s.attempt === 1)?.movedOn).toBe("overpass-api.de didn't answer within 45 seconds");
+    expect(seen.find((s) => s.attempt === 1)?.movedOn).toBe('no answer from overpass-api.de within 45 seconds');
   });
 
   it('when nobody answers, gives up after the overall limit with the plain-English "busy"', async () => {
@@ -247,6 +247,7 @@ describe('progress maths (honest by rule)', () => {
     expect(formatClock(7_900)).toBe('0:07');
     expect(formatClock(102_000)).toBe('1:42');
     expect(formatDuration(400)).toBe('0.4 s');
+    expect(formatDuration(20)).toBe('<0.1 s');
     expect(formatDuration(8_200)).toBe('8 s');
     expect(formatDuration(91_000)).toBe('1:31');
   });
@@ -271,8 +272,8 @@ describe('progress maths (honest by rule)', () => {
     expect(d).toMatchObject({ text: 'Downloading… 2.4 MB of 4.8 MB', bar: 'determinate', fraction: 0.5 });
     const z = readout({ ...base, stage: 'downloading', bytes: 9_000_000, total: 4_800_000 }, 40_000);
     expect(z).toMatchObject({ bar: 'bytes', fraction: null, text: 'Downloading… 9.0 MB' });
-    const f = readout({ ...base, host: 'overpass.kumi.systems', attempt: 1, movedOn: "overpass-api.de didn't answer within 45 seconds" }, 46_000);
-    expect(f.server).toBe("Overpass-api.de didn't answer within 45 seconds, so now asking overpass.kumi.systems");
+    const f = readout({ ...base, host: 'overpass.kumi.systems', attempt: 1, movedOn: 'no answer from overpass-api.de within 45 seconds' }, 46_000);
+    expect(f.server).toBe('No answer from overpass-api.de within 45 seconds, so now asking overpass.kumi.systems');
   });
 
   it('screen readers hear a change of stage at once, and otherwise at most every so often', () => {
