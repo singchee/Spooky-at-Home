@@ -2166,9 +2166,13 @@ async function controlsChecks(browser) {
         const r = document.querySelector(s)?.getBoundingClientRect();
         return r && r.width ? [r.left + r.width / 2, r.top + r.height / 2] : null;
       }, sel);
+      // A tap lifted 80 ms after touching, with those times on the events as a real screen stamps them. Without
+      // times, Chrome stamps each event when the (busy, software-rendered) page gets round to it, and a quick tap
+      // can look over a second long, so it no longer counts as a tap.
       const tapAt = async ([x, y]) => {
-        await touch('touchStart', [[x, y]]);
-        await touch('touchEnd', []); // straight away: a busy machine already stretches the gap
+        const t = Date.now() / 1000;
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', timestamp: t, touchPoints: [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', timestamp: t + 0.08, touchPoints: [] });
         await page.waitForTimeout(150);
       };
       out_.coarse = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
@@ -2344,15 +2348,16 @@ async function controlsChecks(browser) {
   // all of it again after turning the tablet round.
   for (const deviceName of ['Galaxy Tab S4 landscape', 'Galaxy Tab S4']) {
     const device = devices[deviceName];
-    const { page, errs } = await gamePage(browser, 'autostart=1&brief=1&type=escort&difficulty=1&seed=3', { ...device });
+    const { page, errs } = await gamePage(browser, 'autostart=1&brief=1&gfx=low&type=escort&difficulty=1&seed=3', { ...device });
     page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
     const out_ = { type: `controls: thumb stick and tap on ${deviceName} (Android Chrome, via the briefing)`, errors: errs, shots: {} };
     try {
       const cdp = await page.context().newCDPSession(page);
       const finger = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y, id = 1]) => ({ x, y, id, radiusX: 12, radiusY: 12, force: 1 })) });
       const tapAt = async ([x, y]) => {
-        await finger('touchStart', [[x, y]]);
-        await finger('touchEnd', []);
+        const t = Date.now() / 1000; // hardware-like event times (see the touch checks above)
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', timestamp: t, touchPoints: [{ x, y, id: 1, radiusX: 12, radiusY: 12, force: 1 }] });
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', timestamp: t + 0.08, touchPoints: [] });
         await page.waitForTimeout(150);
       };
       const centreOf = (sel) =>
@@ -2362,8 +2367,11 @@ async function controlsChecks(browser) {
         }, sel);
       // The briefing, then "Start mission" with a finger, as the owner does.
       await page.waitForFunction(() => [...document.querySelectorAll('.overlay button')].some((b) => b.textContent === 'Start mission' && b.getBoundingClientRect().width));
+      // (In portrait the briefing scrolls: bring the button on screen first, as a player would.)
       await tapAt(await page.evaluate(() => {
-        const r = [...document.querySelectorAll('.overlay button')].find((b) => b.textContent === 'Start mission').getBoundingClientRect();
+        const b = [...document.querySelectorAll('.overlay button')].find((b) => b.textContent === 'Start mission');
+        b.scrollIntoView({ block: 'center' });
+        const r = b.getBoundingClientRect();
         return [r.left + r.width / 2, r.top + r.height / 2];
       }));
       await waitInfo(page, () => window.__spooky.info().screen === 'playing');
