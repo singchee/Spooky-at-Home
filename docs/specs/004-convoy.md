@@ -170,3 +170,89 @@ Escort is about people on foot. They spread out, they can be grabbed from any si
 
 ## Owner decision (22 Nov 2026)
 Approved with the Game Director's recommendations: Ground's trucks carry evacuees; built as an Escort variant through a template; a single zombie can stop a truck in v1. Queued after Horde Night (003) and the campaign's finale and screens (001).
+
+---
+## Feel & access review  *(feel-designer, /plan, 22 Nov 2026)*
+I checked this spec against today's code: the HUD (`src/ui/hud.ts`), the `DANGER CLOSE` check (`Game.dangerClose`, `src/game/game.ts`), the sim's friendly-fire and near-miss loop (`Sim.updateShells`), the orbit (`Sim.aircraft`: fixed centre, 1 km radius, 120 s lap), the strobes (`AgentsView`, one shared 1 Hz blink), the motion rules (`src/ui/motion.ts`), the touch controls and the radio and voice mapping.
+
+Two facts drive most of what follows:
+- **Shell flight time.** At about 1.8 km slant range, the 105 (500 m/s) takes about **3.6 s** to land, the 40 about 2 s and the 25 about 1.6 s. A truck at 5 m/s covers **about 18 m** while a 105 round is in the air.
+- **Distances.** Today's warning distance (`radius × 1.6 + 4`) is 30 m for the 105, 15 m for the 40 and 9 m for the 25. The sim's kill reach is 24 m, 10.5 m and 4.5 m. The stop zone is 12 m. So a blocker standing in the stop zone can't be shelled with the 105, and only just with the 40, without hitting the lead truck. That's the danger-close decision the mode wants, but the player has to be told it plainly.
+
+**Must fix**
+- **M1. DANGER CLOSE must cover where the truck *will be* when the round lands, measured from the truck's outline.** Today's check uses survivors only, measured from their centres, at the moment the player fires. For a moving truck that's wrong in both directions: a truck can drive into a 105 blast that was aimed safely ahead of it. The check needs to:
+  - include trucks, measuring from the truck's outline, not its centre;
+  - for each truck, cover the stretch of route it will drive during the current gun's flight time (at its current speed, or at cruise if it's about to move off);
+  - use **one shared function** for the HUD warning, the sim's near-miss radio event (which today loops over survivors only), Training (`tutorial.ts` copies the rule) and the briefing number. That way the briefing's "about N m" is the real number (hard rule 9).
+
+  The briefing gives a plain rule per gun, not just the 105's number: *"Near the trucks, use the 25. The 40 is danger close inside about 15 m, the 105 inside about 30 m, and the trucks keep driving while your round is in the air."*
+
+  Test: a truck driving towards a 105 aim point that's outside the warning distance now, but inside it by impact time, shows `DANGER CLOSE`.
+- **M2. A minimal per-truck label now; the full 3.33 tracking box stays later.** The HUD's `T2 64` is useless if the player can't tell which truck on screen is T2. §3 already asks for a per-truck marker that changes on danger close.
+  - **What it is:** a short label above each truck (`T1`…`T5`) using the existing `.hud-marker` style (14 px or more, dark outline, reads in both polarities and in night vision).
+  - **Rules taken from 3.33:**
+    - It sits **above** the truck, never around it, so it never covers a zombie beside the truck.
+    - It's moved every frame with no lag.
+    - It never flashes.
+  - **How it changes:**
+    - **Danger close:** the label gets a solid backing box and a `!` (`T2 !`). That's a change of shape and text, not colour alone.
+    - **Out of action:** it reads `T2 OUT` and stays, so the truck doesn't turn into one more parked car.
+  - **Why this isn't the 3.33 box:** a truck is far bigger than anything else on the road, so naming it takes away no identification skill. Reading the panel and strobe on people stays the skill, and the 3.33 corner brackets stay a later item for survivors.
+- **M3. Keep the truck strobes in phase. Don't offset them.** All strobes today share one 1 Hz blink (`time % 1 < 0.3`). Five strobes in step make one flash a second. Offsetting their phases, as §6 suggests as one option, would turn that into up to five on/off changes a second spread across the picture, which is worse for the flash meter, not better. Truck strobes join the shared blink, at survivor strobe size. The flash-meter case in "How we'll know" stays.
+- **M4. Reduced motion must still hold. No new camera motion is forced on the player.**
+  - **Orbit:** the orbit centre stays fixed and the route is chosen to fit it (§4 already says so). If the Tech Lead ever has to move it, it moves continuously at no more than cruise speed, never in jumps. At 1 km that's a barely visible change of bearing, which is fine in every motion setting.
+  - **Aim:** the aim **never auto-follows or locks onto the convoy**. Any camera movement on top of the orbit comes from the player's own hand.
+  - **Briefing tour:** the new route fly-through follows `wantsStill()`. With reduced motion or Reduce flicker on, it shows one still frame per stop (entry, three checkpoints, exit), with no fly-along. In animated mode it keeps the Escort route tour's speed limits.
+  - **105 kick:** it's already off with reduced motion and Reduce flicker; keep it that way.
+  - **Test:** the tour in `steps` mode has exactly five stops and no camera tween between them.
+- **M5. Radio and captions must say true things about trucks.** The convoy is `type: 'escort'`, so today's survivor wiring will misfire:
+  - `friendly-hit` captions "CHECK FIRE! Friendly down!", which is false for a damaged truck;
+  - the recorded `check-fire`, `survivor-lost`, `survivor-home-*`, `survivors-moving` and `need-met` lines can play over truck events.
+
+  Truck events get their own text: "CHECK FIRE! You hit truck two." and "Truck two's dead in the water, crew buttoned up." Survivor recordings never play in the convoy. A recording plays only if its words are true for a truck; otherwise the event gets a caption and no voice. The text and the voice never disagree.
+- **M6. The minimap shows the convoy live.** It shows the route line, the exit, and one dot per truck (OUT trucks as a hollow mark). A player working 150 m ahead loses sight of the trucks, and the minimap is how they find them again without panning blind.
+
+**Should fix**
+- **S1. HUD layout and words.**
+  - **Remove** `CONTACTS`, `HOME` and `MOVING` (the Escort lines).
+  - **Keep:**
+    - the trucks on **one line** (`T1 82 · T2 100 · T3 OUT`), each with its bar;
+    - one state line;
+    - one line for `EXIT 640 m · NEED 3 of 4`;
+    - `TIME` and `FRIENDLY FIRE n/2`;
+    - the cold hint.
+  - **`EXIT`:** the route distance left for the lead truck that's still running.
+  - **`NEED`:** without it the player can't tell when one more truck lost means a lost mission.
+  - **Backing and size:** every line has a backing plate (spec 003 M1) and is at least 14 px. Don't copy the 13 px search label.
+  - **Screenshot:** add a phone-landscape screenshot (about 844×390) next to the 1280×800 one. A list of five trucks stacked one per line would fill half a phone screen.
+- **S2. Say which truck is blocked, and flag a cold blocker.** `STOPPED · T1 blocked · {checkpoint or street}` turns "somewhere on the route" into "12 m in front of T1". If the blocker is cold-blooded, add `(COLD)`, the same pattern as `SEARCH (COLD)`. A convoy held up by a zombie the current camera can't show is 3.32's "impossible to find" problem again (pillar 3). Street names are shown with `textContent` and clipped (`clipName`).
+- **S3. A steady "being hurt" tell.** While a truck is losing health, its HUD entry and its label carry a fixed `▼` (`T2 64 ▼`). It doesn't blink and isn't shown by colour alone. A friendly-fire hit shows `HIT` on that truck's entry for about 3 s, alongside the alarm radio line.
+- **S4. Don't let words flicker.**
+  - **State words:** `ROLLING`, `SLOWING` and `STOPPED` each stay up for at least about 1.5 s before the next one replaces them. A zombie hovering at the edge of the slow zone must not make the state flip every HUD tick.
+  - **`DANGER CLOSE`:** the tag and the `!` label stay up for at least 0.5 s once they appear, with a little hysteresis on the distance.
+  - **Radio:** lines only for these events, each with a cooldown:
+    - stopped (once the stop has lasted 1 s or more);
+    - moving again after a stop;
+    - truck out of action;
+    - checkpoint passed;
+    - out the other side.
+
+    **No "slowing" radio line.** Friendly-fire and truck-out lines use the `alarm` style and stay up for their full time. Flavour lines can't push them off the radio list.
+- **S5. Heat that keeps the core read.** The spec says the engine is "the hottest thing on the road". I'd make it **the hottest part of the truck, no hotter than a live zombie** (`HEAT` in `agentAnim.ts`), kept out of the bloom and hot-edge glow. The truck's body sits at a middle heat, so a zombie pressed against its side reads against it in both polarities. "Bright means threat" stays true, and a saturated engine can't swallow the zombie beside it.
+  - **Truck put out of action:** its engine cools slowly (30 s or more, never a sudden drop), so thermal tells the truth about it and nothing darkens suddenly.
+  - **Parked cars (3.13):** they stay at ambient heat with no panel or strobe, so they never read as trucks.
+  - **Hitting a truck that's already out:** decide whether it counts as friendly fire (I'd say yes, the crew are inside) and say so in the briefing.
+- **S6. An edge pin for the lead truck when it's off screen.** Reuse the search circle's edge pin (an arrow plus `T1`) at 14 px or more. Show it only when no truck is in view, so it doesn't clutter normal play.
+
+**Ideas**
+- **I1. Blackout driving lights.** Low near-infrared headlights would light the road just ahead of each truck in night vision. They'd show which way it's heading, they'd light the exact patch where blockers stand, and they'd be true to how convoys drive in the dark. They must be steady and never pulse, and they must stay under the washout and area limits. Art Director's call.
+- **I2. Tap the lead-truck pin to aim there.** It reuses tap-to-aim, so it adds no new control. In reduced motion it's a cut, not a pan.
+- **I3. A lead tick on the 105.** With the 105 selected, a small mark on the road shows where the lead truck will be when the round lands (about 18 m ahead at cruise). It teaches leading the target and backs up M1 visually.
+
+**Other checks: no findings**
+- **Guns and camera switching:** unchanged, so their feel and their photosensitivity levels stay at Escort's. The cold blocker gives camera switching a real reason here, and the switch cost is about right for it.
+- **Nothing by sound alone:** every new cue is text first (radio lines, state words, `DANGER CLOSE`, `OUT`, `HIT`).
+- **Touch:** no new controls, so GUN, VIEW, ZOOM, the stick and tap-to-aim cover it. Tracking a 5 m/s convoy with the stick is comfortable. Tap-to-aim covers the jump from the road ahead back to the trucks. The `DANGER CLOSE` tag already moves below the crosshair on narrow screens.
+- **Tone:** pass. There are no explosions when a truck goes out, the trucks are unmarked, and "buttoned up" is the right register.
+
+**Verdict: APPROVED WITH CHANGES.** M1 to M6 go into the build. M1's moving-truck test and M3's in-phase strobes must pass the flash meter and `/playtest` before release. The S items can follow in the same build, or the Chief can log them as a backlog item before merge.
