@@ -75,7 +75,30 @@ export type AssetState = 'idle' | 'queued' | 'loading' | 'ready' | 'failed';
 /** What decoding needs (an AudioContext, or a stand-in in tests). */
 export interface Decoder {
   decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer>;
+  /** Optional (an AudioContext has it): needed to keep music loops as mono buffers. */
+  createBuffer?(channels: number, length: number, sampleRate: number): AudioBuffer;
 }
+
+/** The long music loops (60 s stems) are kept mono once decoded: half the memory, and they are mixed under everything else. */
+export const keepsMono = (id: string): boolean => id.startsWith('music/') && !id.includes('sting');
+
+/** Averages the channels of a decoded buffer into a new mono one. Returns the buffer unchanged if it can't. */
+export function toMono(buf: AudioBuffer, make: Decoder['createBuffer']): AudioBuffer {
+  if (!make || !(buf.numberOfChannels > 1)) return buf;
+  const out = make.call(undefined, 1, buf.length, buf.sampleRate);
+  const dst = out.getChannelData(0);
+  const n = buf.numberOfChannels;
+  dst.set(buf.getChannelData(0));
+  for (let c = 1; c < n; c++) {
+    const src = buf.getChannelData(c);
+    for (let i = 0; i < dst.length; i++) dst[i] += src[i];
+  }
+  if (n > 1) for (let i = 0; i < dst.length; i++) dst[i] /= n;
+  return out;
+}
+
+/** Bytes a decoded buffer holds (32-bit floats). */
+export const bufferBytes = (b: AudioBuffer): number => b.numberOfChannels * b.length * 4;
 export type Fetcher = (url: string) => Promise<{ ok: boolean; status?: number; arrayBuffer(): Promise<ArrayBuffer> }>;
 
 export interface AssetStats {
@@ -149,6 +172,13 @@ export class AssetBank {
     return Promise.all(waits).then(() => undefined);
   }
 
+  /** Total bytes of decoded audio held (for debug and the memory test). */
+  decodedBytes(): number {
+    let n = 0;
+    for (const b of this.buffers.values()) n += bufferBytes(b);
+    return n;
+  }
+
   stats(): AssetStats {
     let ready = 0;
     let failed = 0;
@@ -196,6 +226,6 @@ export class AssetBank {
     const data = await res.arrayBuffer();
     const buf = await this.decoder.decodeAudioData(data);
     if (!buf || !(buf.duration > 0)) throw new Error('empty audio');
-    return buf;
+    return keepsMono(id) ? toMono(buf, this.decoder.createBuffer ? (c, l, r) => this.decoder.createBuffer!(c, l, r) : undefined) : buf;
   }
 }
