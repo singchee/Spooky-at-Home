@@ -189,7 +189,9 @@ describe('committed fingerprint: single-mission defend (locked before spec 001 t
 });
 // Spec 001 step 1: locks today's single-mission Hold (mission and 30 s of play with no input) before the finale work.
 const EXPECTED_DEFEND_FINGERPRINT = 'bdca4d43';
-const EXPECTED_DEFEND_TRACE = '9028d334';
+// a5be7ad0 (3.15): buildings are solid. Zombies can no longer stand in the outer band of a footprint, so their
+// spawn spots and paths to the safehouse wall differ slightly; the mission itself (bdca4d43) is unchanged.
+const EXPECTED_DEFEND_TRACE = 'a5be7ad0';
 
 // 3dd039a3 (phase 3.2): waves vary within a mission (WavePlan.kinds) and the intel says how. Stripped of those two, it is still 7de5904e.
 // be9b7fe7 (phase 3.8): escort routes may not pass within 50 m of a school, kindergarten or playground, so homes whose
