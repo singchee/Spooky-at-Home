@@ -26,8 +26,7 @@ Colours in the 3D scene are **sensor values**, not colours. Colour management is
 | Ground (yards, verges) | 0.2 | texture ±0.028, faint seams +0.012 |
 | Grass (park) / wood | 0.19 / 0.2 | texture ±0.013 only, no lines (never warm clutter on lawns) |
 | Water | 0.1 | flat |
-| Trees | 0.235 | lit |
-| Buildings | 0.25-0.35 before lighting | Lambert-lit; on screen they read about 0.1-0.2 (cool roofs) |
+| Buildings, trees, cars | see src/world (map detail) | Unlit; shape shading baked into vertex colours |
 
 The texture limits are enforced by `tests/sensorLook.test.ts` (grass texture ≤ 0.015 either way; the coolest road patch stays ≥ 0.08 above a cold-blooded zombie; nothing on the ground gets within 0.5 of warm-zombie heat).
 
@@ -71,6 +70,7 @@ All of it works on sensor values *before* the display mapping, so black-hot inve
 - **Zoom:** Z toggles ×1.6; the mouse wheel and a two-finger pinch step ×1.15 between ×0.45 (wider) and ×2.4. Each gun remembers its own zoom. The narrowest lens is 1.0° (25 mm zoomed: a person is ~60 px).
 - **Near/far:** 600 m / 6000 m. Roads sit 1 m above the ground plane and areas 0.4 m (no z-fighting at this near plane).
 - **105 kick:** at most 5 px, one damped swing (0.4 s), off with reduced motion or reduce flicker.
+- **Tracers come in from off screen:** rounds fly from the gunship's real orbit position along its slant line to the impact (flight time = the sim's range / `WeaponDef.speed`). The camera's slant differs from the plane's, so the plane sits just off the picture; if the two lines nearly coincide, the tracer's start swings around the target (same range) until it is just outside the field of view. Rounds never pop out of the middle of the screen.
 
 ## 5. Figures
 

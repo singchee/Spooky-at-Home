@@ -487,6 +487,35 @@ export class Game {
     return out.set(this.aim.x + (dx / flat) * across, Math.cos(tilt) * range, this.aim.z + (dz / flat) * across);
   }
 
+  /**
+   * Where a round's tracer starts: the gunship's real position in its orbit, so rounds fly in along the
+   * slant line from the plane and enter from the edge of the picture. The camera looks from a slightly
+   * different slant (CAM_TILT_DEG), so the plane is normally just off screen; when the two lines nearly
+   * coincide (the plane would sit inside the picture and rounds would pop out of the middle), the start
+   * point swings around the target, at the same range, until it is just outside the field of view.
+   * Rendering only: the flight time is still the sim's (range / WeaponDef.speed).
+   */
+  private tracerOrigin(from: { x: number; y: number; z: number }, to: V2): { x: number; y: number; z: number } {
+    const cam = this.camera;
+    const t = new THREE.Vector3(to.x, 1.5, to.z);
+    const a = new THREE.Vector3(from.x, from.y, from.z).sub(t);
+    const range = a.length();
+    if (range < 1) return from;
+    a.divideScalar(range);
+    const c = cam.position.clone().sub(t).normalize();
+    // Half the picture's diagonal field of view, plus a margin.
+    const halfV = THREE.MathUtils.degToRad(cam.fov / 2);
+    const need = Math.min(THREE.MathUtils.degToRad(30), Math.atan(Math.tan(halfV) * Math.hypot(1, cam.aspect)) + THREE.MathUtils.degToRad(1.5));
+    const cosAC = THREE.MathUtils.clamp(a.dot(c), -1, 1);
+    if (Math.acos(cosAC) >= need) return from;
+    // Swing away from the camera's line of sight, in the plane holding both lines (sideways if they coincide).
+    const w = a.clone().addScaledVector(c, -cosAC);
+    if (w.lengthSq() < 1e-8) w.setFromMatrixColumn(cam.matrixWorld, 0).multiplyScalar(-1);
+    w.normalize();
+    const dir = c.multiplyScalar(Math.cos(need)).addScaledVector(w, Math.sin(need));
+    return { x: t.x + dir.x * range, y: Math.max(from.y * 0.5, t.y + dir.y * range), z: t.z + dir.z * range };
+  }
+
   /** The ground point the camera is aimed at (a copy). */
   aimPoint(): V2 {
     return { ...this.aim };
@@ -586,7 +615,7 @@ export class Game {
       this.opts.onAction?.({ type: 'sim', event: e });
       switch (e.type) {
         case 'fire':
-          this.effects.fire(e.weapon, e.from, e.to, e.tof, now);
+          this.effects.fire(e.weapon, this.tracerOrigin(e.from, e.to), e.to, e.tof, now);
           this.sfx.fire(e.weapon);
           break;
         case 'impact':
