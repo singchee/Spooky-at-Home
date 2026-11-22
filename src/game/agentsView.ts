@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import type { Sim } from '../sim/sim';
+import type { V2 } from '../map/types';
+import { bounds, pointInPolygon } from '../map/geom';
 import { FIGURE_SCALE, FigureBatch, HEAD_TOP, StrobeSprites } from '../render/figureShader';
 import { loadCharacterModels, type BakedClip, type BakedModel, type CharacterModels } from '../render/characterModels';
 import { MODEL_DISPLAY_SCALE, ModelBatch, clipRows } from '../render/modelShader';
@@ -116,6 +118,37 @@ export class AgentsView {
     return true;
   }
 
+  private walls: BuildingIndex | null = null;
+  private wallsOf: unknown = null;
+
+  /** Building footprints of the sim's map (indexed once per map); null when the sim has no map (tests). */
+  private buildings(sim: Sim): BuildingIndex | null {
+    const map = (sim as Partial<Sim>).map;
+    if (!map?.buildings) return null;
+    if (this.wallsOf !== map) {
+      this.walls = new BuildingIndex(map.buildings.map((b) => b.pts));
+      this.wallsOf = map;
+    }
+    return this.walls;
+  }
+
+  /**
+   * A fall direction (world radians about +y from +z) whose lying body stays out of every building:
+   * the preferred one if its middle and head end are clear, else the opposite, else either side.
+   * The sim keeps agents outside buildings; this keeps the body drawn there too.
+   */
+  private clearFall(sim: Sim, x: number, z: number, dir: number): number {
+    const walls = this.buildings(sim);
+    if (!walls) return dir;
+    const len = this.zm ? 1.75 * MODEL_DISPLAY_SCALE : 2.3 * FIGURE_SCALE;
+    for (const d of [dir, dir + Math.PI, dir + Math.PI / 2, dir - Math.PI / 2]) {
+      const sx = Math.sin(d);
+      const sz = Math.cos(d);
+      if (!walls.inside(x + sx * len * 0.5, z + sz * len * 0.5) && !walls.inside(x + sx * len, z + sz * len)) return d;
+    }
+    return dir;
+  }
+
   /** True when the character models are drawing. */
   get usingModels(): boolean {
     return this.zm !== null;
@@ -168,7 +201,9 @@ export class AgentsView {
       } else if (!this.zt.fell[i]) {
         // No blast to fall away from (or it was missed): mostly forward, sometimes back, a little to the side.
         this.zt.fell[i] = 1;
-        zf.fall[i] = (hash01(z.id + 202) < 0.65 ? 0 : Math.PI) + (hash01(z.id + 303) - 0.5) * 0.9;
+        // Models fall the way their death clip falls; the simple figures mostly forward, sometimes back.
+        const rel = this.zm ? this.zm.model.deathDir : (hash01(z.id + 202) < 0.65 ? 0 : Math.PI) + (hash01(z.id + 303) - 0.5) * 0.9;
+        zf.fall[i] = wrap(this.clearFall(sim, z.x, z.z, zf.yaw[i] + rel) - zf.yaw[i]);
       }
       const w = poseWeights(state);
       zf.run[i] += (w.run - zf.run[i]) * pose;
@@ -257,7 +292,8 @@ export class AgentsView {
       if (s.alive) sf.phase[i] = (sf.phase[i] + dt * TAU * gaitRate(state, sf.speed[i])) % (TAU * 64);
       else if (!st.fell[i]) {
         st.fell[i] = 1;
-        sf.fall[i] = (hash01(s.id + 404) < 0.5 ? 0 : Math.PI) + (hash01(s.id + 505) - 0.5) * 0.9;
+        const rel = this.sm ? this.sm.model.deathDir : (hash01(s.id + 404) < 0.5 ? 0 : Math.PI) + (hash01(s.id + 505) - 0.5) * 0.9;
+        sf.fall[i] = wrap(this.clearFall(sim, s.x, s.z, sf.yaw[i] + rel) - sf.yaw[i]);
       }
       const w = poseWeights(state);
       sf.run[i] += (w.run - sf.run[i]) * pose;
@@ -274,7 +310,7 @@ export class AgentsView {
           const hp = this.modelPoint(this.sm, st, i, 0, seed);
           const q = n * 3;
           this.strobes.pos[q] = s.x + hp[0];
-          this.strobes.pos[q + 1] = STROBE_BASE + hp[1] + 0.04;
+          this.strobes.pos[q + 1] = STROBE_BASE + hp[1] + 0.05; // just above the top of the head, as the simple figures do
           this.strobes.pos[q + 2] = s.z + hp[2];
           n++;
         }
@@ -341,7 +377,7 @@ export class AgentsView {
       } else f.pblend[i] = 0;
       if (want.name === 'death') {
         // Fall away from the blast that killed it: turn so the clip's fall direction points that way.
-        f.dyaw[i] = tr.fell[i] === 2 ? f.yaw[i] + f.fall[i] - model.deathDir : f.yaw[i];
+        f.dyaw[i] = tr.fell[i] ? f.yaw[i] + f.fall[i] - model.deathDir : f.yaw[i];
       }
       f.clip[i] = idx;
       f.ctime[i] = want.loop ? seed * want.duration : 0;
@@ -430,7 +466,7 @@ export class AgentsView {
           // Killed by this blast (the game reports it the frame it lands): thrown away from it.
           if (!this.zt.fell[i] && dist < 1.6 * bl.r) {
             this.zt.fell[i] = 2;
-            zf.fall[i] = wrap(away - zf.yaw[i]);
+            zf.fall[i] = wrap(this.clearFall(sim, z.x, z.z, away) - zf.yaw[i]);
           }
           continue;
         }
@@ -449,7 +485,7 @@ export class AgentsView {
         if (s.alive && Math.hypot(s.x - bl.x, s.z - bl.z) < 4 * bl.r + 6) sf.duckT[i] = bl.t;
         else if (!s.alive && !this.st.fell[i] && Math.hypot(s.x - bl.x, s.z - bl.z) < 1.6 * bl.r) {
           this.st.fell[i] = 2;
-          sf.fall[i] = wrap(Math.atan2(s.x - bl.x, s.z - bl.z) - sf.yaw[i]);
+          sf.fall[i] = wrap(this.clearFall(sim, s.x, s.z, Math.atan2(s.x - bl.x, s.z - bl.z)) - sf.yaw[i]);
         }
       });
     }
@@ -487,4 +523,31 @@ export function strobeOffset(crouch: number, run: number): [number, number] {
   const drop = 0.47 * crouch;
   const above = HEAD_TOP + 0.05 - 1.02; // head top above the waist (the chest's pivot)
   return [1.02 - drop + above * Math.cos(lean), above * Math.sin(lean)];
+}
+
+/** Building footprints in a coarse hash, for "would this point be inside a building?" (exact polygons). */
+export class BuildingIndex {
+  private cells = new Map<number, number[]>();
+  private static readonly CELL = 25;
+
+  constructor(private polys: V2[][]) {
+    const C = BuildingIndex.CELL;
+    polys.forEach((pts, k) => {
+      if (pts.length < 3) return;
+      const b = bounds(pts);
+      for (let j = Math.floor(b.minZ / C); j <= Math.floor(b.maxZ / C); j++)
+        for (let i = Math.floor(b.minX / C); i <= Math.floor(b.maxX / C); i++) {
+          const key = i * 73856093 + j;
+          const list = this.cells.get(key);
+          if (list) list.push(k);
+          else this.cells.set(key, [k]);
+        }
+    });
+  }
+
+  inside(x: number, z: number): boolean {
+    const C = BuildingIndex.CELL;
+    const list = this.cells.get(Math.floor(x / C) * 73856093 + Math.floor(z / C));
+    return !!list && list.some((k) => pointInPolygon({ x, z }, this.polys[k]));
+  }
 }

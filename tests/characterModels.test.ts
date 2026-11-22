@@ -48,7 +48,7 @@ describe('baked character models (vertex animation textures)', () => {
   it('is scaled to real human height, feet on the ground, centred', () => {
     const P = m.points;
     const r = m.clips.idle.row;
-    expect(P[r * 6 + 1]).toBeCloseTo(MODEL_HEIGHT / 2 + 0.12, 3); // the head point: 0.12 m above the head bone (mid-height in this rig)
+    expect(P[r * 6 + 1]).toBeCloseTo(MODEL_HEIGHT, 3); // the head point is the top of the head (where the strobe sits)
     const bind = m.geometry.attributes.position;
     let lo = Infinity;
     let hi = -Infinity;

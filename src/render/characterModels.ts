@@ -319,9 +319,11 @@ export function bakeModel(
   /** Writes the current pose into texture row `row`. */
   const bakeRow = (row: number) => {
     let o = 0;
+    let topY = -Infinity; // highest head vertex this frame: the strobe sits on it, not inside the head
     meshes.forEach((m, mi) => {
       for (let i = 0; i < vertsOf[mi]; i++) {
         place(skinned(m, i, o, v));
+        if (headW[o] > 0.5 && v.y > topY) topY = v.y;
         tmpPos.setXYZ(o, v.x, v.y, v.z);
         const q = (row * cols + o) * 4;
         raw[q] = v.x;
@@ -343,7 +345,7 @@ export function bakeModel(
     if (head) {
       head.getWorldPosition(headP);
       place(headP);
-      headP.y += 0.12 * headScale;
+      if (Number.isFinite(topY)) headP.y = topY;
     }
     if (chest) {
       chest.getWorldPosition(chestP);

@@ -203,4 +203,25 @@ describe('figure rework (3.10): states, hit reactions, ducking', () => {
     expect(p144).toBeCloseTo(p30, 3); // gait phase
     expect(amp144).toBeCloseTo(amp30, 2); // eased amplitude
   });
+
+  it('bodies never lie inside a building, whichever way they would have fallen', () => {
+    // A building from x = 1 to 12 m; zombies on its doorstep facing it, dying with and without a blast.
+    const map = { buildings: [{ pts: [{ x: 1, z: -6 }, { x: 12, z: -6 }, { x: 12, z: 6 }, { x: 1, z: 6 }] }] };
+    const inside = (x: number, z: number) => x > 1 && x < 12 && z > -6 && z < 6;
+    for (let id = 0; id < 40; id++) {
+      const view = new AgentsView({ models: false });
+      const zz = { id, x: 0.5, z: (id % 9) - 4, vx: 1, vz: 0, speed: 1.5, cold: false, alive: true, diedAt: -1, home: null, goal: null };
+      const sim = { zombies: [zz], survivors: [], t: 1, map };
+      view.update(sim as never, 0.5);
+      view.update(sim as never, 0.9);
+      Object.assign(zz, { alive: false, diedAt: 1 });
+      if (id % 2) view.impact(-1, zz.z, 3, 1); // blast behind it: "away" points into the wall
+      view.update(sim as never, 1);
+      const b = (view as unknown as { zombies: { a: Float32Array; b: Float32Array } }).zombies;
+      const dir = b.a[2] + b.b[3];
+      for (const t of [0.5, 1]) expect(inside(zz.x + Math.sin(dir) * 2.6 * t, zz.z + Math.cos(dir) * 2.6 * t)).toBe(false);
+      view.dispose();
+    }
+  });
 });
+

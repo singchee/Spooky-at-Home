@@ -56,6 +56,7 @@ Crowd variety (visual only, hashed from the agent id): height ±8%, bulk ±12%, 
 - Surfaces seen edge-on radiate less: heat falls toward ambient (0.2) by up to half at grazing angles. Every warm body gets a cooler outline, so overlapping bodies in a crowd stay separate.
 - Hair insulates: the top of a survivor's head is cooler than the face.
 - Never add warm parts to a cold-blooded zombie, and never put warm clutter on lawns.
+- A body never lies inside a building: if its fall would cross a footprint it falls the other way (or sideways). Standing figures are drawn where the sim puts them; keeping them out of buildings is the sim's job.
 
 ## 4. Effects and timing
 
