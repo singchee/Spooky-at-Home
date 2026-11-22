@@ -89,7 +89,7 @@ export class Cutaway {
         this.target[k] = 1;
         // A fresh cut starts at its height; a standing one follows the aim smoothly (no jumping cut line).
         const was = this.data[k * 4 + 2];
-        const now = this.fade[k] > 0 ? was + (cutAt - was) * Math.min(1, dt / 0.12) : cutAt;
+        const now = this.fade[k] > 0 ? was + (cutAt - was) * (1 - Math.exp(-dt / 0.12)) : cutAt;
         if (Math.abs(now - was) > 0.01) {
           this.data[k * 4 + 2] = now;
           changed = true;

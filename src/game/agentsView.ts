@@ -4,7 +4,7 @@ import type { V2 } from '../map/types';
 import { bounds, pointInPolygon } from '../map/geom';
 import { FIGURE_SCALE, FigureBatch, HEAD_TOP, StrobeSprites } from '../render/figureShader';
 import { loadCharacterModels, type BakedClip, type BakedModel, type CharacterModels } from '../render/characterModels';
-import { MODEL_DISPLAY_SCALE, ModelBatch, clipRows } from '../render/modelShader';
+import { MODEL_DISPLAY_SCALE, ModelBatch, clipRows, leanPoint } from '../render/modelShader';
 import {
   ANIM,
   COWER_RANGE,
@@ -162,7 +162,8 @@ export class AgentsView {
     if (this.blasts.length > IMPACTS) this.blasts.shift();
   }
 
-  update(sim: Sim, time: number): void {
+  /** `cam`: where the camera is (figures lean back on steep views; the strobe follows the head). */
+  update(sim: Sim, time: number, cam?: { x: number; y: number; z: number }): void {
     // Animation timing follows the game clock, so it pauses with the game and is frame-rate independent.
     const dt = this.lastTime < 0 ? 0 : Math.min(0.1, Math.max(0, time - this.lastTime));
     this.lastTime = time;
@@ -306,8 +307,9 @@ export class AgentsView {
         this.writeModel(this.sm, st, i, j, s.x, s.z, seed, name, sf.speed[i], deadFor, -1, 0, dt, core, limb, VIS_SURVIVOR);
         j++;
         if (s.alive) {
-          // The strobe sits on the baked top of the head.
-          const hp = this.modelPoint(this.sm, st, i, 0, seed);
+          // The strobe sits on the baked top of the head, leaning with the body (modelShader.ts).
+          const raw = this.modelPoint(this.sm, st, i, 0, seed);
+          const hp = cam ? leanPoint(raw, cam.x - s.x, cam.y - this.sm.material.uniforms.uBase.value, cam.z - s.z) : raw;
           const q = n * 3;
           this.strobes.pos[q] = s.x + hp[0];
           this.strobes.pos[q + 1] = STROBE_BASE + hp[1] + 0.05; // just above the top of the head, as the simple figures do

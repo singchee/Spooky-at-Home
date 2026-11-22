@@ -42,11 +42,21 @@ export function prism(pts: V2[], top: number): Prism {
   return { pts, top, cx, cz, r };
 }
 
-/** The ground track of the line from p (height y0) toward `from`, up to where it reaches height `top`. */
-export function sightSegment(p: V2, from: V3, top: number, y0 = 0): [V2, V2] {
+/**
+ * The ground track of the line from p (height y0) toward `from`, up to where it reaches height `top`.
+ * `out` is reused when given (hot loops: no garbage per building per frame).
+ */
+export function sightSegment(p: V2, from: V3, top: number, y0 = 0, out?: [V2, V2]): [V2, V2] {
   const t = Math.max(0, Math.min(1, (top - y0) / Math.max(1e-6, from.y - y0)));
-  return [p, { x: p.x + (from.x - p.x) * t, z: p.z + (from.z - p.z) * t }];
+  const o = out ?? [p, { x: 0, z: 0 }];
+  o[0] = p;
+  o[1].x = p.x + (from.x - p.x) * t;
+  o[1].z = p.z + (from.z - p.z) * t;
+  return o;
 }
+
+const SEG: [V2, V2] = [{ x: 0, z: 0 }, { x: 0, z: 0 }];
+const CEN: V2 = { x: 0, z: 0 };
 
 /** Distance from point q to segment a-b. */
 export function pointSegDist(q: V2, a: V2, b: V2): number {
@@ -96,20 +106,51 @@ export function segPolyDist(a: V2, b: V2, pts: V2[]): number {
 /** How close (metres) building `b` comes to hiding ground point p from `from`: 0 = it covers p. */
 export function hideDistance(b: Prism, p: V2, from: V3, y0 = 0): number {
   if (b.top <= y0) return Infinity;
-  const [s0, s1] = sightSegment(p, from, b.top, y0);
+  const [s0, s1] = sightSegment(p, from, b.top, y0, SEG);
   return segPolyDist(s0, s1, b.pts);
 }
 
 /** Quick reject: a lower bound on hideDistance from the bounding circle. */
 export function hideDistanceBound(b: Prism, p: V2, from: V3, y0 = 0): number {
   if (b.top <= y0) return Infinity;
-  const [s0, s1] = sightSegment(p, from, b.top, y0);
-  return pointSegDist({ x: b.cx, z: b.cz }, s0, s1) - b.r;
+  const [s0, s1] = sightSegment(p, from, b.top, y0, SEG);
+  CEN.x = b.cx;
+  CEN.z = b.cz;
+  return pointSegDist(CEN, s0, s1) - b.r;
 }
 
 /** Does building b stand between the point p (at height y0) and `from`? */
 export function blocks(b: Prism, p: V2, from: V3, y0 = 0): boolean {
   return hideDistanceBound(b, p, from, y0) <= 0 && hideDistance(b, p, from, y0) === 0;
+}
+
+/**
+ * Where the line from `from` (the gunship) down to ground point p first enters building b, as the
+ * fraction t of the way from p back up to `from` (0 = p itself; -1: it never enters). The highest t
+ * is the first contact seen from the gunship: the roof if the line comes down through it, else a wall.
+ */
+export function entryT(b: Prism, p: V2, from: V3): number {
+  const tTop = Math.max(0, Math.min(1, b.top / Math.max(1e-6, from.y)));
+  const at = (t: number): V2 => ({ x: p.x + (from.x - p.x) * t, z: p.z + (from.z - p.z) * t });
+  if (inside(at(tTop), b.pts)) return tTop;
+  // Walls: where the ground track [p, at(tTop)] crosses the footprint's edges; the crossing nearest the top.
+  const a = p;
+  const e = at(tTop);
+  let best = inside(p, b.pts) ? 0 : -1;
+  const n = b.pts.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const c = b.pts[j];
+    const d = b.pts[i];
+    const rx = e.x - a.x, rz = e.z - a.z;
+    const sx = d.x - c.x, sz = d.z - c.z;
+    const den = cross(rx, rz, sx, sz);
+    if (Math.abs(den) < 1e-12) continue;
+    const u = cross(c.x - a.x, c.z - a.z, sx, sz) / den; // along the track
+    const v = cross(c.x - a.x, c.z - a.z, rx, rz) / den; // along the edge
+    if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+    best = Math.max(best, u * tTop);
+  }
+  return best;
 }
 
 /**
@@ -221,6 +262,24 @@ export class PrismIndex {
       }
     }
     return out;
+  }
+
+  /**
+   * Where a round fired from `from` at ground point p lands: the first building it meets, or p.
+   * Returns the 3D point of contact (y > 0 on a wall or roof) and the building, -1 for none.
+   */
+  landing(p: V2, from: V3): { x: number; y: number; z: number; building: number } {
+    let bestT = -1;
+    let bestK = -1;
+    for (const k of this.candidates(p, from, 0)) {
+      const t = entryT(this.prisms[k], p, from);
+      if (t > bestT) {
+        bestT = t;
+        bestK = k;
+      }
+    }
+    if (bestK < 0) return { x: p.x, y: 0, z: p.z, building: -1 };
+    return { x: p.x + (from.x - p.x) * bestT, y: from.y * bestT, z: p.z + (from.z - p.z) * bestT, building: bestK };
   }
 
   /**

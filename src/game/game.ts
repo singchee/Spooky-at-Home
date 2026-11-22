@@ -30,6 +30,7 @@ import { LandmarkLayer } from '../ui/landmarkLayer';
 import { landmarkList, type Landmark } from '../ui/landmarks';
 import { GunshipOrbit, offVertical, orbitTarget, tallFactor, turnHeading } from './gunshipOrbit';
 import { AIM_KEEP, type Keep } from '../world/cutaway';
+import { dangerCloseAt, MaskLatch, NearSet } from './lineOfFire';
 
 /** The browser game: renders the simulation, handles input, camera, sound and screens. */
 export interface GameOptions {
@@ -189,8 +190,13 @@ export class Game {
   private headingSet = false;
   /** Game clock at the last round fired (reduced motion only changes the orbit between bursts). */
   private lastShot = -99;
-  /** A building stands between the gunship and the aim point (the reticle's MASKED). */
+  /** A building stands between the gunship and the aim point (the reticle's MASKED, latched: off 0.3 s after clear). */
   private masked = false;
+  private maskLatch = new MaskLatch();
+  /** Where a round fired now would land: the first building on the line of fire, or the aim point (y 0). */
+  private landing: { x: number; y: number; z: number; building: number } = { x: 0, y: 0, z: 0, building: -1 };
+  /** Mission markers near the aim that the cut-away keeps in sight (added inside 60 m, dropped beyond 68 m). */
+  private nearMarkers = new NearSet(60, 68);
   /** Test hook only: the cut-away can be switched off for comparison screenshots. */
   private cutawayOn = true;
   private camUp = new THREE.Vector3();
@@ -247,7 +253,8 @@ export class Game {
     this.offSettings = onSettingsChange(applySettings);
     const m = sim.mission;
     this.aim = m.route ? { ...m.route[0] } : m.safehouse ? { ...m.safehouse.centre } : { ...m.orbitCentre };
-    this.orbit = new GunshipOrbit(orbitTarget(this.tallK(), m.orbitCentre, this.aim, ORBIT.radius), this.aim);
+    const k0 = this.tallK();
+    this.orbit = new GunshipOrbit(orbitTarget(k0, m.orbitCentre, this.aim, ORBIT.radius), this.aim, k0);
 
     this.bindInput();
     audio.claim('mission'); // the mission score and engine drone (start on the first click or key)
@@ -655,7 +662,7 @@ export class Game {
     const ac = this.sim.aircraft();
     const angle = Math.atan2(ac.z - m.orbitCentre.z, ac.x - m.orbitCentre.x);
     const idle = this.firing ? 0 : this.clock - this.lastShot;
-    this.orbit.update(dt, orbitTarget(this.tallK(), m.orbitCentre, this.aim, ORBIT.radius), this.aim, { reducedMotion: reducedMotion(), idle });
+    this.orbit.update(dt, this.tallK(), m.orbitCentre, this.aim, ORBIT.radius, { reducedMotion: reducedMotion(), idle });
     this.gunship = this.orbit.position(angle, ac.y);
     const g = this.gunship;
     const dx = this.aim.x - g.x;
@@ -780,12 +787,15 @@ export class Game {
     if (this.bot && !this.manualSensor && this.bot.sensor !== this.sensor) this.setSensor(this.bot.sensor, false);
   }
 
+  /**
+   * Fire at the aim point. Buildings stop rounds: a round meeting one on the line of fire lands on
+   * the ground under that point (the same rule the MASKED impact mark and DANGER CLOSE use; BACKLOG
+   * 3.41 moves it into the sim).
+   */
   private tryFire(): void {
     if (!this.sim.weaponReady(this.weapon)) return;
-    this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
-    const hit = this.raycaster.intersectObjects(this.world.pickables, false)[0];
-    const p = hit ? { x: hit.point.x, z: hit.point.z } : this.aim;
-    this.sim.fire(this.weapon, p);
+    const l = this.world.cutaway.index.landing(this.aim, this.gunship);
+    this.sim.fire(this.weapon, { x: l.x, z: l.z });
   }
 
   /** Kills waiting to be called in (merged over KILL_MERGE seconds), and which line goes next. */
@@ -880,9 +890,10 @@ export class Game {
     this.camera.lookAt(this.aim.x, 0, this.aim.z);
     this.applyKick(fov);
     this.camera.updateProjectionMatrix();
-    this.updateCutaway(Math.max(0, dt));
+    const markerPts = this.markerPoints();
+    this.updateCutaway(Math.max(0, dt), markerPts);
 
-    this.agents.update(this.sim, this.clock);
+    this.agents.update(this.sim, this.clock, this.camera.position);
     this.effects.update(this.clock, dt);
 
     const u = this.post.uniforms;
@@ -901,8 +912,12 @@ export class Game {
       this.hud.update(this.sim.state(), this.sim.mission, this.weapon, this.sensor, this.polarity, this.zoom, this.switchLeft > 0, this.clock, this.dangerClose(), this.touch.active, this.masked);
       this.hud.updateMinimap(this.sim.aircraft(), this.aim, this.sim.survivors.filter((s) => s.alive && !s.home), this.sim.regroupPoints().map((g) => g.p));
     }
-    const markers = this.markers();
+    const markers = this.markers(markerPts);
     this.hud.setMarkers(markers);
+    // MASKED: a small steady mark where the round would actually hit (the HUD: never see-through).
+    const l = this.landing;
+    const mark = this.masked && l.building >= 0 ? this.screenPos({ x: l.x, z: l.z }, l.y) : null;
+    this.hud.setImpactMark(mark && mark.visible ? mark : null);
     this.updateLandmarks(fov, markers);
   }
 
@@ -911,11 +926,14 @@ export class Game {
    * near it, fade, and only above the line of sight (cutaway.ts). And the reticle's MASKED state: a
    * building on the line of fire to the aim point, judged on whole buildings, never the cut-away.
    */
-  private updateCutaway(dt: number): void {
+  private updateCutaway(dt: number, markerPts: { label: string; p: V2 }[]): void {
     const keep: Keep[] = this.cutawayOn ? [{ p: this.aim, r: AIM_KEEP }] : [];
-    if (this.cutawayOn) for (const mk of this.markerPoints()) if (Math.hypot(mk.p.x - this.aim.x, mk.p.z - this.aim.z) < 60) keep.push({ p: mk.p, r: 6 });
-    this.world.cutaway.update(this.gunship, keep, dt);
-    this.masked = this.world.cutaway.blocker(this.aim, this.gunship, SIGHT_Y) >= 0;
+    const near = this.nearMarkers.update(markerPts, this.aim);
+    if (this.cutawayOn) for (const mk of near) keep.push({ p: mk.p, r: 6 });
+    const c = this.world.cutaway;
+    c.update(this.gunship, keep, dt);
+    this.masked = this.maskLatch.update(c.blocker(this.aim, this.gunship, SIGHT_Y) >= 0, dt);
+    this.landing = c.index.landing(this.aim, this.gunship);
   }
 
   /** Landmark markers this frame (3.19): projected here, decluttered and drawn by the layer. */
@@ -972,12 +990,10 @@ export class Game {
 
   /** True when the current gun would endanger a friendly at the aim point. */
   private dangerClose(): boolean {
-    const r = weaponById(this.weapon).radius * 1.6 + 4;
-    return this.sim.survivors.some((s) => s.alive && !s.home && Math.hypot(s.x - this.aim.x, s.z - this.aim.z) < r);
+    return dangerCloseAt(this.landing, this.sim.survivors, weaponById(this.weapon).radius);
   }
 
-  private markers() {
-    const out = this.markerPoints();
+  private markers(out: { label: string; p: V2 }[]) {
     const wpx = this.renderer.domElement.clientWidth;
     const hpx = this.renderer.domElement.clientHeight;
     const v = new THREE.Vector3();

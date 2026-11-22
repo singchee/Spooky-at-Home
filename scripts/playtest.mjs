@@ -3325,5 +3325,64 @@ async function highriseChecks(browser) {
     }
     await page.close();
   }
+  // 4. Reduced motion across the edge of Midtown's high-rise blocks, (-500, 0) to (-300, -160): a slow
+  //    pan back and forth (20 m/s) with stops, then a fast circle (100 m/s) over the edge. The orbit may
+  //    only change in single cuts at least 1.5 s apart, and the flash checks must pass.
+  {
+    const { page, errs } = await gamePage(browser, NY, { reducedMotion: 'reduce' });
+    try {
+      await advance(page, 1.5);
+      await page.evaluate(() => {
+        const A = [-500, 0];
+        const B = [-300, -160];
+        const L = Math.hypot(B[0] - A[0], B[1] - A[1]);
+        const t0 = window.__spooky.state().t;
+        const log = (window.__orbitCuts = []);
+        let last = null;
+        const loop = () => {
+          if (window.__sweepStop) return;
+          const t = window.__spooky.state().t - t0;
+          let x;
+          let z;
+          if (t < 14) {
+            // 20 m/s each way, a 1.5 s stop at each end.
+            const leg = L / 20 + 1.5;
+            const k = Math.floor(t / leg);
+            const u = Math.min(1, ((t % leg) * 20) / L);
+            const f = k % 2 ? 1 - u : u;
+            x = A[0] + (B[0] - A[0]) * f;
+            z = A[1] + (B[1] - A[1]) * f;
+          } else {
+            const c = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
+            const w = 100 / 130;
+            x = c[0] + Math.cos((t - 14) * w) * 130;
+            z = c[1] + Math.sin((t - 14) * w) * 130;
+          }
+          window.__spooky.aimAt(x, z);
+          const o = window.__spooky.orbit();
+          if (last && (Math.abs(o.cx - last.cx) > 1 || Math.abs(o.cz - last.cz) > 1 || Math.abs(o.r - last.r) > 1)) log.push(Number(t.toFixed(3)));
+          last = o;
+          requestAnimationFrame(loop);
+        };
+        requestAnimationFrame(loop);
+      });
+      await fixedStep(page, 1 / 60);
+      await startMeter(page, 'canvas.game-canvas');
+      const t0 = await gameTime(page);
+      await untilGameTime(page, t0 + 20);
+      const frames = await stopMeter(page);
+      const cuts = await page.evaluate(() => {
+        window.__sweepStop = true;
+        return window.__orbitCuts;
+      });
+      const r = judge('highrise: reduced motion, panning over the edge of the high-rise blocks, white-hot', frames, { orbitCuts: cuts });
+      for (let i = 1; i < cuts.length; i++) if (cuts[i] - cuts[i - 1] < 1.5) r.errors.push(`orbit cuts ${cuts[i - 1]} s and ${cuts[i]} s are less than 1.5 s apart`);
+      r.errors.push(...errs);
+      res.push(r);
+    } catch (e) {
+      res.push({ type: 'highrise: reduced motion sweep', errors: [String(e), ...errs] });
+    }
+    await page.close();
+  }
   return res;
 }

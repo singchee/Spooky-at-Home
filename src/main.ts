@@ -210,7 +210,9 @@ function clampInt(v: string | null, lo: number, hi: number, dflt: number): numbe
 // ?screen=landing|scout|recon|custom|tutorial opens that screen directly (menu = scout).
 /** ?preset=<slug>: a bundled famous place (from our own origin) instead of the sample town (3.39 playtests). */
 async function autostartMap(): Promise<MapData> {
-  const pl = PRESETS.find((p) => p.slug === params.get('preset'));
+  const slug = params.get('preset');
+  const pl = PRESETS.find((p) => p.slug === slug);
+  if (slug && !pl) console.warn(`Unknown preset "${slug}": using the sample town.`);
   if (!pl) return makeSampleTown();
   const res = await fetch(new URL(PRESET_URL(pl.slug), document.baseURI).href);
   const json: unknown = await res.json();
@@ -229,7 +231,9 @@ if (params.get('autostart') === '1') {
       template: TEMPLATE_IDS.find((id) => id === params.get('template')) as TemplateId | undefined,
     },
     { bot: params.get('bot') === '1', skipBriefing: params.get('brief') !== '1', sensor: params.get('sensor') === 'night' ? 'night' : undefined },
-  ));
+  )).catch((e: unknown) => {
+    window.__spooky!.error = `Couldn't load the map (${(e as Error).message}).`;
+  });
 } else if (params.get('screen') === 'menu' || params.get('screen') === 'scout') {
   menu('scout');
 } else if (params.get('screen') === 'recon') {

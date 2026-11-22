@@ -31,9 +31,17 @@ export const TALL_TO = 28;
 export const ORBIT_TAU = 2;
 export const CENTRE_SPEED = 160;
 export const RADIUS_SPEED = 80;
-/** Reduced motion: the orbit only changes in one cut, after an aim move this long (m) or a pause in firing. */
+/**
+ * Reduced motion: the orbit only changes in one cut, after an aim move of RM_FAR metres or a pause in
+ * firing of RM_IDLE s; never sooner than RM_GAP s after the last cut, only once the aim has been still
+ * for RM_STILL s, and a change in the tall factor only counts once it has moved RM_K_STEP (no cuts
+ * flickering back and forth at the edge of a high-rise district).
+ */
 export const RM_FAR = 150;
 export const RM_IDLE = 1;
+export const RM_GAP = 1.5;
+export const RM_STILL = 0.4;
+export const RM_K_STEP = 0.25;
 
 /** 0 over low-rise ground, 1 over high-rise blocks (smooth in between). */
 export function tallFactor(tallness: number): number {
@@ -54,30 +62,51 @@ export function offVertical(d: number, alt: number): number {
 
 export class GunshipOrbit {
   shape: OrbitShape;
-  private lastAim: V2;
-  constructor(start: OrbitShape, aim: V2) {
+  /** Reduced motion: the tall factor and aim of the last cut, a clock, the last cut's time, how long the aim has been still. */
+  private kHeld: number;
+  private cutAim: V2;
+  private prevAim: V2;
+  private t = 0;
+  private lastCut = -Infinity;
+  private still = 0;
+  /** Cuts so far (reduced motion), for tests. */
+  cuts = 0;
+  constructor(start: OrbitShape, aim: V2, k = 0) {
     this.shape = { ...start };
-    this.lastAim = { ...aim };
+    this.kHeld = k;
+    this.cutAim = { ...aim };
+    this.prevAim = { ...aim };
   }
 
   /**
-   * Ease toward `target` (dt-scaled, speed-capped). With reduced motion, hold the orbit and jump to
-   * the target in one cut, only after the aim moved RM_FAR metres or `idle` seconds have passed since
-   * the last shot (never in the middle of a burst), and only when the change is worth a cut.
+   * Fly toward the orbit for tall factor k around `aim` (the sim's orbit is `centre`, `radius`):
+   * eased, dt-scaled and speed-capped; with reduced motion held, then changed in one cut (RM_*).
    */
-  update(dt: number, target: OrbitShape, aim: V2, o: { reducedMotion: boolean; idle: number }): void {
+  update(dt: number, k: number, centre: V2, aim: V2, radius: number, o: { reducedMotion: boolean; idle: number }): void {
     dt = Math.max(0, dt); // the first animation frame can stamp a time just before the game's start
+    this.t += dt;
+    const moved = Math.hypot(aim.x - this.prevAim.x, aim.z - this.prevAim.z);
+    this.still = moved > 0.5 ? 0 : this.still + dt;
+    this.prevAim = { ...aim };
     const s = this.shape;
     if (o.reducedMotion) {
-      const far = Math.hypot(aim.x - this.lastAim.x, aim.z - this.lastAim.z) >= RM_FAR;
+      if (this.t - this.lastCut < RM_GAP || this.still < RM_STILL) return;
+      const kNext = Math.abs(k - this.kHeld) >= RM_K_STEP ? k : this.kHeld;
+      const far = Math.hypot(aim.x - this.cutAim.x, aim.z - this.cutAim.z) >= RM_FAR;
+      if (!far && !(kNext !== this.kHeld && o.idle >= RM_IDLE)) return;
+      const target = orbitTarget(kNext, centre, aim, radius);
+      this.cutAim = { ...aim };
       const worth = Math.hypot(target.cx - s.cx, target.cz - s.cz) > 60 || Math.abs(target.r - s.r) > 60;
-      if (far || (o.idle >= RM_IDLE && worth)) {
-        this.shape = { ...target };
-        this.lastAim = { ...aim };
-      }
+      if (!worth) return;
+      this.kHeld = kNext;
+      this.shape = { ...target };
+      this.lastCut = this.t;
+      this.cuts++;
       return;
     }
-    this.lastAim = { ...aim };
+    this.kHeld = k;
+    this.cutAim = { ...aim };
+    const target = orbitTarget(k, centre, aim, radius);
     const a = 1 - Math.exp(-dt / ORBIT_TAU);
     let dx = (target.cx - s.cx) * a;
     let dz = (target.cz - s.cz) * a;

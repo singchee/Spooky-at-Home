@@ -56,6 +56,8 @@ export class Hud {
     this.cross = el('div', 'hud-cross', undefined, this.root);
     this.switching = el('div', 'hud-switching', 'SENSOR SWITCH', this.root);
     this.markers = el('div', 'hud-markers', undefined, this.root);
+    this.impact = el('div', 'hud-impact', undefined, this.root);
+    this.impact.hidden = true;
     el('div', 'hud-attrib', attribution, this.root);
     this.keys = new HotkeyStrip(this.root);
   }
@@ -112,6 +114,13 @@ export class Hud {
     // never see-through, so a player never takes a masked shot for a clear one).
     this.cross.classList.toggle('masked', masked);
     this.cross.dataset.mask = masked ? 'MASKED' : '';
+  }
+
+  private impact: HTMLDivElement;
+  /** 3.39: while MASKED, a small steady mark where the round would actually hit (null hides it). */
+  setImpactMark(p: { x: number; y: number } | null): void {
+    this.impact.hidden = !p;
+    if (p) this.impact.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
   }
 
   setMarkers(ms: HudMarker[]): void {
