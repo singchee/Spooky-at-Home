@@ -145,6 +145,13 @@ try {
       if (r.errors.length) exitCode = 1;
     }
   }
+  // Spec 002: a freshly scattered horde at t + 1, 2, 3 and 15 s in all three views (feel M3, pillar 3).
+  if (!only || only === 'scatter') {
+    for (const r of await scatterShots(browser)) {
+      results.push(r);
+      if (r.errors.length) exitCode = 1;
+    }
+  }
   if (!only) await restOfPlaytest(browser);
   await browser.close();
 } catch (e) {
@@ -156,6 +163,65 @@ try {
 writeFileSync(`${out}/results.json`, JSON.stringify(results, null, 2));
 console.log(JSON.stringify(results.map(({ shots, ...r }) => r), null, 1));
 process.exit(exitCode);
+
+/**
+ * Spec 002 (feel M3, pillar 3): one 105 on the densest horde of clear-park and forest-sweep at d3, then the
+ * picture through the 105's camera at t + 1, 2, 3 and 15 s after impact, and x2 at t + 3 and 15 s, in white-hot,
+ * black-hot and night vision. Same seed on every page, so every view shows the same scatter. Judged by eye
+ * (which way the runners went must be readable by t + 2 s); the check fails only if the shot never lands.
+ */
+async function scatterShots(browser) {
+  const res = [];
+  for (const template of ['clear-park', 'forest-sweep']) {
+    for (const [view, setup] of [
+      ['white-hot', async () => {}],
+      ['black-hot', async (p) => { await p.keyboard.press('h'); }],
+      ['night', async (p) => { await p.evaluate(() => window.__spooky.setSensor('night')); }],
+    ]) {
+      const { page, errs } = await gamePage(browser, `autostart=1&type=clear&template=${template}&difficulty=3&seed=5`, { viewport: { width: 1280, height: 720 } });
+      const shots = {};
+      await fixedStep(page, 1 / 60);
+      await page.keyboard.press('3');
+      await setup(page);
+      // The densest horde: the zombie with most others within 15 m.
+      const at = await page.evaluate(() => {
+        const zs = window.__spooky.zombies();
+        let best = zs[0];
+        let n = -1;
+        for (const a of zs) {
+          const k = zs.filter((b) => Math.hypot(a.x - b.x, a.z - b.z) < 15).length;
+          if (k > n) { n = k; best = a; }
+        }
+        return best;
+      });
+      await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [at.x, at.z]);
+      await untilGameTime(page, (await gameTime(page)) + 1.5);
+      const fired = await page.evaluate(([x, z]) => window.__spooky.fireAt('105', x, z), [at.x, at.z]);
+      await page.waitForFunction(() => window.__spooky.state().kills > 0, null, { timeout: 60000 }).catch(() => errs.push('the 105 never landed'));
+      const t0 = await gameTime(page);
+      for (const dt of [1, 2, 3, 15]) {
+        await untilGameTime(page, t0 + dt);
+        await fixedStep(page, 0);
+        await page.waitForTimeout(300);
+        shots[`t${dt}`] = `${out}/scatter-${template}-${view}-t${dt}.png`;
+        await page.screenshot({ path: shots[`t${dt}`] });
+        if (dt === 3 || dt === 15) {
+          await page.keyboard.press('z');
+          await page.waitForTimeout(400);
+          shots[`t${dt}x2`] = `${out}/scatter-${template}-${view}-t${dt}-x2.png`;
+          await page.screenshot({ path: shots[`t${dt}x2`] });
+          await page.keyboard.press('z');
+          await page.waitForTimeout(200);
+        }
+        await fixedStep(page, 1 / 60);
+      }
+      if (!fired) errs.push('the 105 did not fire');
+      res.push({ type: `scatter: ${template} d3, ${view}`, ok: !errs.length, errors: errs, shots });
+      await page.close();
+    }
+  }
+  return res;
+}
 
 async function restOfPlaytest(browser) {
   // Draw-call budget (G8)
