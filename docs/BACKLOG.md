@@ -75,6 +75,8 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 
 | 3.35 | Shorter briefings (owner: "too wordy"): (1) one short **spoken** briefing per mission type (Clear, Escort, Defend, Convoy, Horde Night), recorded once by Commander Quill or Ground, generic so it's true on every map (no names or numbers in the audio); (2) the specifics shown **on the map** (labels, counts, arrows, route) via the walk-through, with at most one short line of text per stop; (3) the full written intel kept behind a "Details" toggle so nothing true is lost. Story Writer trims, Audio Director records (price first), Art Director lays out | story, sound, visuals, feel | later |
 
+| 3.36 | Bosses (owner idea, later): big, fast, tough, maybe flying; each announced on the radio. Chief's notes: every boss must be readable in every sensor from its shape and heat alone (a Brute: double size, hotter core; a Sprinter: lean, leaves a heat trail; a Tank: multi-hit with **visible** damage stages, e.g. cooling patches as it's hit, so toughness is fair in thermal; a flying type, e.g. a swarm of infected birds or bats, only if it stays readable at gunship distance and never flickers). Radio: a short recorded warning per type ("Big one inbound…") plus a true on-screen caption with where it comes from (intel always true, rule 9). Spawned on a schedule, never inside school buffers; one boss at a time at first. Pairs with the loadout (3.29): intel about a boss shapes the 2 slots | pitch, plan, balance, feel, sound | later |
+
 **Owner, 22 Nov:** the 25 mm stays at 60 rounds then reload ("unlimited" was a misunderstanding); 3.11 reverts it.
 
 ### Decision (owner, 22 Nov): schools are left out of the game
