@@ -28,8 +28,9 @@ export function missionKind(template: string | undefined, type: string): string 
   return template && !template.startsWith('classic-') ? template : type;
 }
 
-export function bestKey(mapName: string, kind: string, difficulty: number): string {
-  return `${mapName}|${kind}|${difficulty}`;
+/** `mapKey` is the map's fingerprint hash (mapFingerprint), never its name: a name can hold a house number. */
+export function bestKey(mapKey: string, kind: string, difficulty: number): string {
+  return `${mapKey}|${kind}|${difficulty}`;
 }
 
 /** Is `a` better than `b`? A higher grade wins; on the same grade, the faster time. */
@@ -72,6 +73,28 @@ export class Bests {
     }
     this.cache = out;
     return out;
+  }
+
+  /**
+   * One-time move of entries stored under the map's plain-text name (`Name|kind|difficulty`) to its
+   * fingerprint hash: writes the new key, deletes the old, saves once. Does nothing when there is none.
+   */
+  migrate(mapName: string, fingerprint: string): void {
+    if (!mapName || mapName === fingerprint) return;
+    const all = this.load();
+    const prefix = `${mapName}|`;
+    const old = Object.keys(all).filter((k) => k.startsWith(prefix));
+    if (!old.length) return;
+    for (const k of old) {
+      const nk = `${fingerprint}|${k.slice(prefix.length)}`;
+      if (isBetter(all[k], all[nk] ?? null)) all[nk] = all[k];
+      delete all[k];
+    }
+    try {
+      this.store?.setItem(KEY, JSON.stringify(all));
+    } catch {
+      /* storage full or blocked: keep it for this session */
+    }
   }
 
   get(key: string): BestRecord | null {

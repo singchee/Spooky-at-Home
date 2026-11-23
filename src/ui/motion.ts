@@ -58,6 +58,7 @@ export function syncMotionClass(): void {
   const root = document.documentElement;
   root.classList.toggle('motion-reduced', m === 'reduced');
   root.classList.toggle('motion-full', m === 'full');
+  root.classList.toggle('flicker-reduced', getSettings().reduceFlicker);
 }
 
 function notify(): void {

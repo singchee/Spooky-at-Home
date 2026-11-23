@@ -5,6 +5,8 @@ import { buildRoadGraph } from '../src/map/roadGraph';
 import { WalkGrid } from '../src/map/grid';
 import { matchMissions } from '../src/map/recon';
 import { generateMission } from '../src/sim/missions';
+import { mapFingerprint } from '../src/sim/campaign';
+import { clearOfRects } from '../src/game/lineOfFire';
 
 /** An in-memory stand-in for localStorage. */
 function fakeStore(): KeyValueStore & { data: Map<string, string>; writes: number } {
@@ -102,5 +104,47 @@ describe('personal bests (stored only in this browser)', () => {
     expect(missionKind('classic-escort', 'escort')).toBe('escort');
     expect(missionKind(undefined, 'clear')).toBe('clear');
     expect(missionKind('forest-sweep', 'clear')).toBe('forest-sweep');
+  });
+});
+
+describe('bests storage holds no place text', () => {
+  it('migrates a plain-name entry to the map fingerprint once, deleting the old key', () => {
+    const map = makeSampleTown();
+    const fp = mapFingerprint(map);
+    const store = fakeStore();
+    store.setItem('spooky.bests', JSON.stringify({ [`${map.name}|escort|3`]: { grade: 'A', time: 100 }, 'Other Place|clear|1': { grade: 'B', time: 50 } }));
+    const b = new Bests(store);
+    b.migrate(map.name, fp);
+    expect(b.get(bestKey(fp, 'escort', 3))).toEqual({ grade: 'A', time: 100 });
+    expect(b.get(`${map.name}|escort|3`)).toBeNull();
+    const keys = Object.keys(JSON.parse(store.data.get('spooky.bests')!));
+    expect(keys).toContain(`${fp}|escort|3`);
+    expect(keys.some((k) => k.startsWith(`${map.name}|`))).toBe(false);
+    const writes = store.writes;
+    b.migrate(map.name, fp); // nothing left to move: no write
+    expect(store.writes).toBe(writes);
+  });
+
+  it('new records are keyed by the fingerprint, so the stored keys contain no place text', () => {
+    const map = makeSampleTown();
+    const store = fakeStore();
+    const b = new Bests(store);
+    b.migrate(map.name, mapFingerprint(map));
+    b.record(bestKey(mapFingerprint(map), 'escort', 3), { grade: 'S', time: 120 });
+    const stored = store.data.get('spooky.bests')!;
+    expect(stored).not.toContain(map.name);
+    for (const word of map.name.split(/\s+/)) expect(stored).not.toContain(word);
+  });
+});
+
+describe('edge pointers stay out from under the touch controls', () => {
+  it('moves a pointer off a blocker, and leaves a clear one alone', () => {
+    const pad = [{ x0: 700, y0: 250, x1: 820, y1: 370 }];
+    expect(clearOfRects({ x: 100, y: 100 }, pad, 844, 390)).toEqual({ x: 100, y: 100 });
+    const p = clearOfRects({ x: 816, y: 310 }, pad, 844, 390);
+    expect(p.x > 820 + 20 || p.x < 700 - 20 || p.y < 250 - 20 || p.y > 370 + 20).toBe(true);
+    expect(p.x).toBeGreaterThanOrEqual(28);
+    expect(p.x).toBeLessThanOrEqual(844 - 28);
+    expect(p.y).toBeLessThanOrEqual(390 - 28);
   });
 });

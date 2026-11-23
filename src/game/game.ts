@@ -21,6 +21,7 @@ import { getSettings, onSettingsChange, updateSettings } from '../ui/settings';
 import { reducedMotion } from '../ui/motion';
 import { openSettingsPanel } from '../ui/settingsPanel';
 import { bestKey, bests, formatBest, formatTime, missionKind } from '../ui/bests';
+import { mapFingerprint } from '../sim/campaign';
 import { gradeMission, scoreInput } from '../sim/score';
 import { LINES, captionText, line } from '../sim/campaignText';
 import { effectiveReduceFlicker, mouseAimDelta } from './input';
@@ -32,7 +33,7 @@ import { LandmarkLayer } from '../ui/landmarkLayer';
 import { landmarkList, type Landmark } from '../ui/landmarks';
 import { GunshipOrbit, offVertical, orbitTarget, tallFactor, turnHeading } from './gunshipOrbit';
 import { AIM_KEEP, type Keep } from '../world/cutaway';
-import { dangerCloseAt, edgePointer, MaskLatch, NearSet, roundTarget } from './lineOfFire';
+import { clearOfRects, dangerCloseAt, edgePointer, MaskLatch, NearSet, roundTarget, touchBlockers } from './lineOfFire';
 
 /** The browser game: renders the simulation, handles input, camera, sound and screens. */
 export interface GameOptions {
@@ -452,8 +453,12 @@ export class Game {
         el('h2', undefined, reason, words);
         el('p', 'grade-reason', score.reason, words);
         // Personal best: wins only, stored in this browser.
-        const key = bestKey(m.mapName, missionKind(m.template, m.type), m.difficulty);
-        if (won) {
+        const fp = mapFingerprint(this.map);
+        bests().migrate(this.map.name, fp);
+        const key = bestKey(fp, missionKind(m.template, m.type), m.difficulty);
+        // Only a person's win counts: not the bot, not an autostart run.
+        const person = !this.bot && !/[?&]autostart=1\b/.test(location.search);
+        if (won && person) {
           const r = bests().record(key, { grade: score.grade, time: s.t });
           if (r.isNew) el('p', 'best new-best', r.previous ? `NEW BEST · was ${r.previous.grade} ${formatTime(r.previous.time)}` : 'NEW BEST', words);
           else el('p', 'best', formatBest(r.best), words);
@@ -969,7 +974,13 @@ export class Game {
     if (this.masked && rt.blocked) {
       const sp = this.screenPos(rt.fire, rt.mark.y);
       const c = this.renderer.domElement;
-      this.hud.setImpactMark(sp.visible ? { x: sp.x, y: sp.y } : edgePointer(sp.x, sp.y, c.clientWidth, c.clientHeight));
+      if (sp.visible) this.hud.setImpactMark({ x: sp.x, y: sp.y });
+      else {
+        // Off screen: an edge pointer, kept out from under the touch stick and buttons when they are showing.
+        const ep = edgePointer(sp.x, sp.y, c.clientWidth, c.clientHeight);
+        const o = this.touch.active ? clearOfRects(ep, touchBlockers(c.getBoundingClientRect()), c.clientWidth, c.clientHeight) : ep;
+        this.hud.setImpactMark({ x: o.x, y: o.y, angle: ep.angle });
+      }
     } else this.hud.setImpactMark(null);
     this.updateLandmarks(fov, markers);
   }
