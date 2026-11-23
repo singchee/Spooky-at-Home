@@ -36,7 +36,7 @@ Four parallel teams on `feat/phase-3`: T1 sound (generated soundtrack, engine dr
 |---|---|---|---|
 | 3.5 | Briefing diorama: blocky 3D model of the mission area with landmark labels and mission markers | review, playtest, feel | merged to phase 3 |
 | 3.6 | Recorded audio wired in (ElevenLabs music, effects, 20 radio lines; generated score as fallback) | review, playtest, player-test | merged to phase 3 |
-| 3.6b | Audio memory on phones: decoded audio is about 140 MB (five 60 s stereo music stems). Stream or mono-mix the music so a tablet isn't killed for memory | review, playtest | todo (before release) |
+| 3.6b | Audio memory on phones: decoded audio is about 140 MB (five 60 s stereo music stems). Stream or mono-mix the music so a tablet isn't killed for memory | review, playtest | merged to phase 3 |
 | 3.7 | Guided briefing walk-through (was the "Hello, home" flyover; owner: "the briefing doesn't walk through the area") | review, playtest, feel | merged to phase 3 (schools never labelled) |
 | 3.8 | School guardrail gaps: escort routes avoid schools, straggler starts clear of them, wider horde spacing (owner decision #11) | review, map-check | merged to phase 3 |
 | 3.9 | Sensor look: slanted, zoomed-in gunship camera; grain, scanlines, bloom, hot edges; textured ground (owner: "just blocks", bar: Zombie Gunship quality, no copying) | review, playtest, feel | merged to phase 3 |
