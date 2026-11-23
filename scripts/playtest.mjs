@@ -3777,5 +3777,39 @@ async function crowdChecks(browser) {
     res.push(r);
     await page.close();
   }
+  // Phone landscape (844 x 390, touch): the crowd bar and its alarm must clear the minimap, the guns and the touch controls.
+  {
+    const viewport = { width: 844, height: 390 };
+    const { page, errs } = await crowdAt(browser, 'big', 20, viewport, { hasTouch: true, isMobile: true }, false);
+    const errors = [];
+    const r = { type: 'crowd night: phone landscape 844x390 touch, bar and alarm clear of the minimap', ok: true, errors };
+    await untilGameTime(page, (await gameTime(page)) + 0.5, 600000);
+    // The alarm only shows at the doors: measure it with its longest text, in one synchronous step.
+    const found = await page.evaluate(() => {
+      const bar = document.querySelector('.crowd-top');
+      const alarm = document.querySelector('.crowd-alarm');
+      if (!bar || !alarm) return { missing: true };
+      alarm.hidden = false;
+      alarm.textContent = 'THE DOORS ARE BEING HIT';
+      const box = (e) => { const b = e.getBoundingClientRect(); return b.width > 0 ? { l: b.left, t: b.top, r: b.right, b: b.bottom } : null; };
+      const others = ['.hud-minimap', '.hud-weapons', '.hud-mission', '.hud-sensor', '.touch-controls:not([hidden]) .tc-stick', '.touch-controls:not([hidden]) .tc-btn', '.touch-controls:not([hidden]) .tc-fire']
+        .flatMap((s) => [...document.querySelectorAll(s)].map((e) => [s, box(e)]).filter(([, b]) => b));
+      const hits = [];
+      for (const [name, e] of [['.crowd-top', bar], ['.crowd-alarm', alarm]]) {
+        const a = box(e);
+        for (const [s, b] of others) if (a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t) hits.push(name + ' overlaps ' + s);
+        if (a.l < 0 || a.t < 0 || a.r > innerWidth || a.b > innerHeight) hits.push(name + ' runs off screen');
+      }
+      return { hits, minimap: box(document.querySelector('.hud-minimap')), bar: box(bar), alarm: box(alarm) };
+    });
+    if (found.missing) errors.push('no .crowd-top or .crowd-alarm element');
+    else errors.push(...found.hits);
+    r.boxes = found;
+    await page.screenshot({ path: `${out}/crowd-big-hud-844x390.png` });
+    errors.push(...errs);
+    r.ok = !errors.length;
+    res.push(r);
+    await page.close();
+  }
   return res;
 }

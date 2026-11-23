@@ -131,7 +131,9 @@ export function showRecon(parent: HTMLElement, map: MapData, start: { seed: numb
       el('h4', undefined, s.title, card);
       el('p', undefined, s.why, card);
       // Personal best on this map, mission and difficulty (stored in this browser only).
-      const best = bests().get(bestKey(map.name, missionKind(s.template, s.base), d));
+      const bfp = mapFingerprint(map);
+      bests().migrate(map.name, bfp);
+      const best = bests().get(bestKey(bfp, missionKind(s.template, s.base), d));
       el('p', best ? 'mc-best' : 'mc-best none', best ? formatBest(best) : 'Not flown yet', card);
       const go = el('button', i === 0 ? 'primary' : undefined, 'Brief me', card);
       go.addEventListener('click', () => h.onChoose(s, d, seed));

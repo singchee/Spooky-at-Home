@@ -86,3 +86,43 @@ export class NearSet {
     return out;
   }
 }
+
+/** A screen rectangle in CSS px. */
+export interface ScreenRect { x0: number; y0: number; x1: number; y1: number }
+
+/** The touch stick and buttons that are showing, in px relative to `origin` (the HUD's top-left). Empty when touch controls are hidden. */
+export function touchBlockers(origin: { left: number; top: number } = { left: 0, top: 0 }): ScreenRect[] {
+  if (typeof document === 'undefined') return [];
+  const out: ScreenRect[] = [];
+  for (const e of document.querySelectorAll('.touch-controls:not([hidden]) .tc-stick, .touch-controls:not([hidden]) .tc-btn, .touch-controls:not([hidden]) .tc-fire')) {
+    const r = e.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) out.push({ x0: r.left - origin.left, y0: r.top - origin.top, x1: r.right - origin.left, y1: r.bottom - origin.top });
+  }
+  return out;
+}
+
+/**
+ * Moves an edge pointer out of every blocker rectangle (padded by `pad`), to the nearest spot inside the
+ * safe area (`margin` px in from each screen edge) that no rectangle covers. Unchanged when it is already clear.
+ */
+export function clearOfRects(p: { x: number; y: number }, rects: readonly ScreenRect[], w: number, h: number, margin = 28, pad = 20): { x: number; y: number } {
+  const hit = (x: number, y: number) => rects.some((r) => x > r.x0 - pad && x < r.x1 + pad && y > r.y0 - pad && y < r.y1 + pad);
+  if (!hit(p.x, p.y)) return p;
+  const cl = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  let best: { x: number; y: number } | null = null;
+  let bestD = Infinity;
+  const tryAt = (x: number, y: number) => {
+    x = cl(x, margin, w - margin);
+    y = cl(y, margin, h - margin);
+    if (hit(x, y)) return;
+    const d = (x - p.x) ** 2 + (y - p.y) ** 2;
+    if (d < bestD) { bestD = d; best = { x, y }; }
+  };
+  for (const r of rects) {
+    tryAt(r.x0 - pad - 1, p.y);
+    tryAt(r.x1 + pad + 1, p.y);
+    tryAt(p.x, r.y0 - pad - 1);
+    tryAt(p.x, r.y1 + pad + 1);
+  }
+  return best ?? p;
+}

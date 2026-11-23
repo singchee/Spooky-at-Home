@@ -74,17 +74,19 @@ button:disabled { opacity: 0.5; }
 .hud-marker::after { content: ''; display: block; width: 8px; height: 8px; border: 1px solid currentColor; transform: rotate(45deg); margin: 4px auto 0; }
 /* Endgame search help: a soft ring on screen, an edge arrow when off screen (the HUD's own text). */
 .hud-search { position: absolute; left: 0; top: 0; border: 2px dashed rgba(255, 214, 102, 0.75); border-radius: 50%; background: radial-gradient(closest-side, rgba(255, 214, 102, 0) 70%, rgba(255, 214, 102, 0.14)); pointer-events: none; }
-.hud-search-label { position: absolute; left: 50%; top: -22px; transform: translateX(-50%); white-space: nowrap; font-size: 13px; font-weight: 700; color: #ffd666; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; }
-.hud-search-edge { position: absolute; left: 0; top: 0; margin: -10px 0 0 -60px; width: 120px; text-align: center; font-size: 13px; font-weight: 700; color: #ffd666; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; pointer-events: none; }
+.hud-search-label { position: absolute; left: 50%; top: -22px; transform: translateX(-50%); white-space: nowrap; font-size: 14px; font-weight: 700; color: #ffd666; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; }
+.hud-search-edge { position: absolute; left: 0; top: 0; margin: -10px 0 0 -60px; width: 120px; text-align: center; font-size: 14px; font-weight: 700; color: #ffd666; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; pointer-events: none; }
 .hud-search-edge::before { content: ''; display: block; width: 0; height: 0; margin: 0 auto 4px; border-left: 9px solid transparent; border-right: 9px solid transparent; border-bottom: 14px solid #ffd666; transform: rotate(calc(var(--a) + 90deg)); }
 .hud-cold-only { color: #ffd666; font-weight: 800; font-size: 1.15em; animation: hud-cold-pulse 1.6s ease-in-out 3; }
 @keyframes hud-cold-pulse { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) { .hud-cold-only { animation: none; } }
+:root.motion-reduced .hud-cold-only, :root.flicker-reduced .hud-cold-only { animation: none; }
 .hud-attrib { position: absolute; right: 16px; bottom: 16px; font-size: 14px; }
 /* Crowd nights (spec 003, Feel M1/S2): numbers on a solid dark plate with an outline, top centre, clear of the guns, stick and buttons. */
 .recon-crowd { margin-top: 16px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.15); }
 .recon-crowd-size { display: flex; gap: 16px; flex-wrap: wrap; }
 .recon-crowd-opt { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; }
+.recon-crowd-opt input { flex: 0 0 auto; width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; accent-color: var(--accent); }
 .crowd-top { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; gap: 16px; align-items: baseline; white-space: nowrap; background: rgba(0, 0, 0, 0.7); border-radius: 4px; padding: 4px 12px; }
 .crowd-top, .crowd-tally, .crowd-alarm { text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
 .crowd-kills { font-size: 22px; font-weight: 700; letter-spacing: 0.04em; }
@@ -99,6 +101,11 @@ button:disabled { opacity: 0.5; }
 @media (max-width: 640px) {
   .crowd-top { top: 176px; gap: 10px; }
   .crowd-alarm { top: 220px; }
+}
+/* Short landscape phones: the minimap sits at left 264-376 px, so the crowd bar and alarm start right of it. */
+@media (max-height: 500px) and (min-width: 641px) {
+  .touch-mode .crowd-top { left: calc(392px + env(safe-area-inset-left, 0px)); transform: none; top: 12px; gap: 12px; }
+  .touch-mode .crowd-alarm { left: calc(392px + env(safe-area-inset-left, 0px)); transform: none; top: 58px; }
 }
 /* Landmark markers (3.19): outlined text, smaller and quieter than the mission's own markers; under every HUD panel. */
 .hud-landmarks { position: absolute; inset: 0; overflow: hidden; }
@@ -218,6 +225,7 @@ button:disabled { opacity: 0.5; }
 .recon-saved { margin: 2px 0 6px; }
 .recon-saved p { margin: 0 0 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .recon-saved button { min-height: 32px; padding: 4px 10px; font-size: 14px; }
+@media (pointer: coarse) { .recon-saved button { min-height: 48px; } }
 .recon-saved-text:focus { outline: none; }
 .recon-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 20px; align-items: start; margin-top: 8px; }
 .recon-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
