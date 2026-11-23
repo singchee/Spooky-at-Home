@@ -978,8 +978,9 @@ async function audioChecks(browser) {
     const loaded = await read();
     out.assets = loaded?.assets;
     out.recorded = loaded?.recorded;
-    // 36: spec 002 added the few-left and cold-leftovers voice lines (was 34).
-    if (!(loaded?.assets?.ready === 36) || loaded.assets.failed || loaded.assets.pending) errors.push(`recorded audio not all loaded: ${JSON.stringify(loaded?.assets)}`);
+    // 35: 36 files (spec 002 added few-left and cold-leftovers) minus the menu theme, which is
+    // released once the mission claims the music (3.6b: only this screen's music stays decoded).
+    if (!(loaded?.assets?.ready === 35) || loaded.assets.failed || loaded.assets.pending) errors.push(`recorded audio not all loaded: ${JSON.stringify(loaded?.assets)}`);
     if (!loaded?.recorded?.score || !loaded?.recorded?.bed) errors.push(`recorded score/bed not playing: ${JSON.stringify(loaded?.recorded)}`);
 
     // Radio voice: a barrage of requests plays one line at a time; CHECK FIRE cuts in.
