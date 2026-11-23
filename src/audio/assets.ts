@@ -79,21 +79,57 @@ export interface Decoder {
   createBuffer?(channels: number, length: number, sampleRate: number): AudioBuffer;
 }
 
-/** The long music loops (60 s stems) are kept mono once decoded: half the memory, and they are mixed under everything else. */
-export const keepsMono = (id: string): boolean => id.startsWith('music/') && !id.includes('sting');
+/**
+ * What a decoded file is reduced to before it is kept (backlog 3.6b: the files decode to ~140 MB of
+ * float PCM, enough to get a phone's tab killed). Everything is kept mono; music and the two long
+ * beds are also reduced to 22.05 kHz (they sit under everything else, and a phone speaker has no
+ * highs to lose), and radio voice to 16 kHz (speech, already band-limited by the radio filters).
+ * Playback time is unchanged: a buffer's duration does not depend on its rate.
+ */
+export interface DecodePlan {
+  mono: boolean;
+  /** Highest sample rate kept (Hz); a higher-rate file is averaged down to it. */
+  maxRate: number;
+}
+export function decodePlan(id: string): DecodePlan {
+  if (id.startsWith('music/') || id === 'sfx/engine-drone' || id === 'sfx/night-ambience') return { mono: true, maxRate: 22_050 };
+  if (id.startsWith('voice/')) return { mono: true, maxRate: 16_000 };
+  return { mono: true, maxRate: 44_100 };
+}
 
-/** Averages the channels of a decoded buffer into a new mono one. Returns the buffer unchanged if it can't. */
-export function toMono(buf: AudioBuffer, make: Decoder['createBuffer']): AudioBuffer {
-  if (!make || !(buf.numberOfChannels > 1)) return buf;
-  const out = make.call(undefined, 1, buf.length, buf.sampleRate);
-  const dst = out.getChannelData(0);
-  const n = buf.numberOfChannels;
-  dst.set(buf.getChannelData(0));
-  for (let c = 1; c < n; c++) {
-    const src = buf.getChannelData(c);
-    for (let i = 0; i < dst.length; i++) dst[i] += src[i];
-  }
-  if (n > 1) for (let i = 0; i < dst.length; i++) dst[i] /= n;
+/**
+ * Mixes the channels of a decoded buffer down to mono and averages it down to `maxRate` (each
+ * output sample is the mean of the input span it covers: a box filter, enough to keep aliasing out
+ * of music and speech). Same duration. Returns the buffer unchanged if nothing needs doing or the
+ * decoder can't make buffers.
+ */
+export function reduceBuffer(buf: AudioBuffer, make: Decoder['createBuffer'], plan: DecodePlan): AudioBuffer {
+  const rate = Math.min(buf.sampleRate, plan.maxRate);
+  const sameRate = rate === buf.sampleRate;
+  if (!make || !(buf.length > 0) || (sameRate && (!plan.mono || buf.numberOfChannels === 1))) return buf;
+  const ratio = buf.sampleRate / rate;
+  const len = sameRate ? buf.length : Math.max(1, Math.round(buf.length / ratio));
+  const out = make.call(undefined, plan.mono ? 1 : buf.numberOfChannels, len, rate);
+  const chans = Array.from({ length: buf.numberOfChannels }, (_, c) => buf.getChannelData(c));
+  const groups = plan.mono ? [chans] : chans.map((c) => [c]);
+  groups.forEach((src, o) => {
+    const dst = out.getChannelData(o);
+    for (let j = 0; j < len; j++) {
+      const from = j * ratio;
+      const to = Math.min(buf.length, from + ratio);
+      let acc = 0;
+      let wsum = 0;
+      for (let i = Math.floor(from); i < to; i++) {
+        const w = Math.min(i + 1, to) - Math.max(i, from);
+        if (w <= 0) continue;
+        let v = 0;
+        for (const ch of src) v += ch[i];
+        acc += (v / src.length) * w;
+        wsum += w;
+      }
+      dst[j] = wsum > 0 ? acc / wsum : 0;
+    }
+  });
   return out;
 }
 
@@ -117,6 +153,7 @@ export class AssetBank {
   private active = 0;
   private warned = false;
   private settled = new Map<string, (() => void)[]>();
+  private dropped = new Set<string>();
 
   constructor(
     private decoder: Decoder,
@@ -155,6 +192,7 @@ export class AssetBank {
     const waits: Promise<void>[] = [];
     const jump: string[] = [];
     for (const id of ids) {
+      this.dropped.delete(id);
       const s = this.status(id);
       if (s === 'ready' || s === 'failed') continue;
       if (s === 'idle') {
@@ -170,6 +208,25 @@ export class AssetBank {
     this.waiting.unshift(...jump);
     this.pump();
     return Promise.all(waits).then(() => undefined);
+  }
+
+  /**
+   * Forget these decoded files and free their memory (a source still playing one keeps it alive until
+   * it ends). They can be requested again later. Files still loading are left alone.
+   */
+  release(ids: readonly string[]): void {
+    for (const id of ids) {
+      const st = this.states.get(id);
+      if (st === 'loading') this.dropped.add(id); // discarded when it lands
+      else if (st === 'queued') {
+        this.waiting.splice(this.waiting.indexOf(id), 1);
+        this.states.delete(id);
+        this.finish(id);
+      } else if (st === 'ready') {
+        this.buffers.delete(id);
+        this.states.delete(id);
+      }
+    }
   }
 
   /** Total bytes of decoded audio held (for debug and the memory test). */
@@ -191,6 +248,11 @@ export class AssetBank {
     return { ready, failed, pending };
   }
 
+  private finish(id: string): void {
+    for (const f of this.settled.get(id) ?? []) f();
+    this.settled.delete(id);
+  }
+
   private pump(): void {
     while (this.active < this.concurrency && this.waiting.length) {
       const id = this.waiting.shift()!;
@@ -199,6 +261,10 @@ export class AssetBank {
       this.load(id)
         .then(
           (buf) => {
+            if (this.dropped.delete(id)) {
+              this.states.delete(id); // released while loading: nobody wants it now
+              return;
+            }
             this.buffers.set(id, buf);
             this.states.set(id, 'ready');
           },
@@ -212,8 +278,7 @@ export class AssetBank {
         )
         .finally(() => {
           this.active--;
-          for (const f of this.settled.get(id) ?? []) f();
-          this.settled.delete(id);
+          this.finish(id);
           this.pump();
         });
     }
@@ -226,6 +291,6 @@ export class AssetBank {
     const data = await res.arrayBuffer();
     const buf = await this.decoder.decodeAudioData(data);
     if (!buf || !(buf.duration > 0)) throw new Error('empty audio');
-    return keepsMono(id) ? toMono(buf, this.decoder.createBuffer ? (c, l, r) => this.decoder.createBuffer!(c, l, r) : undefined) : buf;
+    return reduceBuffer(buf, this.decoder.createBuffer ? (c, l, r) => this.decoder.createBuffer!(c, l, r) : undefined, decodePlan(id));
   }
 }

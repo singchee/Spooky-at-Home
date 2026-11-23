@@ -138,12 +138,11 @@ export class AudioEngine {
     const bank = (this.bank = new AssetBank(ctx));
     this.samples = new SamplePlayer(ctx, this.count);
     this.voice = new VoiceChannel(ctx, mixer.radio, bank, (d, h) => mixer.duck(d, h), this.count);
-    const other: ScoreMode = this.scene === 'menu' ? 'mission' : 'menu';
     void bank.request([SFX.squelch, voiceAsset('cleared-hot')]);
     void bank.request(trackIds(this.scene));
     void bank.request([SFX.fire25, SFX.fire40, SFX.fire105, SFX.explosion, SFX.alarm, ...BED_IDS]);
     void bank.request(VOICE_LINES.map(voiceAsset));
-    void bank.request([...trackIds(other), MUSIC.stingWin, MUSIC.stingLose]);
+    void bank.request([MUSIC.stingWin, MUSIC.stingLose]);
   }
 
   /** A hidden tab goes quiet (and stops using the CPU); it picks up again when shown. */
@@ -298,6 +297,13 @@ export class AudioEngine {
   private startScene(): void {
     const { ctx, mixer, noise } = this;
     if (!ctx || !mixer || !noise) return;
+    // Only this screen's music stays decoded (3.6b): the other's is released, and fetched again if
+    // the player goes back (the generated score covers the gap, then the recording takes over).
+    if (this.bank) {
+      const other: ScoreMode = this.scene === 'menu' ? 'mission' : 'menu';
+      void this.bank.request(trackIds(this.scene), true);
+      this.bank.release(trackIds(other));
+    }
     if (!this.score || this.score.mode !== this.scene) {
       if (this.score) {
         this.score.stop(this.scene === 'menu' ? 2.5 : 1.2);
