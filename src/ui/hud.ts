@@ -149,6 +149,7 @@ export class Hud {
   setMarkers(ms: HudMarker[]): void {
     const w = this.root.clientWidth || innerWidth;
     const h = this.root.clientHeight || innerHeight;
+    const blockers = touchBlockers(this.root.getBoundingClientRect());
     this.markers.replaceChildren(
       ...ms.filter((m) => m.visible || m.edge).map((m) => {
         if (!m.edge) {
@@ -156,7 +157,10 @@ export class Hud {
           // The label box is 100 px wide (centred) and sits 48 px above its point: keep all of it on screen.
           const mx = Math.max(52, Math.min(w - 52, m.x));
           const my = Math.max(52, Math.min(h - 8, m.y));
-          d.style.transform = `translate(${Math.round(mx)}px, ${Math.round(my)}px)`;
+          // Touch showing: nudge the whole label box (100 px wide, 48 px above its point) out from under the stick and buttons.
+          let p = { x: mx, y: my };
+          if (blockers.length) p = clearOfRects(p, blockers.map((r) => ({ x0: r.x0 - 50, x1: r.x1 + 50, y0: r.y0 - 16, y1: r.y1 + 48 })), w, h, 52, 4);
+          d.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
           return d;
         }
         // Endgame search circle (label is our own text). On screen: a soft ring of the circle's real size.
@@ -177,7 +181,6 @@ export class Hud {
         const k = Math.min((cx - 70) / Math.max(1e-6, Math.abs(Math.cos(a))), (cy - 60) / Math.max(1e-6, Math.abs(Math.sin(a))));
         const d = el('div', 'hud-search-edge', m.label);
         let p = { x: cx + Math.cos(a) * k, y: cy + Math.sin(a) * k };
-        const blockers = touchBlockers(this.root.getBoundingClientRect());
         if (blockers.length) p = clearOfRects(p, blockers, w, h, 60, 20);
         d.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
         d.style.setProperty('--a', `${a.toFixed(2)}rad`);

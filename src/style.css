@@ -102,10 +102,12 @@ button:disabled { opacity: 0.5; }
   .crowd-top { top: 176px; gap: 10px; }
   .crowd-alarm { top: 220px; }
 }
-/* Short landscape phones: the minimap sits at left 264-376 px, so the crowd bar and alarm start right of it. */
-@media (max-height: 500px) and (min-width: 641px) {
-  .touch-mode .crowd-top { left: calc(392px + env(safe-area-inset-left, 0px)); transform: none; top: 12px; gap: 12px; }
-  .touch-mode .crowd-alarm { left: calc(392px + env(safe-area-inset-left, 0px)); transform: none; top: 58px; }
+/* Short landscape phones (same 560 px break as the minimap): the minimap sits at left 264-376 px, so the crowd bar and alarm start right of it.
+   The bar stops short of the mission panel (about 168 px at the right) and wraps SCORE onto a second line, so five-digit counts still fit. */
+@media (max-height: 560px) and (min-width: 641px) {
+  .touch-mode .crowd-top { left: calc(392px + env(safe-area-inset-left, 0px)); transform: none; top: 12px; gap: 2px 12px; flex-wrap: wrap; box-sizing: border-box; max-width: calc(100% - 392px - 168px - env(safe-area-inset-left, 0px)); }
+  .touch-mode .crowd-top .crowd-score { flex-basis: 100%; }
+  .touch-mode .crowd-alarm { left: calc(392px + env(safe-area-inset-left, 0px)); transform: none; top: 84px; max-width: calc(100% - 392px - 168px - env(safe-area-inset-left, 0px)); box-sizing: border-box; white-space: normal; }
 }
 /* Landmark markers (3.19): outlined text, smaller and quieter than the mission's own markers; under every HUD panel. */
 .hud-landmarks { position: absolute; inset: 0; overflow: hidden; }

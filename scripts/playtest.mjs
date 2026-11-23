@@ -3777,20 +3777,22 @@ async function crowdChecks(browser) {
     res.push(r);
     await page.close();
   }
-  // Phone landscape (844 x 390, touch): the crowd bar and its alarm must clear the minimap, the guns and the touch controls.
-  {
-    const viewport = { width: 844, height: 390 };
+  // Phone landscape (844 x 390 and 844 x 540, touch): the worst-case crowd bar and alarm must clear the minimap, the DAWN panel and the touch controls.
+  for (const viewport of [{ width: 844, height: 390 }, { width: 844, height: 540 }]) {
     const { page, errs } = await crowdAt(browser, 'big', 20, viewport, { hasTouch: true, isMobile: true }, false);
     const errors = [];
-    const r = { type: 'crowd night: phone landscape 844x390 touch, bar and alarm clear of the minimap', ok: true, errors };
+    const r = { type: `crowd night: phone landscape ${viewport.width}x${viewport.height} touch, worst-case bar and alarm clear of minimap, DAWN panel and controls`, ok: true, errors };
     await untilGameTime(page, (await gameTime(page)) + 0.5, 600000);
-    // The alarm only shows at the doors: measure it with its longest text, in one synchronous step.
+    // Worst case: five-digit counts, a x9 multiplier and the longest alarm, measured in one synchronous step (the game loop rewrites them every frame).
     const found = await page.evaluate(() => {
       const bar = document.querySelector('.crowd-top');
       const alarm = document.querySelector('.crowd-alarm');
       if (!bar || !alarm) return { missing: true };
       alarm.hidden = false;
-      alarm.textContent = 'THE DOORS ARE BEING HIT';
+      alarm.textContent = 'DOORS: THEY\u2019RE CLOSE';
+      bar.querySelector('.crowd-kills').textContent = 'KILLS 9,999';
+      bar.querySelector('.crowd-mult').textContent = '\u00d79';
+      bar.querySelector('.crowd-score').textContent = 'SCORE 99,999';
       const box = (e) => { const b = e.getBoundingClientRect(); return b.width > 0 ? { l: b.left, t: b.top, r: b.right, b: b.bottom } : null; };
       const others = ['.hud-minimap', '.hud-weapons', '.hud-mission', '.hud-sensor', '.touch-controls:not([hidden]) .tc-stick', '.touch-controls:not([hidden]) .tc-btn', '.touch-controls:not([hidden]) .tc-fire']
         .flatMap((s) => [...document.querySelectorAll(s)].map((e) => [s, box(e)]).filter(([, b]) => b));
@@ -3805,7 +3807,7 @@ async function crowdChecks(browser) {
     if (found.missing) errors.push('no .crowd-top or .crowd-alarm element');
     else errors.push(...found.hits);
     r.boxes = found;
-    await page.screenshot({ path: `${out}/crowd-big-hud-844x390.png` });
+    await page.screenshot({ path: `${out}/crowd-big-hud-${viewport.width}x${viewport.height}.png` });
     errors.push(...errs);
     r.ok = !errors.length;
     res.push(r);
