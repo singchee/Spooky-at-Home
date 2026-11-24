@@ -13,9 +13,10 @@ export const SAMPLE_PLAY: Record<string, Omit<PlayOpts, 'group'>> = {
   [SFX.fire25]: { max: 2, gain: 1, duration: RETRIGGER_25 + 0.08, fade: 0.08, jitter: 0.08, cents: 60, db: 1.5 },
   [SFX.fire40]: { max: 4, gain: 0.5, duration: 1.2, fade: 0.3, cents: 50, db: 1.5 },
   [SFX.fire105]: { max: 2, gain: 0.75, offset: 0.08, cents: 40, db: 1 },
-  [SFX.explosion]: { max: 3, gain: 0.85, offset: 0.09, cents: 60, db: 1.5 },
-  /** A 40 mm round landing: the explosion, smaller (a little faster, so less of its low end is lost than before, and quieter). */
-  'boom40': { max: 4, gain: 0.3, rate: 1.2, offset: 0.09, duration: 1.6, fade: 0.5, cents: 80, db: 2 },
+  /** A 105 landing (owner playtest 1: louder than the 0.85 it was, "a soft thud"; the master limiter keeps it under 0 dBFS). */
+  [SFX.explosion]: { max: 3, gain: 1, offset: 0.09, cents: 60, db: 1.5 },
+  /** A 40 mm round landing: the explosion, smaller (a little faster, and quieter than the 105's; owner playtest 1 raised it from 0.3). */
+  'boom40': { max: 4, gain: 0.4, rate: 1.15, offset: 0.09, duration: 1.8, fade: 0.5, cents: 80, db: 2 },
   /** Two pulses of the recorded alarm (0.4 s on, 0.35 s off: 1.3 a second), under the synthesised two-tone. */
   [SFX.alarm]: { max: 1, gain: 0.2, duration: 1.3, fade: 0.15, cents: 0, db: 0 },
 };
@@ -112,6 +113,7 @@ export class Sfx {
     if (!o || this.muted || !w || !this.gate.admit(key, o.ctx.currentTime, w.gap)) return false;
     this.sub(w.sub);
     this.body(w.body);
+    if (w.kick) this.sub(w.kick);
     return true;
   }
 

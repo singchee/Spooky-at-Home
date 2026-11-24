@@ -191,15 +191,15 @@ describe('recorded effects', () => {
     sfx.fire('105');
     sfx.impact('105');
     expect(made.buffers).toBe(2);
-    expect(made.oscillators).toBe(2); // the two weight subs
+    expect(made.oscillators).toBe(3); // the two weight subs and the impact's kick (owner playtest 1)
     expect(made.noise).toBe(2); // their bodies only: no generated bang under the recorded ones
     sfx.fire('40'); // not loaded: synthesised
-    expect(made.oscillators).toBe(3);
+    expect(made.oscillators).toBe(4);
     expect(made.noise).toBe(4); // weight body + the generated bang
     sfx.muted = true;
     sfx.fire('105');
     expect(made.buffers).toBe(2);
-    expect(made.oscillators).toBe(3);
+    expect(made.oscillators).toBe(4);
   });
 
   it('friendly fire always sounds the synthesised two-tone; the recorded alarm is layered under it', () => {

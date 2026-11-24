@@ -1066,6 +1066,33 @@ async function audioChecks(browser) {
     out.duckUnderFire = firing?.gains?.duck;
     if (!(firing?.gains?.duck > 0.1)) errors.push(`music not ducked under fire (duck ${firing?.gains?.duck})`);
 
+    // Owner playtest 1 ("impacts sound like a soft thud"): the heavier 105 and 40 mm impacts must not
+    // clip. Three 105s and a 40 mm volley land on the zombies while the master meter runs: its peak
+    // (after the limiter and the master gain) stays under 0 dBFS.
+    await page.evaluate(() => window.__spooky.audioMeters());
+    // The 105 reloads between rounds (4.5 s): two of them, with 40 mm rounds in between.
+    const volley = (gun, k) => page.evaluate(([gun, k]) => {
+      const zs = window.__spooky.zombies();
+      let n = 0;
+      for (let i = 0; i < k; i++) if (zs.length && window.__spooky.fireAt(gun, zs[i % zs.length].x + i * 4, zs[i % zs.length].z)) n++;
+      return n;
+    }, [gun, k]);
+    let booms = await volley('105', 1);
+    for (let i = 0; i < 6; i++) {
+      booms += await volley('40', 1);
+      await page.waitForTimeout(400);
+    }
+    await page.waitForTimeout(2500);
+    booms += await volley('105', 1);
+    // The last 105 is in the air ~3.6 s; wait for the audio clock to pass its blast and boom.
+    const tBoom = (await read())?.time ?? 0;
+    await page.waitForFunction((t) => window.__spooky.audio().time > t + 6, tBoom, { timeout: 30000, polling: 200 }).catch(() => undefined);
+    const boomed = await read();
+    out.impacts = { fired: booms, meters: boomed?.meters };
+    if (booms < 3) errors.push(`only ${booms} heavy rounds fired for the impact headroom check`);
+    if (!(boomed?.meters?.masterPeak > 0.05)) errors.push(`master meter silent through the impacts: ${JSON.stringify(boomed?.meters)}`);
+    if (!(boomed?.meters?.masterPeak < 1)) errors.push(`master clipped (peak ${boomed?.meters?.masterPeak}) under 105 and 40 mm impacts`);
+
     // Mute (M) silences the master; pressing it again brings it back.
     await page.keyboard.press('m');
     await page.waitForTimeout(500);

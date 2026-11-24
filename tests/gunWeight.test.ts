@@ -229,7 +229,8 @@ describe('gun weight: played by Sfx', () => {
       sfx.unlock();
       sfx.fire('105');
       sfx.impact('105');
-      expect(made.oscillators).toBe(2);
+      expect(made.oscillators).toBe(3); // the firing sub, and the impact's sub and kick
+      expect(made.subGains).toContain(IMPACT_WEIGHT['105']!.kick!.gain);
       expect(made.subGains).toContain(FIRE_WEIGHT['105'].sub.gain);
       expect(made.subGains).toContain(IMPACT_WEIGHT['105']!.sub.gain);
       expect(made.buffers).toBe(loaded ? 2 : 0);
@@ -253,6 +254,60 @@ describe('gun weight: played by Sfx', () => {
       sfx.impact('105');
       sfx.fire('25');
     }).not.toThrow();
-    expect(made.oscillators).toBe(3);
+    expect(made.oscillators).toBe(4); // three subs and the 105 impact's kick
+  });
+});
+
+/** Two one-pole high-passes at 90 Hz: roughly what a laptop or phone speaker plays of the layers. */
+function smallSpeaker(x: Float32Array, sr: number): Float32Array {
+  const a = Math.exp((-2 * Math.PI * 90) / sr);
+  const y = new Float32Array(x.length);
+  let p1 = 0, q1 = 0, p2 = 0, q2 = 0;
+  for (let i = 0; i < x.length; i++) {
+    q1 = a * (q1 + x[i] - p1);
+    p1 = x[i];
+    q2 = a * (q2 + q1 - p2);
+    p2 = q1;
+    y[i] = q2;
+  }
+  return y;
+}
+
+describe('impact boom (owner playtest 1: "a soft thud")', () => {
+  const SR = 8000;
+  const boom = (g: Gun) => renderWeight([{ at: 0, gun: g, kind: 'impact' }], 3, SR, mulberry32(3));
+  /** The impact layers as they were before this change (same seed and window), in dB: the bar to beat. */
+  const BEFORE_SMALL_SPEAKER = { '105': -29.8, '40': -33.4 };
+
+  it('the 40 and 105 impacts each add a kick: a short sweep from about 150 Hz down, on top of the sub', () => {
+    for (const g of ['40', '105'] as const) {
+      const k = IMPACT_WEIGHT[g]!.kick!;
+      expect(k, g).toBeDefined();
+      expect(k.from).toBeLessThanOrEqual(150);
+      expect(k.to).toBeLessThan(k.from);
+      expect(k.to).toBeGreaterThanOrEqual(SUB_FLOOR);
+      expect(k.attack).toBeGreaterThanOrEqual(0.005); // no click
+      expect(k.gain).toBeLessThanOrEqual(IMPACT_WEIGHT[g]!.sub.gain);
+      expect(k.delay).toBe(IMPACT_WEIGHT[g]!.sub.delay); // lands with the boom, after the flash
+    }
+    expect(FIRE_WEIGHT['40'].kick).toBeUndefined(); // the guns' own reports are unchanged
+  });
+
+  it('more boom on any speaker: the part a laptop plays is at least 3 dB (105) and 1.5 dB (40) up on before', () => {
+    const r105 = db(rms(smallSpeaker(boom('105'), SR), 0, Math.round(0.8 * SR)));
+    const r40 = db(rms(smallSpeaker(boom('40'), SR), 0, Math.round(0.5 * SR)));
+    expect(r105).toBeGreaterThan(BEFORE_SMALL_SPEAKER['105'] + 3);
+    expect(r40).toBeGreaterThan(BEFORE_SMALL_SPEAKER['40'] + 1.5);
+  });
+
+  it('the 105 is clearly the biggest: 6 dB over the 40 mm boom, and longer', () => {
+    const win = Math.round(0.8 * SR);
+    expect(db(rms(boom('105'), 0, win))).toBeGreaterThan(db(rms(boom('40'), 0, win)) + 6);
+    expect(db(rms(smallSpeaker(boom('105'), SR), 0, win))).toBeGreaterThan(db(rms(smallSpeaker(boom('40'), SR), 0, win)) + 4);
+    const w105 = IMPACT_WEIGHT['105']!;
+    const w40 = IMPACT_WEIGHT['40']!;
+    expect(w105.sub.dur).toBeGreaterThan(w40.sub.dur * 2);
+    expect(w105.body.dur).toBeGreaterThan(w40.body.dur * 2);
+    expect(PUNCH.impact105.depth).toBeGreaterThan(PUNCH.fire105.depth);
   });
 });
