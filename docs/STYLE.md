@@ -171,6 +171,7 @@ The game starts on high and drops to low once (never back) when frames average o
 - HTML overlay, not post-processed: always crisp. Smallest text 14 px. Map text with `textContent` only.
 - OpenStreetMap attribution always visible on a real map.
 - HUD layout is not part of the sensor picture; change it only through its own work.
+- **The safehouse (owner playtest 1, "it just says dots"):** a solid friendly-blue (`#6fb8ff`) outline round the building's footprint, projected each frame in every camera and sensor (blue reads on white hot, black hot and green night vision); a boxed **16 px** label (SAFEHOUSE, or DOORS on crowd nights) just above the outline, so it clears the reticle; off screen, a steady blue arrowhead at the screen edge pointing to it, with a 14 px label. Kept clear of the touch controls. Nothing blinks; our own words only, by `textContent`.
 
 ## 12. Briefing art
 

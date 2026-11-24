@@ -1066,8 +1066,11 @@ export class Game {
     return dangerCloseAt(this.landing, this.sim.survivors, weaponById(this.weapon).radius);
   }
 
-  /** Mission markers on screen (from markerPoints()); search areas (with `r`) pin to the screen edge when off screen. */
-  private markers(out: { label: string; p: V2; r?: number }[]) {
+  /**
+   * Mission markers on screen (from markerPoints()); search areas (with `r`) and the safehouse (with
+   * `poly`) pin to the screen edge when off screen; the safehouse's footprint is projected for its outline.
+   */
+  private markers(out: { label: string; p: V2; r?: number; poly?: V2[] }[]) {
     const wpx = this.renderer.domElement.clientWidth;
     const hpx = this.renderer.domElement.clientHeight;
     const v = new THREE.Vector3();
@@ -1078,6 +1081,19 @@ export class Game {
       const visible = !behind && Math.abs(v.x) < 1 && Math.abs(v.y) < 1;
       const x = ((v.x + 1) / 2) * wpx;
       const y = ((1 - v.y) / 2) * hpx;
+      if (o.poly) {
+        // The safehouse: its footprint on screen (a little above the ground, so the outline isn't lost in the road surface).
+        const outline: [number, number][] = [];
+        const q = new THREE.Vector3();
+        let front = !behind;
+        for (const pt of o.poly) {
+          q.set(pt.x, 1, pt.z).project(this.camera);
+          if (q.z >= 1) front = false;
+          outline.push([((q.x + 1) / 2) * wpx, ((1 - q.y) / 2) * hpx]);
+        }
+        const s = behind ? -1 : 1;
+        return { label: o.label, x, y, visible, kind: 'safehouse' as const, edge: !visible, outline: front ? outline : undefined, dir: Math.atan2(-v.y * s * hpx, v.x * s * wpx) };
+      }
       if (o.r === undefined) return { label: o.label, x, y, visible };
       // The circle's size on screen: a point r metres to the camera's right, projected.
       const e = new THREE.Vector3(o.p.x + right.x * o.r, 0, o.p.z + right.z * o.r).project(this.camera);
@@ -1091,11 +1107,12 @@ export class Game {
   /** The mission's markers on the ground (safehouse, home, the escort group, regroup points, endgame search areas with radius `r`). */
   private markerPoints(st: SimState | null = null) {
     const m = this.sim.mission;
-    const out: { label: string; p: V2; r?: number; id?: string }[] = [];
+    const out: { label: string; p: V2; r?: number; id?: string; poly?: V2[] }[] = [];
     // Crowd nights: the doors' marker turns to its alarm before the multiplier drops (Feel M4: words, not only colour).
     // `id` stays put while the label changes, so the cut-away's marker list doesn't drop and re-add it.
     const doors = m.crowd && (st ?? this.sim.state()).crowd;
-    if (m.safehouse) out.push({ id: 'safehouse', label: doors ? (doors.atDoors > 0 ? 'DOORS: UNDER ATTACK' : doors.alarm ? 'DOORS: CLOSE' : 'DOORS') : 'SAFEHOUSE', p: m.safehouse.centre });
+    // Owner playtest 1 ("it just says dots"): the safehouse gets its footprint outlined on screen and an edge arrow off screen.
+    if (m.safehouse) out.push({ id: 'safehouse', label: doors ? (doors.atDoors > 0 ? 'DOORS: UNDER ATTACK' : doors.alarm ? 'DOORS: CLOSE' : 'DOORS') : 'SAFEHOUSE', p: m.safehouse.centre, poly: m.safehouse.poly });
     if (m.home) out.push({ label: 'HOME', p: m.home.centre });
     const moving = this.sim.survivors.filter((s) => s.alive && !s.home);
     if (moving.length && m.type === 'escort') {

@@ -39,7 +39,15 @@ export interface HudMarker {
   rpx?: number;
   /** Screen angle (radians, y down) from the centre towards the point, for pinning. */
   dir?: number;
+  /**
+   * The safehouse (owner playtest 1: "it just says dots"): a solid outline round its footprint
+   * (`outline`, screen px), a bigger boxed label above it, and a steady edge arrow when off screen.
+   */
+  kind?: 'safehouse';
+  outline?: [number, number][];
 }
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /**
  * Training night's mission (tutorialSteps.ts) carries this: the HUD hides the clock and the
@@ -157,7 +165,8 @@ export class Hud {
     const h = this.root.clientHeight || innerHeight;
     const blockers = touchBlockers(this.root.getBoundingClientRect());
     this.markers.replaceChildren(
-      ...ms.filter((m) => m.visible || m.edge).map((m) => {
+      ...ms.filter((m) => m.visible || m.edge || m.outline).flatMap((m): (HudMarker | Element)[] => (m.kind === 'safehouse' ? this.safehouse(m, w, h, blockers) : [m])).map((m) => {
+        if (m instanceof Element) return m;
         if (!m.edge) {
           const d = el('div', 'hud-marker', m.label);
           // The label box is 100 px wide (centred) and sits 48 px above its point: keep all of it on screen.
@@ -193,6 +202,48 @@ export class Hud {
         return d;
       }),
     );
+  }
+
+  /**
+   * The safehouse's marks: on screen, a solid outline round its footprint and a boxed label just above
+   * it (clear of the reticle in the middle); off screen, a steady arrow at the edge with its label.
+   * All our own text (textContent); nothing blinks.
+   */
+  private safehouse(m: HudMarker, w: number, h: number, blockers: ReturnType<typeof touchBlockers>): Element[] {
+    const out: Element[] = [];
+    if (m.outline && m.outline.length > 2) {
+      const svgEl = document.createElementNS(SVG_NS, 'svg');
+      svgEl.setAttribute('class', 'hud-safe-outline');
+      svgEl.setAttribute('width', String(w));
+      svgEl.setAttribute('height', String(h));
+      const poly = document.createElementNS(SVG_NS, 'polygon');
+      poly.setAttribute('points', m.outline.map(([x, y]) => `${Math.round(x)},${Math.round(y)}`).join(' '));
+      svgEl.appendChild(poly);
+      out.push(svgEl);
+    }
+    if (m.edge) {
+      const a = m.dir ?? 0;
+      const cx = w / 2;
+      const cy = h / 2;
+      const k = Math.min((cx - 80) / Math.max(1e-6, Math.abs(Math.cos(a))), (cy - 60) / Math.max(1e-6, Math.abs(Math.sin(a))));
+      const d = el('div', 'hud-safe-edge');
+      el('span', 'hud-safe-arrow', undefined, d);
+      el('span', 'hud-safe-text', m.label, d);
+      let p = { x: cx + Math.cos(a) * k, y: cy + Math.sin(a) * k };
+      if (blockers.length) p = clearOfRects(p, blockers, w, h, 70, 20);
+      d.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
+      d.style.setProperty('--a', `${a.toFixed(2)}rad`);
+      out.push(d);
+      return out;
+    }
+    // The label sits above the building's outline (or its centre), kept on screen and off the touch controls.
+    const top = m.outline ? Math.min(...m.outline.map(([, y]) => y)) : m.y;
+    const d = el('div', 'hud-safe', m.label);
+    let p = { x: Math.max(70, Math.min(w - 70, m.x)), y: Math.max(40, Math.min(h - 20, Math.min(top, m.y) - 8)) };
+    if (blockers.length) p = clearOfRects(p, blockers.map((r) => ({ x0: r.x0 - 70, x1: r.x1 + 70, y0: r.y0 - 8, y1: r.y1 + 32 })), w, h, 70, 4);
+    d.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
+    out.push(d);
+    return out;
   }
 
   private minimap: TacticalMap | null = null;
