@@ -72,6 +72,8 @@ export interface AudioDebug {
    * radio bus and at the master output since the last reset (linear, 1 = 0 dBFS).
    */
   meters: { radioPeak: number; radioRms: number; masterPeak: number } | null;
+  /** The audio clock (s), for checks that wait on what has really been played. */
+  time: number;
 }
 
 export class AudioEngine {
@@ -442,6 +444,7 @@ export class AudioEngine {
         : null,
       clips: this.clipLog.slice(-12),
       clipsMissed: this.clipsMissed.slice(),
+      time: this.ctx?.currentTime ?? 0,
       meters: this.meters ? { radioPeak: this.meters.radioPeak, radioRms: this.meters.radioRms, masterPeak: this.meters.masterPeak } : null,
     };
   }

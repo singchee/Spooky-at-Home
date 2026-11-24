@@ -1035,7 +1035,8 @@ async function audioChecks(browser) {
     await page.evaluate(() => window.__spooky.audioMeters());
     await page.evaluate(() => window.__spooky.audioSay('mission-complete'));
     await page.waitForFunction(() => window.__spooky.audio().voice.log.some((e) => e.line === 'mission-complete'), null, { timeout: 8000, polling: 100 }).catch(() => undefined);
-    await page.waitForTimeout(2500);
+    await page.waitForFunction(() => { const a = window.__spooky.audio(); const e = a.voice.log.find((x) => x.line === 'mission-complete'); return !e || a.time > e.end + 0.1; }, null, { timeout: 20000, polling: 100 }).catch(() => undefined);
+    await page.waitForTimeout(150);
     const metered = await read();
     out.radioMeter = metered?.meters;
     // A line peaks near 0.9 x the radio slider (~0.5 on the bus); the radio blip and static that come
@@ -1046,8 +1047,11 @@ async function audioChecks(browser) {
     if (lines.length < 20) errors.push(`only ${lines.length} voice lines found in src/audio/assets.ts`);
     for (const l of lines) {
       await page.evaluate(() => window.__spooky.audioMeters());
-      const ok = await page.evaluate((id) => window.__spooky.audioClip(`voice/${id}`, 700), l);
-      await page.waitForTimeout(800);
+      // 1.5 s of each line: some open quietly (a breath, a soft first word).
+      const ok = await page.evaluate((id) => window.__spooky.audioClip(`voice/${id}`, 1500), l);
+      // Wait on the audio clock (a loaded machine renders audio late), then one more meter read.
+      await page.waitForFunction((id) => { const a = window.__spooky.audio(); const c = a.clips.filter((e) => e.id === `voice/${id}`).pop(); return !c || a.time > c.end + 0.1; }, l, { timeout: 15000, polling: 100 }).catch(() => undefined);
+      await page.waitForTimeout(150);
       const m = (await read())?.meters;
       if (!ok || !(m?.radioPeak > 0.05)) out.voiceLines.silent.push({ line: l, started: ok, peak: m?.radioPeak });
     }

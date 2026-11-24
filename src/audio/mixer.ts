@@ -133,7 +133,8 @@ export class Mixer {
    */
   tap(where: 'radio' | 'master'): AnalyserNode {
     const a = this.ctx.createAnalyser();
-    a.fftSize = 2048;
+    // ~0.35 s of history: a loaded test machine reads the meter far less often than every 50 ms.
+    a.fftSize = 16384;
     (where === 'radio' ? this.radioBus : this.master).connect(a);
     return a;
   }
