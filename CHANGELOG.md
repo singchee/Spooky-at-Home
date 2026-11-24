@@ -7,7 +7,7 @@
 - **A proper gunship camera.** A slanted, zoomed view with sensor grain, glow and a heavier 105 kick (off when you choose reduced motion).
 - **Horde Night.** Hold the doors until dawn against streams of zombies, in two sizes: Big and Huge. Personal bests are kept for each map.
 - **Famous places.** New York (Midtown) and Paris are ready to fly with no download.
-- **Tall cities are playable.** Buildings that hide your aim turn see-through. When a building is in the way, the reticle reads MASKED and a mark shows where your round will actually land.
+- **Tall cities are playable.** Buildings that hide your aim turn see-through. When a building is in the way, the reticle reads BLOCKED and a mark shows where your round will actually land.
 - **Hordes scatter** when you hit them, then regroup.
 - **The last few zombies can always be found.** When only a handful are left, the game shows search areas to help you.
 - **A short animated intro** with a voiced news report and commander's orders.
@@ -26,6 +26,10 @@
 - On phones: the Horde Night counter no longer covers the minimap, buttons are big enough to tap, and markers stay clear of the touch controls.
 - Audio uses far less phone memory (about 27 MB instead of 75 MB).
 - Bot and practice runs no longer count as your personal best.
+- The 105 and 40 mm hits land with a proper boom, and the 105 shakes the camera (kept gentle, and off with reduced motion).
+- The 40 mm cannon clacks as it reloads between shots.
+- The safehouse is clearly marked, with an outline, a larger label and an arrow when it is off screen.
+- Radio voice lines load more reliably; a Radio volume of 0 is now flagged.
 
 ## 0.1.0 — Phases 1 and 2
 - First playable gunship over a real neighbourhood, with three guns, three cameras and three mission types.
