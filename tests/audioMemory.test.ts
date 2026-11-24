@@ -90,7 +90,7 @@ const fakeBuf = (channels: number, length: number, rate: number, fill = 0): Audi
 const createBuf = (ch: number, len: number, rate: number) => fakeBuf(ch, len, rate);
 
 /** A bank whose "decoder" returns a buffer shaped like the real file named in the URL. */
-const makeBank = () => {
+const makeBank = (createBuffer: (ch: number, len: number, rate: number) => AudioBuffer = createBuf) => {
   const fetcher: Fetcher = async (url) => {
     const id = url.replace(/^audio\//, '').replace(/\.mp3$/, '');
     return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(id).buffer as ArrayBuffer };
@@ -100,7 +100,7 @@ const makeBank = () => {
       const f = spec.get(new TextDecoder().decode(data))!;
       return fakeBuf(f.c, Math.round(f.s * f.r), f.r);
     },
-    createBuffer: createBuf,
+    createBuffer,
   };
   return new AssetBank(decoder, fetcher, 'audio/', 1, () => undefined);
 };
@@ -194,4 +194,50 @@ describe('decoded audio memory (3.6b)', () => {
     expect(decodePlan(SFX.fire105).maxRate).toBe(44_100);
     expect(decodePlan(voiceAsset('all-clear')).maxRate).toBe(22_050);
   });
+});
+
+describe('decoded audio memory when reducing fails (review of owner playtest 1)', () => {
+  /** Safari as it has behaved: createBuffer only between 22,050 and 96,000 Hz. */
+  const safari = (ch: number, len: number, rate: number) => {
+    if (rate < 22_050 || rate > 96_000) throw new DOMException('sampleRate is not in range', 'NotSupportedError');
+    return createBuf(ch, len, rate);
+  };
+  /** A browser that refuses every rate but the file's own: no reduction ever succeeds. */
+  const fullRateOnly = (ch: number, len: number, rate: number) => {
+    if (rate !== 44_100 && rate !== 48_000) throw new DOMException('sampleRate is not in range', 'NotSupportedError');
+    return createBuf(ch, len, rate);
+  };
+
+  it('a refused reduction keeps a mono buffer at the full rate, not the stereo original', () => {
+    const src = fakeBuf(2, 48_000, 48_000, 0.5); // L 0.5, R -0.1
+    const out = reduceBuffer(src, fullRateOnly, decodePlan(MUSIC.calm));
+    expect(out).not.toBe(src);
+    expect(out.numberOfChannels).toBe(1);
+    expect(out.sampleRate).toBe(48_000);
+    expect(out.duration).toBeCloseTo(1, 6);
+    expect(out.getChannelData(0)[1000]).toBeCloseTo(0.2, 5);
+    expect(bufferBytes(out)).toBe(bufferBytes(src) / 2);
+  });
+
+  for (const scene of ['menu', 'mission'] as const) {
+    it(`with Safari's sample-rate limits, every file for the ${scene} screen stays under ${BUDGET / 1e6} MB`, async () => {
+      const bank = makeBank(safari);
+      const ids = resident(scene);
+      await bank.request(ids);
+      expect(bank.ready(ids)).toBe(true);
+      const bytes = bank.decodedBytes();
+      console.log(`decoded with Safari limits (${scene}): ${(bytes / 1e6).toFixed(1)} MB`);
+      expect(bytes).toBeLessThan(BUDGET);
+    });
+
+    it(`if every reduction fails, the ${scene} screen keeps everything mono (measured and logged: over budget at full rate, see the report)`, async () => {
+      const bank = makeBank(fullRateOnly);
+      const ids = resident(scene);
+      await bank.request(ids);
+      expect(bank.ready(ids)).toBe(true);
+      for (const id of ids) expect(bank.get(id)!.numberOfChannels, id).toBe(1);
+      const bytes = bank.decodedBytes();
+      console.log(`decoded with every reduction refused (${scene}): ${(bytes / 1e6).toFixed(1)} MB`);
+    });
+  }
 });
