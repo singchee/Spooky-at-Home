@@ -149,7 +149,6 @@ All of it works on sensor values *before* the display mapping, so black-hot inve
 - **Zoom:** everything goes through `Game.zoomBy(-1|0|1)`. Z or the ZOOM button toggles ×1 ↔ ×1.6; the mouse wheel and a pinch step along ×0.45, ×0.7, ×1, ×1.6, ×2.4. Each gun remembers its own zoom. The narrowest lens is 1.0° (25 mm zoomed: a person is ~65 px). People are drawn at `MODEL_DISPLAY_SCALE` 1.7 (about 3 m: exaggerated on purpose so they read), tuned with these lenses.
 - **Near/far:** 600 m / 6000 m. Roads sit 1 m above the ground plane and areas 0.4 m (no z-fighting at this near plane).
 - **105 kick:** at most 5 px, one damped swing (0.4 s), off with reduced motion or reduce flicker.
-- **105 rumble (owner playtest 1):** on top of the kick, a short shake when a 105 lands: `RUMBLE` in `src/game/effects.ts` (`strength` 3 px is the tunable; at most `maxPx` 4 px however many land; full within 20 m of the aim point, fading to nothing at 160 m; 0.65 s; slow swings under 5 Hz, never a jitter). Game-clock based, so the same at any frame rate. Off with reduced motion (setting or device) or reduce flicker. Kick and rumble together stay under 9 px.
 - **Tracers come in from off screen:** rounds fly from the gunship (as drawn) along its slant line to the impact (flight time = the sim's range / `WeaponDef.speed`). The camera rides that same line, so the tracer's start swings around the target (same range) until it is just outside the field of view. Rounds never pop out of the middle of the screen.
 
 ## 9. Photosensitivity (non-negotiable)

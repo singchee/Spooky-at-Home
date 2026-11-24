@@ -48,59 +48,76 @@ describe('105 camera kick (photosensitivity)', () => {
   });
 });
 
-describe('105 rumble (owner playtest 1: a short shake when the round lands)', () => {
+describe('105 rumble (owner playtest 1): kick and rumble together keep the 105 kick rule', () => {
   const len = (o: { x: number; y: number }) => Math.hypot(o.x, o.y);
-  const peakOf = (blasts: { t0: number; amp: number }[], fps: number) => {
-    let m = 0;
-    for (let i = 0; i <= fps * 1.2; i++) m = Math.max(m, len(rumbleOffsetPx(blasts, i / fps)));
-    return m;
+  /** Kick and rumble together, `t` s after a 105 lands `d` m from the aim point. */
+  const both = (d: number, at: number[], still = false) => {
+    const fx = new Effects();
+    for (const t0 of at) fx.impact('105', 0, 0, t0, d);
+    return { fx, at: (t: number) => cameraShakePx(fx, t, still) };
   };
+  const samples = (f: (t: number) => { x: number; y: number }, fps: number, from = 0) =>
+    Array.from({ length: Math.ceil(fps * 1.2) }, (_, i) => f(from + i / fps));
+  /** Swings along a screen axis, counted as the safety playtest counts them (a change of 1 px or more). */
+  const swings = (os: { x: number; y: number }[], dir: { x: number; y: number }) => {
+    let n = 0;
+    let sign = 0;
+    let ext = 0;
+    for (const o of os) {
+      const v = o.x * dir.x + o.y * dir.y;
+      const d = v - ext;
+      if (Math.abs(d) < 1) continue;
+      if (Math.sign(d) !== sign) n++;
+      sign = Math.sign(d);
+      ext = v;
+    }
+    return n;
+  };
+  const KICK = { x: 0.34, y: 0.94 };
+  const ACROSS = { x: 0.94, y: -0.34 };
 
-  it('has a tunable strength and never moves the picture more than RUMBLE.maxPx, however many 105s land', () => {
+  it('has a tunable strength and never moves the picture more than SHAKE_MAX_PX (5) in all, at any frame rate', () => {
     expect(RUMBLE.strength).toBeGreaterThan(0);
-    expect(RUMBLE.strength).toBeLessThanOrEqual(RUMBLE.maxPx);
-    expect(RUMBLE.maxPx).toBeLessThanOrEqual(4);
+    expect(SHAKE_MAX_PX).toBeLessThanOrEqual(5);
     for (const fps of [30, 60, 144, 1000]) {
-      for (const n of [1, 2, 5]) {
-        const blasts = Array.from({ length: n }, (_, i) => ({ t0: i * 0.03, amp: 1 }));
-        expect(peakOf(blasts, fps)).toBeLessThanOrEqual(RUMBLE.maxPx + 1e-9);
+      for (const at of [[0], [0, 0.03], [0, 0.1, 0.2]]) {
+        for (const o of samples(both(0, at).at, fps)) expect(len(o)).toBeLessThanOrEqual(SHAKE_MAX_PX + 1e-9);
       }
     }
-    expect(peakOf([{ t0: 0, amp: 1 }], 1000)).toBeGreaterThan(1); // but it is there
   });
 
-  it('scales with the distance from the aim point and is capped: full near it, nothing far away', () => {
+  it('is clearly felt: a sideways swing of several pixels, so the picture rolls instead of only nudging', () => {
+    const near = samples(both(0, [0]).at, 1000);
+    const side = Math.max(...near.map((o) => Math.abs(o.x * ACROSS.x + o.y * ACROSS.y)));
+    expect(side).toBeGreaterThan(2.5);
+    expect(Math.max(...near.map(len))).toBeGreaterThan(4); // the whole jolt stays as big as the kick was
+  });
+
+  it('is one damped swing per axis (at most two swings, as the safety playtest counts them), settled by 0.5 s', () => {
+    for (const at of [[0], [0, 0.03]]) {
+      const os = samples(both(0, at).at, 1000);
+      expect(swings(os, KICK)).toBeLessThanOrEqual(2);
+      expect(swings(os, ACROSS)).toBeLessThanOrEqual(2);
+    }
+    const { at } = both(0, [0]);
+    expect(RUMBLE.delay + RUMBLE.time).toBeLessThanOrEqual(0.5);
+    expect(len(at(RUMBLE.delay + RUMBLE.time + 0.01))).toBe(0);
+    expect(RUMBLE.hz).toBeLessThan(5);
+  });
+
+  it('scales with the distance from the aim point: full near it, only the kick far away', () => {
     expect(rumbleFalloff(0)).toBe(1);
     expect(rumbleFalloff(RUMBLE.near)).toBe(1);
     expect(rumbleFalloff((RUMBLE.near + RUMBLE.range) / 2)).toBeCloseTo(0.5);
     expect(rumbleFalloff(RUMBLE.range)).toBe(0);
-    expect(rumbleFalloff(5000)).toBe(0);
     expect(rumbleFalloff(NaN)).toBe(0);
-    const at = (d: number) => peakOf([{ t0: 0, amp: rumbleFalloff(d) }], 1000);
-    expect(at(10)).toBeGreaterThan(at(90));
-    expect(at(90)).toBeGreaterThan(at(150));
-    expect(at(400)).toBe(0);
-  });
-
-  it('is short and slow: still after RUMBLE.time, every swing under 5 Hz (never a jitter or a strobe)', () => {
-    const b = [{ t0: 1, amp: 1 }];
-    expect(len(rumbleOffsetPx(b, 1 + RUMBLE.time))).toBeLessThan(1e-9);
-    expect(rumbleOffsetPx(b, 1 + RUMBLE.time + 0.01)).toEqual({ x: 0, y: 0 });
-    expect(rumbleOffsetPx(b, 0.99)).toEqual({ x: 0, y: 0 });
-    expect(RUMBLE.time).toBeLessThanOrEqual(0.8);
-    expect(Math.max(RUMBLE.hz.x, RUMBLE.hz.y)).toBeLessThan(5);
-    // Zero crossings in its lifetime match those rates (2 per cycle), at 1000 samples a second.
-    for (const axis of ['x', 'y'] as const) {
-      let crossings = 0;
-      let prev = 0;
-      for (let i = 1; i < 1000 * RUMBLE.time; i++) {
-        const v = rumbleOffsetPx(b, 1 + i / 1000)[axis];
-        if (Math.abs(v) < 1e-6) continue;
-        if (prev && Math.sign(v) !== Math.sign(prev)) crossings++;
-        prev = v;
-      }
-      expect(crossings / RUMBLE.time).toBeLessThanOrEqual(2 * 5);
-    }
+    const side = (d: number) => Math.max(...samples((t) => rumbleOffsetPx([{ t0: 0, amp: rumbleFalloff(d) }], t), 1000).map(len));
+    expect(side(10)).toBeGreaterThan(side(90));
+    expect(side(90)).toBeGreaterThan(0);
+    expect(side(400)).toBe(0);
+    // Far away: no rumble, and the kick is untouched.
+    const far = both(400, [0]);
+    expect(far.at(0.08)).toEqual(far.fx.shakePx(0.08));
   });
 
   it('is the same at any frame rate: the picture at a moment does not depend on how frames were stepped', () => {
@@ -110,7 +127,7 @@ describe('105 rumble (owner playtest 1: a short shake when the round lands)', ()
       for (let t = 0; t <= 2 + 1e-9; t += dt) {
         fx.update(t, dt);
         if (Math.abs(t - 0.5) < dt / 2) fx.impact('105', 0, 0, 0.5, 30);
-        for (const probe of [0.6, 0.75, 0.9]) if (Math.abs(t - probe) < 1e-6) seen.set(String(probe), len(fx.rumblePx(probe)));
+        for (const probe of [0.6, 0.75, 0.9]) if (Math.abs(t - probe) < 1e-6) seen.set(String(probe), len(cameraShakePx(fx, probe, false)));
       }
       fx.dispose();
       return seen;
@@ -120,15 +137,13 @@ describe('105 rumble (owner playtest 1: a short shake when the round lands)', ()
     for (const k of ['0.6', '0.75', '0.9']) expect(b.get(k)).toBeCloseTo(a.get(k)!, 9);
   });
 
-  it('only a 105 rumbles, only when told how far it landed from the aim; reduced motion turns the whole shake off', () => {
+  it('only a 105 rumbles; reduced motion (or Reduce flicker) turns the whole shake off', () => {
     const fx = new Effects();
     fx.impact('40', 0, 0, 1, 0);
-    expect(fx.rumblePx(1.1)).toEqual({ x: 0, y: 0 });
+    expect(len(fx.rumblePx(1.2))).toBe(0);
     fx.impact('105', 0, 0, 2, 0);
-    expect(len(fx.rumblePx(2.05))).toBeGreaterThan(0.5);
-    const moving = cameraShakePx(fx, 2.05, false);
-    expect(len(moving)).toBeGreaterThan(len(fx.shakePx(2.05)) * 0.5);
-    expect(cameraShakePx(fx, 2.05, true)).toEqual({ x: 0, y: 0 });
+    expect(len(fx.rumblePx(2.15))).toBeGreaterThan(1);
+    expect(len(cameraShakePx(fx, 2.15, true))).toBe(0);
     fx.dispose();
   });
 });

@@ -68,8 +68,6 @@ interface TestHooks {
   holdFire?: (on: boolean) => void;
   /** Where the aim point appears relative to the screen centre, CSS px (the camera kick, as last drawn). */
   aimOffset?: () => [number, number];
-  /** The camera shake's two parts now, CSS px (zero when the picture is kept still): the 105 kick and its rumble. */
-  shakeParts?: () => { kick: [number, number]; rumble: [number, number] };
   /**
    * Line of sight at a ground point (3.39), from where the gunship is now: `masked` when a building
    * stands between the gunship and a body there (the reticle's MASKED), `covered` when what is drawn
@@ -299,12 +297,6 @@ export class Game {
         const p = this.screenPos(this.aim, 0);
         const c = this.renderer.domElement;
         return [p.x - c.clientWidth / 2, p.y - c.clientHeight / 2];
-      };
-      hooks.shakeParts = () => {
-        const still = this.reduceFlicker || reducedMotion();
-        const k = still ? { x: 0, y: 0 } : this.effects.shakePx(this.clock);
-        const r = still ? { x: 0, y: 0 } : this.effects.rumblePx(this.clock);
-        return { kick: [k.x, k.y], rumble: [r.x, r.y] };
       };
       hooks.screenOf = (x, z) => {
         const p = this.screenPos({ x, z }, 0);
@@ -1160,7 +1152,7 @@ export class Game {
     this.disposed = true;
     // Test hooks must not outlive this game (they'd point at a dead one).
     const hooks = window.__spooky as TestHooks | undefined;
-    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'shakeParts', 'screenOf', 'landmarks', 'sight', 'orbit', 'cutaway', 'endgame', 'searchAreas', 'lodParity'] as const) delete hooks[k];
+    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf', 'landmarks', 'sight', 'orbit', 'cutaway', 'endgame', 'searchAreas', 'lodParity'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
     audio.release('mission');
     this.offSettings();

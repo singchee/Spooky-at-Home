@@ -99,29 +99,35 @@ export function shakeOffsetPx(age: number): { x: number; y: number } {
 }
 
 /**
- * Owner playtest 1: a short rumble when a 105 lands, on top of the kick above. Its strength falls off
- * with the blast's distance from the aim point (full within `near` m, nothing beyond `range` m), and
- * several blasts together never move the picture more than `maxPx`. Slow, smooth swings (under 5 Hz,
- * two sines off each other's beat), so it reads as the ground shaking, never as a jitter or a strobe.
- * Off under reduced motion (setting or device) and Reduce flicker, like the kick (Game.applyKick).
- * In closed form on the game clock: the same picture at any frame rate.
+ * Owner playtest 1: when a 105 lands the picture rolls as well as kicks. The rumble is a damped
+ * sideways swing (across the kick's direction) a beat after the kick, so together they trace a
+ * short loop instead of a straight nudge. Its strength falls off with the blast's distance from
+ * the aim point (full within `near` m, nothing beyond `range` m). The 105 kick rule still holds
+ * for the two together (docs/STYLE.md: at most SHAKE_MAX_PX, one damped swing, about 0.4 s): the
+ * kick is trimmed while a rumble runs and the sum is capped at SHAKE_MAX_PX, and each screen axis
+ * swings at most twice. Off under reduced motion (setting or device) and Reduce flicker
+ * (cameraShakePx). In closed form on the game clock: the same picture at any frame rate.
  */
 export const RUMBLE = {
-  /** Tunable: screen pixels at full strength (a 105 at the aim point). */
-  strength: 3,
-  /** Most the rumble alone ever moves the picture, CSS px, however many 105s land together. */
-  maxPx: 4,
+  /** Tunable: the sideways swing at full strength (a 105 at the aim point), screen px. */
+  strength: 4,
+  /** While a full-strength rumble runs, the kick gives up this share of its size (room under the cap). */
+  kickTrim: 0.1,
   /** Full strength within this distance of the aim point (m)... */
   near: 20,
   /** ...fading to nothing at this distance (m). */
   range: 160,
-  /** Seconds it lasts (then exactly still). */
-  time: 0.65,
+  /** Starts this long after the kick (s): the two swings out of step make the loop. */
+  delay: 0.06,
+  /** Seconds it lasts once started (then exactly still): over with the kick's 0.4 s, plus its delay. */
+  time: 0.4,
+  /** Swing rate (Hz), as the kick's: one out-and-back. */
+  hz: 2.5,
   /** Decay time constant (s). */
-  tau: 0.25,
-  /** Swing rates on screen x and y (Hz): slow enough never to strobe. */
-  hz: { x: 3.7, y: 4.6 },
+  tau: 0.16,
 } as const;
+/** Across the kick's direction on screen (unit length). */
+const RUMBLE_DIR = { x: SHAKE_DIR.y, y: -SHAKE_DIR.x };
 
 /** One 105's rumble at the aim point's distance `d` (m): 0..1 of RUMBLE.strength. */
 export function rumbleFalloff(d: number): number {
@@ -130,34 +136,46 @@ export function rumbleFalloff(d: number): number {
   return Math.max(0, 1 - (d - RUMBLE.near) / (RUMBLE.range - RUMBLE.near));
 }
 
-/** The rumble of these blasts (`t0` game time, `amp` 0..1) at game time `now`, screen px, capped at RUMBLE.maxPx. */
-export function rumbleOffsetPx(blasts: readonly { t0: number; amp: number }[], now: number): { x: number; y: number } {
-  let x = 0;
-  let y = 0;
+type Blast = { t0: number; amp: number };
+const live = (b: Blast, now: number) => b.amp > 0 && now - b.t0 >= 0 && now - b.t0 < RUMBLE.delay + RUMBLE.time;
+
+/** The rumble of these blasts (`t0` game time, `amp` 0..1) at game time `now`, screen px (sideways to the kick). */
+export function rumbleOffsetPx(blasts: readonly Blast[], now: number): { x: number; y: number } {
+  let v = 0;
   for (const b of blasts) {
-    const age = now - b.t0;
-    if (!(age >= 0) || age >= RUMBLE.time || !(b.amp > 0)) continue;
-    const env = RUMBLE.strength * b.amp * Math.exp(-age / RUMBLE.tau) * (1 - age / RUMBLE.time);
-    x += env * Math.sin(2 * Math.PI * RUMBLE.hz.x * age);
-    y += env * Math.sin(2 * Math.PI * RUMBLE.hz.y * age + 0.9) * 0.8;
+    const age = now - b.t0 - RUMBLE.delay;
+    if (!live(b, now) || age < 0) continue;
+    const tail = 1 - age / RUMBLE.time;
+    v += RUMBLE.strength * b.amp * Math.sin(2 * Math.PI * RUMBLE.hz * age) * Math.exp(-age / RUMBLE.tau) * tail * 1.9;
   }
-  const m = Math.hypot(x, y);
-  if (m > RUMBLE.maxPx) {
-    x *= RUMBLE.maxPx / m;
-    y *= RUMBLE.maxPx / m;
-  }
-  return { x, y };
+  v = Math.max(-SHAKE_MAX_PX, Math.min(SHAKE_MAX_PX, v));
+  return { x: v * RUMBLE_DIR.x, y: v * RUMBLE_DIR.y };
+}
+
+/** How much of the kick a running rumble leaves (1 = all of it): steady for the rumble's life, so it adds no swing. */
+export function kickShare(blasts: readonly Blast[], now: number): number {
+  let amp = 0;
+  for (const b of blasts) if (live(b, now)) amp = Math.max(amp, Math.min(1, b.amp));
+  return 1 - RUMBLE.kickTrim * amp;
 }
 
 /**
- * The whole camera shake (105 kick + rumble) at `now`, screen px; zero when the player wants the
- * picture still (reduced motion or Reduce flicker).
+ * The whole camera shake (105 kick + rumble) at `now`, screen px, never more than SHAKE_MAX_PX in
+ * all; zero when the player wants the picture still (reduced motion or Reduce flicker).
  */
-export function cameraShakePx(fx: Pick<Effects, 'shakePx' | 'rumblePx'>, now: number, still: boolean): { x: number; y: number } {
+export function cameraShakePx(fx: Pick<Effects, 'shakePx' | 'rumblePx' | 'kickShare'>, now: number, still: boolean): { x: number; y: number } {
   if (still) return { x: 0, y: 0 };
   const k = fx.shakePx(now);
+  const share = fx.kickShare(now);
   const r = fx.rumblePx(now);
-  return { x: k.x + r.x, y: k.y + r.y };
+  let x = k.x * share + r.x;
+  let y = k.y * share + r.y;
+  const m = Math.hypot(x, y);
+  if (m > SHAKE_MAX_PX) {
+    x *= SHAKE_MAX_PX / m;
+    y *= SHAKE_MAX_PX / m;
+  }
+  return { x, y };
 }
 
 export class Effects {
@@ -292,7 +310,7 @@ export class Effects {
     if (weapon === '105') {
       this.kickAt = now;
       const amp = aimDist === undefined ? 0 : rumbleFalloff(aimDist);
-      this.rumbles = this.rumbles.filter((b) => now - b.t0 < RUMBLE.time);
+      this.rumbles = this.rumbles.filter((b) => now - b.t0 < RUMBLE.delay + RUMBLE.time);
       if (amp > 0) this.rumbles.push({ t0: now, amp });
     }
   }
@@ -351,6 +369,11 @@ export class Effects {
   /** The 105 rumble at `now`, in screen pixels (zero once settled). */
   rumblePx(now: number): { x: number; y: number } {
     return rumbleOffsetPx(this.rumbles, now);
+  }
+
+  /** How much of the kick shows while a rumble runs (RUMBLE.kickTrim). */
+  kickShare(now: number): number {
+    return kickShare(this.rumbles, now);
   }
 
   dispose(): void {
