@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Effects, SHAKE_MAX_PX, SHAKE_TIME, shakeOffsetPx } from '../src/game/effects';
+import { cameraShakePx, Effects, RUMBLE, rumbleFalloff, rumbleOffsetPx, SHAKE_MAX_PX, SHAKE_TIME, shakeOffsetPx } from '../src/game/effects';
 import { AgentsView } from '../src/game/agentsView';
 import { PANEL_SIZE, PANEL_Y, PART, StrobeSprites, buildFigureGeometry } from '../src/render/figureShader';
 import { SensorShader } from '../src/render/sensors';
@@ -44,6 +44,91 @@ describe('105 camera kick (photosensitivity)', () => {
     const k = fx.shakePx(2.06);
     expect(Math.hypot(k.x, k.y)).toBeGreaterThan(2);
     expect(fx.shakePx(2.5)).toEqual({ x: 0, y: 0 });
+    fx.dispose();
+  });
+});
+
+describe('105 rumble (owner playtest 1: a short shake when the round lands)', () => {
+  const len = (o: { x: number; y: number }) => Math.hypot(o.x, o.y);
+  const peakOf = (blasts: { t0: number; amp: number }[], fps: number) => {
+    let m = 0;
+    for (let i = 0; i <= fps * 1.2; i++) m = Math.max(m, len(rumbleOffsetPx(blasts, i / fps)));
+    return m;
+  };
+
+  it('has a tunable strength and never moves the picture more than RUMBLE.maxPx, however many 105s land', () => {
+    expect(RUMBLE.strength).toBeGreaterThan(0);
+    expect(RUMBLE.strength).toBeLessThanOrEqual(RUMBLE.maxPx);
+    expect(RUMBLE.maxPx).toBeLessThanOrEqual(4);
+    for (const fps of [30, 60, 144, 1000]) {
+      for (const n of [1, 2, 5]) {
+        const blasts = Array.from({ length: n }, (_, i) => ({ t0: i * 0.03, amp: 1 }));
+        expect(peakOf(blasts, fps)).toBeLessThanOrEqual(RUMBLE.maxPx + 1e-9);
+      }
+    }
+    expect(peakOf([{ t0: 0, amp: 1 }], 1000)).toBeGreaterThan(1); // but it is there
+  });
+
+  it('scales with the distance from the aim point and is capped: full near it, nothing far away', () => {
+    expect(rumbleFalloff(0)).toBe(1);
+    expect(rumbleFalloff(RUMBLE.near)).toBe(1);
+    expect(rumbleFalloff((RUMBLE.near + RUMBLE.range) / 2)).toBeCloseTo(0.5);
+    expect(rumbleFalloff(RUMBLE.range)).toBe(0);
+    expect(rumbleFalloff(5000)).toBe(0);
+    expect(rumbleFalloff(NaN)).toBe(0);
+    const at = (d: number) => peakOf([{ t0: 0, amp: rumbleFalloff(d) }], 1000);
+    expect(at(10)).toBeGreaterThan(at(90));
+    expect(at(90)).toBeGreaterThan(at(150));
+    expect(at(400)).toBe(0);
+  });
+
+  it('is short and slow: still after RUMBLE.time, every swing under 5 Hz (never a jitter or a strobe)', () => {
+    const b = [{ t0: 1, amp: 1 }];
+    expect(len(rumbleOffsetPx(b, 1 + RUMBLE.time))).toBeLessThan(1e-9);
+    expect(rumbleOffsetPx(b, 1 + RUMBLE.time + 0.01)).toEqual({ x: 0, y: 0 });
+    expect(rumbleOffsetPx(b, 0.99)).toEqual({ x: 0, y: 0 });
+    expect(RUMBLE.time).toBeLessThanOrEqual(0.8);
+    expect(Math.max(RUMBLE.hz.x, RUMBLE.hz.y)).toBeLessThan(5);
+    // Zero crossings in its lifetime match those rates (2 per cycle), at 1000 samples a second.
+    for (const axis of ['x', 'y'] as const) {
+      let crossings = 0;
+      let prev = 0;
+      for (let i = 1; i < 1000 * RUMBLE.time; i++) {
+        const v = rumbleOffsetPx(b, 1 + i / 1000)[axis];
+        if (Math.abs(v) < 1e-6) continue;
+        if (prev && Math.sign(v) !== Math.sign(prev)) crossings++;
+        prev = v;
+      }
+      expect(crossings / RUMBLE.time).toBeLessThanOrEqual(2 * 5);
+    }
+  });
+
+  it('is the same at any frame rate: the picture at a moment does not depend on how frames were stepped', () => {
+    const run = (dt: number) => {
+      const fx = new Effects();
+      const seen = new Map<string, number>();
+      for (let t = 0; t <= 2 + 1e-9; t += dt) {
+        fx.update(t, dt);
+        if (Math.abs(t - 0.5) < dt / 2) fx.impact('105', 0, 0, 0.5, 30);
+        for (const probe of [0.6, 0.75, 0.9]) if (Math.abs(t - probe) < 1e-6) seen.set(String(probe), len(fx.rumblePx(probe)));
+      }
+      fx.dispose();
+      return seen;
+    };
+    const a = run(1 / 20);
+    const b = run(1 / 100);
+    for (const k of ['0.6', '0.75', '0.9']) expect(b.get(k)).toBeCloseTo(a.get(k)!, 9);
+  });
+
+  it('only a 105 rumbles, only when told how far it landed from the aim; reduced motion turns the whole shake off', () => {
+    const fx = new Effects();
+    fx.impact('40', 0, 0, 1, 0);
+    expect(fx.rumblePx(1.1)).toEqual({ x: 0, y: 0 });
+    fx.impact('105', 0, 0, 2, 0);
+    expect(len(fx.rumblePx(2.05))).toBeGreaterThan(0.5);
+    const moving = cameraShakePx(fx, 2.05, false);
+    expect(len(moving)).toBeGreaterThan(len(fx.shakePx(2.05)) * 0.5);
+    expect(cameraShakePx(fx, 2.05, true)).toEqual({ x: 0, y: 0 });
     fx.dispose();
   });
 });

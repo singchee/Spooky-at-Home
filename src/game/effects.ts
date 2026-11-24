@@ -98,6 +98,68 @@ export function shakeOffsetPx(age: number): { x: number; y: number } {
   return { x: v * SHAKE_DIR.x, y: v * SHAKE_DIR.y };
 }
 
+/**
+ * Owner playtest 1: a short rumble when a 105 lands, on top of the kick above. Its strength falls off
+ * with the blast's distance from the aim point (full within `near` m, nothing beyond `range` m), and
+ * several blasts together never move the picture more than `maxPx`. Slow, smooth swings (under 5 Hz,
+ * two sines off each other's beat), so it reads as the ground shaking, never as a jitter or a strobe.
+ * Off under reduced motion (setting or device) and Reduce flicker, like the kick (Game.applyKick).
+ * In closed form on the game clock: the same picture at any frame rate.
+ */
+export const RUMBLE = {
+  /** Tunable: screen pixels at full strength (a 105 at the aim point). */
+  strength: 3,
+  /** Most the rumble alone ever moves the picture, CSS px, however many 105s land together. */
+  maxPx: 4,
+  /** Full strength within this distance of the aim point (m)... */
+  near: 20,
+  /** ...fading to nothing at this distance (m). */
+  range: 160,
+  /** Seconds it lasts (then exactly still). */
+  time: 0.65,
+  /** Decay time constant (s). */
+  tau: 0.25,
+  /** Swing rates on screen x and y (Hz): slow enough never to strobe. */
+  hz: { x: 3.7, y: 4.6 },
+} as const;
+
+/** One 105's rumble at the aim point's distance `d` (m): 0..1 of RUMBLE.strength. */
+export function rumbleFalloff(d: number): number {
+  if (!Number.isFinite(d)) return 0;
+  if (d <= RUMBLE.near) return 1;
+  return Math.max(0, 1 - (d - RUMBLE.near) / (RUMBLE.range - RUMBLE.near));
+}
+
+/** The rumble of these blasts (`t0` game time, `amp` 0..1) at game time `now`, screen px, capped at RUMBLE.maxPx. */
+export function rumbleOffsetPx(blasts: readonly { t0: number; amp: number }[], now: number): { x: number; y: number } {
+  let x = 0;
+  let y = 0;
+  for (const b of blasts) {
+    const age = now - b.t0;
+    if (!(age >= 0) || age >= RUMBLE.time || !(b.amp > 0)) continue;
+    const env = RUMBLE.strength * b.amp * Math.exp(-age / RUMBLE.tau) * (1 - age / RUMBLE.time);
+    x += env * Math.sin(2 * Math.PI * RUMBLE.hz.x * age);
+    y += env * Math.sin(2 * Math.PI * RUMBLE.hz.y * age + 0.9) * 0.8;
+  }
+  const m = Math.hypot(x, y);
+  if (m > RUMBLE.maxPx) {
+    x *= RUMBLE.maxPx / m;
+    y *= RUMBLE.maxPx / m;
+  }
+  return { x, y };
+}
+
+/**
+ * The whole camera shake (105 kick + rumble) at `now`, screen px; zero when the player wants the
+ * picture still (reduced motion or Reduce flicker).
+ */
+export function cameraShakePx(fx: Pick<Effects, 'shakePx' | 'rumblePx'>, now: number, still: boolean): { x: number; y: number } {
+  if (still) return { x: 0, y: 0 };
+  const k = fx.shakePx(now);
+  const r = fx.rumblePx(now);
+  return { x: k.x + r.x, y: k.y + r.y };
+}
+
 export class Effects {
   readonly group = new THREE.Group();
   private glow = new ParticlePool([CAP_TRACERS, CAP_SHORT, CAP_FIRES], makeAdditiveMaterial());
@@ -117,6 +179,8 @@ export class Effects {
   private washTarget = 0;
   /** Game-clock time of the latest 105 impact (starts the camera kick). */
   kickAt = -Infinity;
+  /** Recent 105 blasts for the rumble (pruned once settled). */
+  private rumbles: { t0: number; amp: number }[] = [];
 
   constructor() {
     this.craterMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -142,7 +206,8 @@ export class Effects {
     });
   }
 
-  impact(weapon: string, x: number, z: number, now: number): void {
+  /** `aimDist`: how far (m) the blast is from the aim point; a 105 rumbles the camera by it (RUMBLE). */
+  impact(weapon: string, x: number, z: number, now: number, aimDist?: number): void {
     const w = weaponById(weapon);
     const P = profileOf(weapon);
     const R = w.radius;
@@ -224,7 +289,12 @@ export class Effects {
     this.nextCraterY = (this.nextCraterY + 1) % 10;
     this.craters.push({ x, z, t0: now, r: Math.max(1.2, R * 0.45), y: 1.4 + this.nextCraterY * 0.02 });
     this.washTarget = Math.min(0.9, this.washTarget + w.washout);
-    if (weapon === '105') this.kickAt = now;
+    if (weapon === '105') {
+      this.kickAt = now;
+      const amp = aimDist === undefined ? 0 : rumbleFalloff(aimDist);
+      this.rumbles = this.rumbles.filter((b) => now - b.t0 < RUMBLE.time);
+      if (amp > 0) this.rumbles.push({ t0: now, amp });
+    }
   }
 
   /** For tests: objects drawn and live instances per kind (capped, so draw calls stay flat). */
@@ -276,6 +346,11 @@ export class Effects {
   /** The 105 camera kick at `now`, in screen pixels (zero once it has settled). */
   shakePx(now: number): { x: number; y: number } {
     return shakeOffsetPx(now - this.kickAt);
+  }
+
+  /** The 105 rumble at `now`, in screen pixels (zero once settled). */
+  rumblePx(now: number): { x: number; y: number } {
+    return rumbleOffsetPx(this.rumbles, now);
   }
 
   dispose(): void {

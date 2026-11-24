@@ -24,6 +24,7 @@ const AREA_LIMIT = 0.25;
 const LUM_STEP = 0.1;
 const GRID = { cols: 32, rows: 18, sub: 5 };
 const KICK_LIMIT_PX = 5.5; // 105 camera kick: 5 px cap, plus half a pixel for rounding
+const RUMBLE_LIMIT_PX = Number(readFileSync('src/game/effects.ts', 'utf8').match(/maxPx: ([\d.]+)/)[1]) + 0.5; // 105 rumble: RUMBLE.maxPx, plus rounding
 const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort'], { stdio: 'pipe' });
 const ready = new Promise((res, rej) => {
   server.stdout.on('data', (d) => String(d).includes(String(PORT)) && res());
@@ -535,7 +536,8 @@ async function startMeter(page, selector, clock = 'game') {
         const n = G.sub * G.sub;
         const t = clk === 'game' ? window.__spooky.state().t * 1000 : clk === 'intro' ? (window.__spooky.intro?.state().t ?? 0) * 1000 : performance.now();
         const kick = clk === 'game' ? window.__spooky.aimOffset?.() ?? null : null;
-        m.frames.push([t, L.map((v) => Math.round((v / n) * 1000) / 1000), performance.now(), kick]);
+        const parts = clk === 'game' ? window.__spooky.shakeParts?.() ?? null : null;
+        m.frames.push([t, L.map((v) => Math.round((v / n) * 1000) / 1000), performance.now(), kick, parts]);
       }
       requestAnimationFrame(loop);
     };
@@ -645,8 +647,9 @@ function flashStats(frames) {
  * The camera kick seen in the sampled frames: the largest offset of the aim point from the screen
  * centre (CSS px), and how many times it swings (changes direction by a pixel or more).
  */
-function kickStats(frames) {
-  const ks = frames.map((f) => f[3]).filter(Boolean);
+function kickStats(frames, part = null) {
+  // part: 'kick' or 'rumble' reads that part of the shake (shakeParts); null, the whole visible offset.
+  const ks = frames.map((f) => (part ? f[4]?.[part] : f[3])).filter(Boolean);
   let max = 0;
   let swings = 0;
   let dir = 0;
@@ -828,11 +831,19 @@ async function safetyChecks(browser) {
     await startMeter(page, 'canvas.game-canvas');
     await untilGameTime(page, t0 + 7.5);
     const frames = await stopMeter(page);
-    const kick = kickStats(frames);
-    const r = judge(`105 impact on the aim point through the zoomed 25 mm, ${label}`, frames, kick);
+    // Owner playtest 1 added a rumble on top of the kick (RUMBLE in src/game/effects.ts): the kick is
+    // judged on its own as before, the rumble against its own cap, and with reduced motion the whole
+    // visible picture must stay still.
+    const seen = kickStats(frames);
+    const kick = kickStats(frames, 'kick');
+    const rumble = kickStats(frames, 'rumble');
+    const r = judge(`105 impact on the aim point through the zoomed 25 mm, ${label}`, frames, { ...kick, rumblePx: rumble.kickPx, rumbleSwings: rumble.kickSwings, shakePx: seen.kickPx });
     if (!fired) r.errors.push('the 105 did not fire (test hook missing?)');
     const still = extra.reducedMotion === 'reduce';
-    if (still && kick.kickPx > 0.5) r.errors.push(`camera kicked ${kick.kickPx} px with reduced motion (should be still)`);
+    if (still && seen.kickPx > 0.5) r.errors.push(`camera moved ${seen.kickPx} px with reduced motion (should be still)`);
+    if (!still && rumble.kickPx > RUMBLE_LIMIT_PX) r.errors.push(`105 rumble ${rumble.kickPx} px (limit ${RUMBLE_LIMIT_PX - 0.5})`);
+    if (!still && rumble.kickPx < 0.5) r.errors.push(`no 105 rumble seen (${rumble.kickPx} px) for a blast on the aim point`);
+    if (!still && seen.kickPx > KICK_LIMIT_PX + RUMBLE_LIMIT_PX) r.errors.push(`camera shake ${seen.kickPx} px in all (kick + rumble limit ${KICK_LIMIT_PX + RUMBLE_LIMIT_PX - 1})`);
     if (!still && kick.kickPx > KICK_LIMIT_PX) r.errors.push(`camera kick ${kick.kickPx} px (limit 5)`);
     if (!still && kick.kickSwings > 2) r.errors.push(`camera kick swings ${kick.kickSwings} times (one damped kick: at most 2)`);
     if (!still && kick.kickPx < 1) r.errors.push(`no camera kick seen (${kick.kickPx} px): is the 105 landing on screen?`);

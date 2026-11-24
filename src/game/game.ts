@@ -8,7 +8,7 @@ import type { SensorId } from '../render/sensors';
 import { SensorPost } from '../render/sensorPost';
 import { GfxGovernor, tierFromQuery } from '../render/gfxGovernor';
 import { AgentsView } from './agentsView';
-import { Effects } from './effects';
+import { cameraShakePx, Effects } from './effects';
 import { Hud } from '../ui/hud';
 import { briefingVisuals } from '../ui/briefingDiorama';
 import { el } from '../ui/dom';
@@ -68,6 +68,8 @@ interface TestHooks {
   holdFire?: (on: boolean) => void;
   /** Where the aim point appears relative to the screen centre, CSS px (the camera kick, as last drawn). */
   aimOffset?: () => [number, number];
+  /** The camera shake's two parts now, CSS px (zero when the picture is kept still): the 105 kick and its rumble. */
+  shakeParts?: () => { kick: [number, number]; rumble: [number, number] };
   /**
    * Line of sight at a ground point (3.39), from where the gunship is now: `masked` when a building
    * stands between the gunship and a body there (the reticle's MASKED), `covered` when what is drawn
@@ -297,6 +299,12 @@ export class Game {
         const p = this.screenPos(this.aim, 0);
         const c = this.renderer.domElement;
         return [p.x - c.clientWidth / 2, p.y - c.clientHeight / 2];
+      };
+      hooks.shakeParts = () => {
+        const still = this.reduceFlicker || reducedMotion();
+        const k = still ? { x: 0, y: 0 } : this.effects.shakePx(this.clock);
+        const r = still ? { x: 0, y: 0 } : this.effects.rumblePx(this.clock);
+        return { kick: [k.x, k.y], rumble: [r.x, r.y] };
       };
       hooks.screenOf = (x, z) => {
         const p = this.screenPos({ x, z }, 0);
@@ -859,7 +867,7 @@ export class Game {
           this.sfx.fire(e.weapon);
           break;
         case 'impact':
-          this.effects.impact(e.weapon, e.x, e.z, now);
+          this.effects.impact(e.weapon, e.x, e.z, now, Math.hypot(e.x - this.aim.x, e.z - this.aim.z));
           this.agents.impact(e.x, e.z, weaponById(e.weapon).radius, now); // flinches, falls away from the blast, ducking
           this.crowd?.impact(e.weapon, e.kills, e.x, e.z, now);
           this.sfx.impact(e.weapon);
@@ -1015,13 +1023,12 @@ export class Game {
   }
 
   /**
-   * The 105's camera kick: one damped swing of at most SHAKE_MAX_PX screen pixels, converted to
-   * metres at the aim point with the current field of view and range. Off with reduced motion or
-   * reduce flicker.
+   * The 105's camera kick (one damped swing of at most SHAKE_MAX_PX screen pixels) plus its rumble
+   * (RUMBLE, by distance from the aim point), converted to metres at the aim point with the current
+   * field of view and range. Off with reduced motion (setting or device) or reduce flicker.
    */
   private applyKick(fovDeg: number): void {
-    if (this.reduceFlicker || reducedMotion()) return;
-    const k = this.effects.shakePx(this.clock);
+    const k = cameraShakePx(this.effects, this.clock, this.reduceFlicker || reducedMotion());
     if (!k.x && !k.y) return;
     const cam = this.camera;
     const h = this.renderer.domElement.clientHeight || 1;
@@ -1136,7 +1143,7 @@ export class Game {
     this.disposed = true;
     // Test hooks must not outlive this game (they'd point at a dead one).
     const hooks = window.__spooky as TestHooks | undefined;
-    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'screenOf', 'landmarks', 'sight', 'orbit', 'cutaway', 'endgame', 'searchAreas', 'lodParity'] as const) delete hooks[k];
+    if (hooks) for (const k of ['fireAt', 'aimAt', 'survivors', 'zombies', 'fixedStep', 'holdFire', 'aimOffset', 'shakeParts', 'screenOf', 'landmarks', 'sight', 'orbit', 'cutaway', 'endgame', 'searchAreas', 'lodParity'] as const) delete hooks[k];
     cancelAnimationFrame(this.raf);
     audio.release('mission');
     this.offSettings();
