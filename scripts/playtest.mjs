@@ -243,12 +243,16 @@ async function scatterShots(browser) {
         return best;
       });
       await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [at.x, at.z]);
-      await untilGameTime(page, (await gameTime(page)) + 1.5);
+      // Game-time waits run by advanceTo (big fixed steps between the shots): at 1/60 s a frame the
+      // t + 15 s wait alone is 720 frames, over 240 s on software rendering at ~3 frames a second.
+      await advanceTo(page, (await gameTime(page)) + 1.5);
       const fired = await page.evaluate(([x, z]) => window.__spooky.fireAt('105', x, z), [at.x, at.z]);
-      await page.waitForFunction(() => window.__spooky.state().kills > 0, null, { timeout: 60000 }).catch(() => errs.push('the 105 never landed'));
+      // Impact: the first kill, found within 1/20 s of game time; 20 game seconds is far past any 105 flight.
+      await advanceTo(page, (await gameTime(page)) + 20, { big: 1 / 20, untilKill: true });
+      if (!(await page.evaluate(() => window.__spooky.state().kills > 0))) errs.push('the 105 never landed');
       const t0 = await gameTime(page);
       for (const dt of [1, 2, 3, 15]) {
-        await untilGameTime(page, t0 + dt);
+        await advanceTo(page, t0 + dt);
         await fixedStep(page, 0);
         await page.waitForTimeout(300);
         shots[`t${dt}`] = `${out}/scatter-${template}-${view}-t${dt}.png`;
@@ -685,6 +689,25 @@ function gameTime(page) {
 /** Wait (in real time, however long it takes) until the game clock reaches `t` seconds. */
 function untilGameTime(page, t, timeout = 240000) {
   return page.waitForFunction((tt) => window.__spooky.state().t >= tt, t, { timeout, polling: 50 });
+}
+/**
+ * Run the game clock (under fixedStep) to `t` seconds, or (`untilKill`) until the first kill, rendering
+ * as few frames as it can: `big` game seconds a frame until the last half second, then 1/60 s, so it
+ * stops within one 1/60 s frame of `t`. The sim itself always ticks in fixed STEP increments
+ * (Game.frame), so the mission is the same as at 1/60 s a frame; only fewer pictures are drawn. For
+ * waits that would otherwise take minutes on software rendering (a few frames a second). Leaves the
+ * step at 1/60 s.
+ */
+async function advanceTo(page, t, { big = 0.25, untilKill = false, timeout = 240000 } = {}) {
+  await page.waitForFunction(([tt, b, kill]) => {
+    const h = window.__spooky;
+    const s = h.state();
+    const left = tt - s.t;
+    const done = left <= 0 || (kill && s.kills > 0);
+    h.fixedStep(done || left <= 0.5 ? 1 / 60 : b);
+    return done;
+  }, [t, big, untilKill], { timeout, polling: 'raf' });
+  await fixedStep(page, 1 / 60);
 }
 /** Game seconds per rendered frame (null: real time). A test hook: only present under automation. */
 function fixedStep(page, dt) {
