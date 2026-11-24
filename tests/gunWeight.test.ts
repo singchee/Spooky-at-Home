@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { FIRE_WEIGHT, Gate, IMPACT_WEIGHT, MIN_GAP, noiseEnvelope, PUNCH, punchGain, renderWeight, RETRIGGER_25, subEnvelope, SUB_FLOOR, subFreq, WEAPON_EQ, type Gun, type Weight, type WeightEvent } from '../src/audio/weight';
-import { Sfx } from '../src/audio/sfx';
+import { CLACK_40, clackTimes, FIRE_WEIGHT, Gate, IMPACT_WEIGHT, MIN_GAP, noiseEnvelope, PUNCH, punchGain, renderWeight, RETRIGGER_25, subEnvelope, SUB_FLOOR, subFreq, WEAPON_EQ, type Gun, type Weight, type WeightEvent } from '../src/audio/weight';
+import { SAMPLE_PLAY, Sfx } from '../src/audio/sfx';
+import { WEAPONS } from '../src/sim/weapons';
 import { SFX } from '../src/audio/assets';
 import { MAX_ONSETS_PER_SEC } from '../src/audio/music';
 import { mulberry32 } from '../src/util/rng';
@@ -309,5 +310,100 @@ describe('impact boom (owner playtest 1: "a soft thud")', () => {
     expect(w105.sub.dur).toBeGreaterThan(w40.sub.dur * 2);
     expect(w105.body.dur).toBeGreaterThan(w40.body.dur * 2);
     expect(PUNCH.impact105.depth).toBeGreaterThan(PUNCH.fire105.depth);
+  });
+});
+
+describe('the 40 mm cha-chunk between shots (owner playtest 1)', () => {
+  const interval = WEAPONS.find((w) => w.id === '40')!.interval;
+
+  it('two clacks 60-120 ms apart, just after the shot, all over before the next report', () => {
+    const t = clackTimes(CLACK_40);
+    expect(t.first).toBeGreaterThan(0.05); // after the shot's own crack
+    expect(t.second - t.first).toBeGreaterThanOrEqual(0.06);
+    expect(t.second - t.first).toBeLessThanOrEqual(0.12);
+    expect(CLACK_40.clear).toBeGreaterThanOrEqual(0.05);
+    expect(t.end).toBeLessThanOrEqual(interval - CLACK_40.clear); // never under the next shot
+  });
+
+  it('is quieter than the shot itself and carries only a little low body', () => {
+    expect(CLACK_40.metal.gain * 1.15).toBeLessThan(SAMPLE_PLAY[SFX.fire40].gain!);
+    expect(CLACK_40.metal.gain * 1.15).toBeLessThan(FIRE_WEIGHT['40'].sub.gain);
+    expect(CLACK_40.body.gain).toBeLessThan(FIRE_WEIGHT['40'].sub.gain / 2);
+    expect(CLACK_40.body.attack).toBeGreaterThanOrEqual(0.005);
+  });
+
+  /** A fake output that records what starts when, on the audio clock. */
+  function timeline(loaded: boolean) {
+    const starts: { at: number; kind: 'noise' | 'osc' | 'sample' }[] = [];
+    const param = () => ({ value: 1, setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {}, cancelScheduledValues() {}, setTargetAtTime() {} });
+    const node = () => ({ connect: (n: unknown) => n, disconnect() {} });
+    const noise = { duration: 1 } as AudioBuffer;
+    const ctx = {
+      currentTime: 0,
+      sampleRate: 100,
+      destination: node(),
+      createGain: () => ({ ...node(), gain: param() }),
+      createBiquadFilter: () => ({ ...node(), type: '', frequency: param(), Q: param() }),
+      createOscillator: () => ({ ...node(), type: 'sine', frequency: param(), start: (at: number) => starts.push({ at, kind: 'osc' }), stop() {} }),
+      createBufferSource: () => ({ ...node(), buffer: null, playbackRate: param(), start: (at: number) => starts.push({ at, kind: 'noise' }), stop() {} }),
+    };
+    const out = {
+      ctx: ctx as unknown as AudioContext,
+      sfx: node() as unknown as AudioNode,
+      radio: node() as unknown as AudioNode,
+      noise,
+      duck() {},
+      sample: (id: string) => (loaded && id === SFX.fire40 ? ({ duration: 2 } as AudioBuffer) : null),
+      samples: {
+        play: () => {
+          starts.push({ at: ctx.currentTime, kind: 'sample' });
+          return { start: 0, end: 1 };
+        },
+      },
+    } as unknown as SfxOutput;
+    return { ctx, out, starts };
+  }
+
+  it('is scheduled once per 40 mm shot, inside the fire interval, recorded or generated', () => {
+    for (const loaded of [true, false]) {
+      const { ctx, out, starts } = timeline(loaded);
+      const sfx = new Sfx(() => out);
+      sfx.unlock();
+      const shots = [0, 1, 2, 3, 4].map((k) => k * interval);
+      for (const t of shots) {
+        ctx.currentTime = t;
+        sfx.fire('40');
+      }
+      const t = clackTimes();
+      // Anything that starts after its shot is the cha-chunk (the report, its crack and its weight start with the shot).
+      const late = starts.filter((s) => shots.every((sh) => Math.abs(s.at - sh) > 1e-9));
+      const clacks = late.filter((s) => s.kind === 'noise');
+      expect(clacks).toHaveLength(2 * shots.length);
+      for (const [i, sh] of shots.entries()) {
+        const mine = clacks.filter((c) => c.at > sh && c.at < sh + interval).map((c) => c.at - sh);
+        expect(mine).toHaveLength(2);
+        expect(mine[0]).toBeCloseTo(t.first, 9);
+        expect(mine[1]).toBeCloseTo(t.second, 9);
+        if (i < shots.length - 1) expect(sh + t.end).toBeLessThan(shots[i + 1]);
+      }
+      // The "chunk" body: one low sine per shot, with the second clack.
+      const bodies = late.filter((s) => s.kind === 'osc').map((s) => s.at);
+      expect(bodies).toHaveLength(shots.length);
+      bodies.forEach((b, i) => expect(b).toBeCloseTo(shots[i] + t.second, 9));
+    }
+  });
+
+  it('only the 40 mm cha-chunks, and not when muted', () => {
+    const { ctx, out, starts } = timeline(true);
+    const sfx = new Sfx(() => out);
+    sfx.unlock();
+    sfx.fire('25');
+    ctx.currentTime = 2;
+    sfx.fire('105');
+    expect(starts.filter((s) => s.at !== 0 && s.at !== 2)).toEqual([]);
+    sfx.muted = true;
+    ctx.currentTime = 5;
+    sfx.fire('40');
+    expect(starts.filter((s) => s.at >= 5)).toEqual([]);
   });
 });

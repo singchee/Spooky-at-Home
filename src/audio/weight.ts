@@ -103,6 +103,38 @@ export const IMPACT_WEIGHT: Partial<Record<Gun, Weight>> = {
 };
 
 /**
+ * Owner playtest 1: the 40 mm's "cha-chunk" between shots, the breech cycling and the next round
+ * seating. Two short metallic clacks (band-passed noise, `gap` s apart), the second with a little
+ * low body, laid just after each shot and finished well before the next one (the 40 mm fires every
+ * `WEAPONS 40 interval` = 0.4 s). Quieter than the shot; on the weapon bus.
+ */
+export interface Clack {
+  /** First clack, seconds after the shot. */
+  at: number;
+  /** Second clack, this long after the first. */
+  gap: number;
+  /** The metal: a band-passed noise tick per clack. */
+  metal: { hz: number; q: number; dur: number; gain: number };
+  /** The second clack's body: a short low sine drop. */
+  body: SubLayer;
+  /** The whole cha-chunk is over this long before the next shot's report (s). */
+  clear: number;
+}
+export const CLACK_40: Clack = {
+  at: 0.16,
+  gap: 0.09,
+  metal: { hz: 2400, q: 4, dur: 0.035, gain: 0.12 },
+  body: { from: 190, to: 110, dur: 0.06, gain: 0.07, attack: 0.005, delay: 0 },
+  clear: 0.05,
+};
+
+/** When the cha-chunk's two clacks start and when it is all over, seconds after the shot. */
+export function clackTimes(c: Clack = CLACK_40): { first: number; second: number; end: number } {
+  const second = c.at + c.gap;
+  return { first: c.at, second, end: second + Math.max(c.metal.dur, c.body.dur) };
+}
+
+/**
  * The 105's blast pumps the music and engine drone on the audio clock (sample-accurate, unlike
  * the 20 Hz duck envelope): down by `depth` (0..1 of their gain) within `attack`, held, then back
  * over `release`. Under the slower duck, so the two multiply.
