@@ -81,35 +81,48 @@ export interface Decoder {
 
 /**
  * What a decoded file is reduced to before it is kept (backlog 3.6b: the files decode to ~140 MB of
- * float PCM, enough to get a phone's tab killed). Everything is kept mono; music and the two long
- * beds are also reduced to 22.05 kHz (they sit under everything else, and a phone speaker has no
- * highs to lose), and radio voice to 16 kHz (speech, already band-limited by the radio filters).
- * Playback time is unchanged: a buffer's duration does not depend on its rate.
+ * float PCM, enough to get a phone's tab killed). Everything is kept mono; music, the two long beds
+ * and radio voice are also reduced to 22.05 kHz (MIN_RATE: they sit under everything else or are
+ * band-limited by the radio filters, and a phone speaker has no highs to lose). Never lower: Safari
+ * has historically refused buffers under 22,050 Hz. Playback time is unchanged: a buffer's
+ * duration does not depend on its rate.
  */
 export interface DecodePlan {
   mono: boolean;
   /** Highest sample rate kept (Hz); a higher-rate file is averaged down to it. */
   maxRate: number;
 }
+/**
+ * The lowest rate a buffer is ever reduced to (Hz). Every browser takes 22,050 Hz in createBuffer;
+ * Safari has refused lower rates (owner playtest 1: voice reduced to 16 kHz could fail there).
+ */
+export const MIN_RATE = 22_050;
 export function decodePlan(id: string): DecodePlan {
-  if (id.startsWith('music/') || id === 'sfx/engine-drone' || id === 'sfx/night-ambience') return { mono: true, maxRate: 22_050 };
-  if (id.startsWith('voice/')) return { mono: true, maxRate: 16_000 };
+  if (id.startsWith('music/') || id === 'sfx/engine-drone' || id === 'sfx/night-ambience') return { mono: true, maxRate: MIN_RATE };
+  if (id.startsWith('voice/')) return { mono: true, maxRate: MIN_RATE };
   return { mono: true, maxRate: 44_100 };
 }
 
 /**
  * Mixes the channels of a decoded buffer down to mono and averages it down to `maxRate` (each
  * output sample is the mean of the input span it covers: a box filter, enough to keep aliasing out
- * of music and speech). Same duration. Returns the buffer unchanged if nothing needs doing or the
- * decoder can't make buffers.
+ * of music and speech). Same duration. Never goes under MIN_RATE. Returns the buffer unchanged if
+ * nothing needs doing, or if the decoder can't make the smaller buffer (no createBuffer, or it
+ * throws, as Safari does for rates it doesn't support): the full-rate sound, never silence.
  */
 export function reduceBuffer(buf: AudioBuffer, make: Decoder['createBuffer'], plan: DecodePlan): AudioBuffer {
-  const rate = Math.min(buf.sampleRate, plan.maxRate);
+  const rate = Math.min(buf.sampleRate, Math.max(MIN_RATE, plan.maxRate));
   const sameRate = rate === buf.sampleRate;
   if (!make || !(buf.length > 0) || (sameRate && (!plan.mono || buf.numberOfChannels === 1))) return buf;
   const ratio = buf.sampleRate / rate;
   const len = sameRate ? buf.length : Math.max(1, Math.round(buf.length / ratio));
-  const out = make.call(undefined, plan.mono ? 1 : buf.numberOfChannels, len, rate);
+  let out: AudioBuffer;
+  try {
+    out = make.call(undefined, plan.mono ? 1 : buf.numberOfChannels, len, rate);
+  } catch {
+    return buf; // this browser won't make it: keep the full-rate buffer
+  }
+  if (!out || out.length !== len) return buf;
   const chans = Array.from({ length: buf.numberOfChannels }, (_, c) => buf.getChannelData(c));
   const groups = plan.mono ? [chans] : chans.map((c) => [c]);
   groups.forEach((src, o) => {

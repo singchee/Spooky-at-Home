@@ -188,10 +188,10 @@ describe('decoded audio memory (3.6b)', () => {
     expect(reduceBuffer(mono, createBuf, decodePlan(voiceAsset(VOICE_LINES[0])))).toBe(mono);
   });
 
-  it('plans: music and beds 22.05 kHz, voice 16 kHz, other effects full rate, all mono', () => {
+  it('plans: music, beds and voice 22.05 kHz (never lower: owner playtest 1), other effects full rate, all mono', () => {
     expect(decodePlan(MUSIC.stingWin)).toEqual({ mono: true, maxRate: 22_050 });
     expect(decodePlan(SFX.drone).maxRate).toBe(22_050);
     expect(decodePlan(SFX.fire105).maxRate).toBe(44_100);
-    expect(decodePlan(voiceAsset('all-clear')).maxRate).toBe(16_000);
+    expect(decodePlan(voiceAsset('all-clear')).maxRate).toBe(22_050);
   });
 });

@@ -1027,6 +1027,32 @@ async function audioChecks(browser) {
       if (!urgent && log[i].start - log[i - 1].end < 2.9) errors.push(`only ${(log[i].start - log[i - 1].end).toFixed(2)} s between voice lines ${log[i - 1].line} and ${log[i].line}`);
     }
 
+    // Owner playtest 1 ("captions but no voiceover"): the radio voice must be heard, not only logged.
+    // A meter on the radio bus (an AnalyserNode, test-only) must show the line's level while it plays,
+    // no recorded line may have been noted as unplayable, and every voice line must load and play.
+    if (talked?.voice?.missedTotal) errors.push(`recorded voice lines couldn't play: ${JSON.stringify(talked.voice.missed)}`);
+    await page.waitForFunction(() => !window.__spooky.audio().voice.onAir, null, { timeout: 10000, polling: 100 }).catch(() => undefined);
+    await page.evaluate(() => window.__spooky.audioMeters());
+    await page.evaluate(() => window.__spooky.audioSay('mission-complete'));
+    await page.waitForFunction(() => window.__spooky.audio().voice.log.some((e) => e.line === 'mission-complete'), null, { timeout: 8000, polling: 100 }).catch(() => undefined);
+    await page.waitForTimeout(2500);
+    const metered = await read();
+    out.radioMeter = metered?.meters;
+    // A line peaks near 0.9 x the radio slider (~0.5 on the bus); the radio blip and static that come
+    // with captions stay under 0.03, so a peak over 0.05 can only be the voice.
+    if (!(metered?.meters?.radioPeak > 0.05)) errors.push(`radio bus silent while a voice line played (meters ${JSON.stringify(metered?.meters)})`);
+    const lines = [...readFileSync('src/audio/assets.ts', 'utf8').match(/export const VOICE_LINES = \[([\s\S]*?)\] as const/)[1].matchAll(/'([a-z0-9-]+)'/g)].map((m) => m[1]);
+    out.voiceLines = { total: lines.length, silent: [] };
+    if (lines.length < 20) errors.push(`only ${lines.length} voice lines found in src/audio/assets.ts`);
+    for (const l of lines) {
+      await page.evaluate(() => window.__spooky.audioMeters());
+      const ok = await page.evaluate((id) => window.__spooky.audioClip(`voice/${id}`, 700), l);
+      await page.waitForTimeout(800);
+      const m = (await read())?.meters;
+      if (!ok || !(m?.radioPeak > 0.05)) out.voiceLines.silent.push({ line: l, started: ok, peak: m?.radioPeak });
+    }
+    if (out.voiceLines.silent.length) errors.push(`voice lines that didn't load or play: ${JSON.stringify(out.voiceLines.silent)}`);
+
     // Gunfire ducks the music (first let any duck from the radio voice above recover).
     await page.waitForFunction(() => window.__spooky.audio().gains.duck < 0.01, null, { timeout: 10000, polling: 100 }).catch(() => undefined);
     await page.evaluate(() => window.__spooky.holdFire(true));

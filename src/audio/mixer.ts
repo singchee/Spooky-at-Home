@@ -127,6 +127,17 @@ export class Mixer {
     this.ambDuck.gain.setTargetAtTime(d.ambience, t, 0.03);
   }
 
+  /**
+   * A level meter on the radio bus or on the master output (after the limiter and master gain), for
+   * the automated check only: an AnalyserNode fed from the bus, connected to nothing else.
+   */
+  tap(where: 'radio' | 'master'): AnalyserNode {
+    const a = this.ctx.createAnalyser();
+    a.fftSize = 2048;
+    (where === 'radio' ? this.radioBus : this.master).connect(a);
+    return a;
+  }
+
   /** Current gains as the audio thread sees them (for the automated check). */
   read(): { master: number; music: number; sfx: number; radio: number; musicDuck: number; duck: number } {
     return {
