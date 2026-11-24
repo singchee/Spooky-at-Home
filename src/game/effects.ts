@@ -99,17 +99,18 @@ export function shakeOffsetPx(age: number): { x: number; y: number } {
 }
 
 /**
- * Owner playtest 1: when a 105 lands the picture rolls as well as kicks. The rumble is a damped
- * sideways swing (across the kick's direction) a beat after the kick, so together they trace a
- * short loop instead of a straight nudge. Its strength falls off with the blast's distance from
- * the aim point (full within `near` m, nothing beyond `range` m). The 105 kick rule still holds
- * for the two together (docs/STYLE.md: at most SHAKE_MAX_PX, one damped swing, about 0.4 s): the
- * kick is trimmed while a rumble runs and the sum is capped at SHAKE_MAX_PX, and each screen axis
- * swings at most twice. Off under reduced motion (setting or device) and Reduce flicker
+ * Owner playtest 1: when a 105 lands the picture shakes harder than the kick alone. The rumble is a
+ * second damped swing on the kick's own axis, a beat after it, so together they make one fuller and
+ * longer jolt (out, held, and a harder swing back). Not sideways: a sideways swing slid bright blast
+ * edges across the flash meter's cells and raised the mixed-guns flash count from 1.5 to 2 a second
+ * (review). Its strength falls off with the blast's distance from the aim point (full within `near`
+ * m, nothing beyond `range` m). The 105 kick rule holds for the two together (docs/STYLE.md: at
+ * most SHAKE_MAX_PX, one damped swing, about 0.4 s): the kick is trimmed while a rumble runs and the
+ * sum is capped at SHAKE_MAX_PX. Off under reduced motion (setting or device) and Reduce flicker
  * (cameraShakePx). In closed form on the game clock: the same picture at any frame rate.
  */
 export const RUMBLE = {
-  /** Tunable: the sideways swing at full strength (a 105 at the aim point), screen px. */
+  /** Tunable: the rumble's swing at full strength (a 105 at the aim point), screen px, on the kick's axis. */
   strength: 4,
   /** While a full-strength rumble runs, the kick gives up this share of its size (room under the cap). */
   kickTrim: 0.1,
@@ -117,7 +118,7 @@ export const RUMBLE = {
   near: 20,
   /** ...fading to nothing at this distance (m). */
   range: 160,
-  /** Starts this long after the kick (s): the two swings out of step make the loop. */
+  /** Starts this long after the kick (s): the two swings a beat apart hold the jolt out longer. */
   delay: 0.06,
   /** Seconds it lasts once started (then exactly still): over with the kick's 0.4 s, plus its delay. */
   time: 0.4,
@@ -126,8 +127,8 @@ export const RUMBLE = {
   /** Decay time constant (s). */
   tau: 0.16,
 } as const;
-/** Across the kick's direction on screen (unit length). */
-const RUMBLE_DIR = { x: SHAKE_DIR.y, y: -SHAKE_DIR.x };
+/** Along the kick's direction on screen (unit length). */
+const RUMBLE_DIR = SHAKE_DIR;
 
 /** One 105's rumble at the aim point's distance `d` (m): 0..1 of RUMBLE.strength. */
 export function rumbleFalloff(d: number): number {
@@ -139,7 +140,7 @@ export function rumbleFalloff(d: number): number {
 type Blast = { t0: number; amp: number };
 const live = (b: Blast, now: number) => b.amp > 0 && now - b.t0 >= 0 && now - b.t0 < RUMBLE.delay + RUMBLE.time;
 
-/** The rumble of these blasts (`t0` game time, `amp` 0..1) at game time `now`, screen px (sideways to the kick). */
+/** The rumble of these blasts (`t0` game time, `amp` 0..1) at game time `now`, screen px (along the kick). */
 export function rumbleOffsetPx(blasts: readonly Blast[], now: number): { x: number; y: number } {
   let v = 0;
   for (const b of blasts) {

@@ -86,11 +86,15 @@ describe('105 rumble (owner playtest 1): kick and rumble together keep the 105 k
     }
   });
 
-  it('is clearly felt: a sideways swing of several pixels, so the picture rolls instead of only nudging', () => {
+  it('is clearly felt: on the kick\'s axis, a bigger and longer jolt than the kick alone, nothing sideways', () => {
+    const along = (o: { x: number; y: number }) => o.x * KICK.x + o.y * KICK.y;
+    const kick = samples((t) => shakeOffsetPx(t), 1000).map(along);
     const near = samples(both(0, [0]).at, 1000);
-    const side = Math.max(...near.map((o) => Math.abs(o.x * ACROSS.x + o.y * ACROSS.y)));
-    expect(side).toBeGreaterThan(2.5);
-    expect(Math.max(...near.map(len))).toBeGreaterThan(4); // the whole jolt stays as big as the kick was
+    const jolt = near.map(along);
+    expect(Math.max(...jolt)).toBeGreaterThan(Math.max(...kick) + 0.5); // ~5 px against the kick's ~4.3
+    const over3 = (xs: number[]) => xs.filter((v) => Math.abs(v) > 3).length;
+    expect(over3(jolt)).toBeGreaterThan(over3(kick) * 1.4); // held out longer (measured 145 ms against 86)
+    for (const o of near) expect(Math.abs(o.x * ACROSS.x + o.y * ACROSS.y)).toBeLessThan(1e-9); // no sideways slide (review: flash cells)
   });
 
   it('is one damped swing per axis (at most two swings, as the safety playtest counts them), settled by 0.5 s', () => {
