@@ -3330,7 +3330,7 @@ async function highriseChecks(browser) {
           r.shots[k] = `${out}/highrise-${name}${ai}-${k}.png`;
           await page.screenshot({ path: r.shots[k] });
         };
-        // MASKED example: wait (up to one orbit) for a moment a building is on the line of fire.
+        // BLOCKED example: wait (up to one orbit) for a moment a building is on the line of fire.
         if (name === 'ny' && ai === 0) {
           let masked = false;
           for (let i = 0; i < 40 && !masked; i++) {
@@ -3338,13 +3338,15 @@ async function highriseChecks(browser) {
             if (!masked) await advance(page, 3, 0.5);
           }
           await advance(page, 0.4);
-          if (!masked) r.errors.push('no MASKED moment in a whole orbit over a Midtown canyon');
+          if (!masked) r.errors.push('no BLOCKED moment in a whole orbit over a Midtown canyon');
           else {
             const tag = await page.evaluate(() => {
               const c = document.querySelector('.hud-cross');
               return { cls: c?.classList.contains('masked'), text: c?.dataset.mask };
             });
-            if (!tag.cls || tag.text !== 'MASKED') r.errors.push(`the reticle doesn't show MASKED: ${JSON.stringify(tag)}`);
+            // The tag's text lives in one constant (owner playtest 1: BLOCKED, was MASKED).
+            const want = readFileSync('src/ui/hud.ts', 'utf8').match(/export const BLOCKED_TAG = '([^']+)'/)?.[1];
+            if (!tag.cls || !want || tag.text !== want) r.errors.push(`the reticle doesn't show ${want}: ${JSON.stringify(tag)}`);
             r.cut = (await page.evaluate(([x, z]) => window.__spooky.sight(x, z), [x, z])).cut;
             await shot('masked');
             // The same moment without the cut-away, for comparison.

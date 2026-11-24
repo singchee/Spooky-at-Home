@@ -124,7 +124,7 @@ const RETICLE = 80;
 
 export const labelWidth = (label: string) => label.length * CHAR_PX + PAD_X * 2;
 
-/** The reticle area: the crosshair, plus room for its DANGER CLOSE tag to the right and below, and MASKED above (3.39). */
+/** The reticle area: the crosshair, plus room for its DANGER CLOSE tag to the right and below, and BLOCKED above (3.39). */
 export function reticleRects(width: number, height: number): Rect[] {
   const cx = width / 2;
   const cy = height / 2;

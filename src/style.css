@@ -57,7 +57,7 @@ button:disabled { opacity: 0.5; }
 .hud-cross svg { width: 100%; height: 100%; }
 .hud-cross.danger { color: #ff5a4e; }
 .hud-cross.danger::after { content: attr(data-label); position: absolute; top: 50%; left: 100%; transform: translate(8px, -50%); white-space: nowrap; background: #b3261e; color: #fff; padding: 2px 6px; border-radius: 4px; font-weight: 700; }
-/* 3.39 MASKED: a building on the line of fire. Amber, dashed, steady (never blinks); its tag sits above the crosshair. */
+/* 3.39 BLOCKED (the tag text is BLOCKED_TAG in hud.ts): a building on the line of fire. Amber, dashed, steady (never blinks); its tag sits above the crosshair. */
 .hud-cross.masked { color: #ffb347; }
 .hud-cross.masked svg g:last-child { stroke-dasharray: 5 4; }
 .hud-cross.masked::before { content: attr(data-mask); position: absolute; bottom: 100%; left: 50%; transform: translate(-50%, -6px); white-space: nowrap; background: #1b1408; color: #ffb347; border: 1.5px solid #ffb347; padding: 1px 6px; border-radius: 4px; font-weight: 700; letter-spacing: 0.08em; }

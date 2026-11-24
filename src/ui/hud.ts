@@ -9,6 +9,12 @@ import { HotkeyStrip } from './hotkeys';
 import { coldHint } from '../game/controls';
 import { clearOfRects, touchBlockers } from '../game/lineOfFire';
 
+/**
+ * The reticle's tag while a building stands on the line of fire (3.39; owner playtest 1 renamed it
+ * from MASKED). The one place the word lives: docs/STYLE.md and the playtest read it from here.
+ */
+export const BLOCKED_TAG = 'BLOCKED';
+
 /** Static crosshair artwork per gun (constants we wrote, not map data). */
 const SHAPES: Record<string, string> = {
   '25': '<path d="M-40 0H-8M8 0H40M0 -40V-8M0 8V40M-20 -3V3M20 -3V3M-3 -20H3M-3 20H3"/>',
@@ -130,12 +136,12 @@ export class Hud {
     // 3.39: a building stands between the gunship and the aim point (shown over the cut-away: the HUD is
     // never see-through, so a player never takes a masked shot for a clear one).
     this.cross.classList.toggle('masked', masked);
-    this.cross.dataset.mask = masked ? 'MASKED' : '';
+    this.cross.dataset.mask = masked ? BLOCKED_TAG : '';
   }
 
   private impact: HTMLDivElement;
   /**
-   * 3.39: while MASKED, a small steady mark where the round would actually land (null hides it); with
+   * 3.39: while BLOCKED, a small steady mark where the round would actually land (null hides it); with
    * `angle`, the spot is off screen and this is an edge pointer toward it (radians, 0 = right).
    */
   setImpactMark(p: { x: number; y: number; angle?: number } | null): void {
