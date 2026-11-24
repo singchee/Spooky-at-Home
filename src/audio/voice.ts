@@ -332,7 +332,15 @@ export interface VoiceLogEntry {
 
 type Buffers = { get(id: string): AudioBuffer | null; status?(id: string): string };
 /** A line asked for while its file is still loading waits this long (s) for it. */
-const LOAD_WAIT = 4;
+export const LOAD_WAIT = 4;
+
+/** A recorded line that could not be played (its caption showed on its own). */
+export interface VoiceMiss {
+  line: VoiceLine;
+  /** 'failed': the file didn't load; 'late': still loading after LOAD_WAIT s; 'missing': not loaded at all. */
+  why: 'failed' | 'late' | 'missing';
+  at: number;
+}
 
 /** Plays the VoiceQueue's choices: squelch, then the line through a radio band-pass, music ducked. */
 export class VoiceChannel {
@@ -344,6 +352,10 @@ export class VoiceChannel {
   said = 0;
   /** Lines asked for before their file arrived (e.g. "cleared hot" on the very first mission). */
   private deferred: { line: VoiceLine; at: number }[] = [];
+  /** Recent lines that couldn't play (for window.__spooky.audio()); `missedTotal` counts them all. */
+  readonly missed: VoiceMiss[] = [];
+  missedTotal = 0;
+  private warnedLines = new Set<string>();
 
   constructor(
     private ctx: AudioContext,
@@ -351,6 +363,8 @@ export class VoiceChannel {
     private bank: Buffers,
     private duck: (depth: number, hold: number) => void,
     count?: (d: number) => void,
+    /** Told once per line and reason when a recorded line can't play (the console, in the game). */
+    private warn: (msg: string) => void = (m) => console.warn(m),
   ) {
     this.kit = new Kit(ctx, count);
     this.queue = new VoiceQueue((line) => {
@@ -367,10 +381,23 @@ export class VoiceChannel {
     }
     const now = this.ctx.currentTime;
     const st = this.bank.status?.(voiceAsset(line));
-    if (!this.bank.get(voiceAsset(line)) && (st === 'idle' || st === 'queued' || st === 'loading')) {
+    if (this.bank.get(voiceAsset(line))) this.queue.say(line, now);
+    else if (st === 'idle' || st === 'queued' || st === 'loading') {
       if (!this.deferred.some((d) => d.line === line)) this.deferred.push({ line, at: now });
-    } else this.queue.say(line, now);
+    } else this.miss(line, st === 'failed' ? 'failed' : 'missing', now);
     this.tick();
+  }
+
+  /** A recorded line can't play: note it (and say so on the console, once per line and reason). */
+  private miss(line: VoiceLine, why: VoiceMiss['why'], at: number): void {
+    this.missed.push({ line, why, at });
+    if (this.missed.length > 12) this.missed.shift();
+    this.missedTotal++;
+    const key = `${line}:${why}`;
+    if (this.warnedLines.has(key)) return;
+    this.warnedLines.add(key);
+    const reason = why === 'failed' ? 'its file failed to load' : why === 'late' ? `its file was still loading after ${LOAD_WAIT} s` : 'its file is not loaded';
+    this.warn(`Spooky: radio line "${line}" can't play (${reason}); showing the caption only.`);
   }
 
   tick(): void {
@@ -378,8 +405,11 @@ export class VoiceChannel {
     if (this.deferred.length) {
       const keep: { line: VoiceLine; at: number }[] = [];
       for (const d of this.deferred) {
+        const st = this.bank.status?.(voiceAsset(d.line));
         if (this.bank.get(voiceAsset(d.line))) this.queue.say(d.line, now);
-        else if (now - d.at < LOAD_WAIT && this.bank.status?.(voiceAsset(d.line)) !== 'failed') keep.push(d);
+        else if (st === 'failed') this.miss(d.line, 'failed', now);
+        else if (now - d.at >= LOAD_WAIT) this.miss(d.line, 'late', now);
+        else keep.push(d);
       }
       this.deferred = keep;
     }

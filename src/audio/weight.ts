@@ -36,6 +36,12 @@ export interface NoiseLayer {
 export interface Weight {
   sub: SubLayer;
   body: NoiseLayer;
+  /**
+   * Optional: a short, higher sine sweep laid on top of the sub (owner playtest 1: impacts "sound like
+   * a soft thud"). The sub sits under 80 Hz, which laptop and phone speakers barely play; the kick
+   * starts around 150 Hz, so the blow reads as a boom on any speaker while the sub carries the weight.
+   */
+  kick?: SubLayer;
   /** Fewest seconds between two weight layers of this gun (comfort: under 3 a second). */
   gap: number;
 }
@@ -76,19 +82,57 @@ export const FIRE_WEIGHT: Record<Gun, Weight> = {
   },
 };
 
-/** A round landing: a delayed, low-passed boom (the crack is the flash; this is the ground answering). */
+/**
+ * A round landing: a delayed, low-passed boom (the crack is the flash; this is the ground answering).
+ * Owner playtest 1 ("a soft thud"): more sub, a longer and brighter body, and a kick on top. The
+ * 105 is by far the biggest thing in the game (tests: at least 6 dB over the 40 mm's boom).
+ */
 export const IMPACT_WEIGHT: Partial<Record<Gun, Weight>> = {
   '40': {
-    sub: { from: 75, to: 38, dur: 0.6, gain: 0.24, attack: 0.012, delay: 0.05 },
-    body: { lp: 220, dur: 0.7, gain: 0.18, delay: 0.05 },
+    sub: { from: 92, to: 40, dur: 0.75, gain: 0.18, attack: 0.008, delay: 0.05 },
+    body: { lp: 240, dur: 0.85, gain: 0.18, delay: 0.05 },
+    kick: { from: 150, to: 62, dur: 0.25, gain: 0.16, attack: 0.005, delay: 0.05 },
     gap: MIN_GAP,
   },
   '105': {
-    sub: { from: 58, to: 29, dur: 1.7, gain: 0.42, attack: 0.015, delay: 0.09 },
-    body: { lp: 150, dur: 1.8, gain: 0.3, delay: 0.09 },
+    sub: { from: 72, to: 28, dur: 2.3, gain: 0.34, attack: 0.012, delay: 0.09 },
+    body: { lp: 240, dur: 2.4, gain: 0.38, delay: 0.09 },
+    kick: { from: 150, to: 48, dur: 0.5, gain: 0.22, attack: 0.005, delay: 0.09 },
     gap: MIN_GAP,
   },
 };
+
+/**
+ * Owner playtest 1: the 40 mm's "cha-chunk" between shots, the breech cycling and the next round
+ * seating. Two short metallic clacks (band-passed noise, `gap` s apart), the second with a little
+ * low body, laid just after each shot and finished well before the next one (the 40 mm fires every
+ * `WEAPONS 40 interval` = 0.4 s). Quieter than the shot; on the weapon bus.
+ */
+export interface Clack {
+  /** First clack, seconds after the shot. */
+  at: number;
+  /** Second clack, this long after the first. */
+  gap: number;
+  /** The metal: a band-passed noise tick per clack. */
+  metal: { hz: number; q: number; dur: number; gain: number };
+  /** The second clack's body: a short low sine drop. */
+  body: SubLayer;
+  /** The whole cha-chunk is over this long before the next shot's report (s). */
+  clear: number;
+}
+export const CLACK_40: Clack = {
+  at: 0.16,
+  gap: 0.09,
+  metal: { hz: 2400, q: 4, dur: 0.035, gain: 0.12 },
+  body: { from: 190, to: 110, dur: 0.06, gain: 0.07, attack: 0.005, delay: 0 },
+  clear: 0.05,
+};
+
+/** When the cha-chunk's two clacks start and when it is all over, seconds after the shot. */
+export function clackTimes(c: Clack = CLACK_40): { first: number; second: number; end: number } {
+  const second = c.at + c.gap;
+  return { first: c.at, second, end: second + Math.max(c.metal.dur, c.body.dur) };
+}
 
 /**
  * The 105's blast pumps the music and engine drone on the audio clock (sample-accurate, unlike
@@ -97,7 +141,7 @@ export const IMPACT_WEIGHT: Partial<Record<Gun, Weight>> = {
  */
 export const PUNCH = {
   fire105: { depth: 0.35, attack: 0.012, hold: 0.08, release: 0.5 },
-  impact105: { depth: 0.55, attack: 0.012, hold: 0.15, release: 0.9 },
+  impact105: { depth: 0.6, attack: 0.012, hold: 0.2, release: 0.9 },
 } as const;
 
 /**
@@ -170,8 +214,10 @@ export function renderWeight(events: readonly WeightEvent[], seconds: number, sa
     const w = e.kind === 'fire' ? FIRE_WEIGHT[e.gun] : IMPACT_WEIGHT[e.gun];
     if (!w || !gate.admit(`${e.kind}${e.gun}`, e.at, w.gap)) continue;
     const i0 = Math.floor(e.at * sampleRate);
-    const len = Math.ceil((Math.max(w.sub.delay + w.sub.dur, w.body.delay + w.body.dur) + 0.01) * sampleRate);
+    const kick = w.kick;
+    const len = Math.ceil((Math.max(w.sub.delay + w.sub.dur, w.body.delay + w.body.dur, kick ? kick.delay + kick.dur : 0) + 0.01) * sampleRate);
     let phase = 0;
+    let kphase = 0;
     // One-pole low-pass for the body noise (close enough to the biquad for a level check).
     const a = 1 - Math.exp((-2 * Math.PI * w.body.lp) / sampleRate);
     let lp = 0;
@@ -179,7 +225,12 @@ export function renderWeight(events: readonly WeightEvent[], seconds: number, sa
       const t = j / sampleRate;
       if (t >= w.sub.delay) phase += (2 * Math.PI * subFreq(w.sub, t)) / sampleRate;
       lp += a * (rnd() * 2 - 1 - lp);
-      out[i0 + j] += Math.sin(phase) * subEnvelope(w.sub, t) + lp * noiseEnvelope(w.body, t);
+      let k = 0;
+      if (kick && t >= kick.delay) {
+        kphase += (2 * Math.PI * subFreq(kick, t)) / sampleRate;
+        k = Math.sin(kphase) * subEnvelope(kick, t);
+      }
+      out[i0 + j] += Math.sin(phase) * subEnvelope(w.sub, t) + lp * noiseEnvelope(w.body, t) + k;
     }
   }
   return out;

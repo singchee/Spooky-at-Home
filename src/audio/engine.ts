@@ -14,7 +14,7 @@ import { Kit } from './kit';
 import { AssetBank, MUSIC, SFX, VOICE_LINES, voiceAsset, type AssetStats, type VoiceLine } from './assets';
 import { BED_IDS, playRecordedSting, RecordedBed, RecordedScore, trackIds } from './recorded';
 import { SamplePlayer } from './samples';
-import { DUCK_VOICE, SQUELCH, VoiceChannel, type VoiceLogEntry } from './voice';
+import { DUCK_VOICE, SQUELCH, VoiceChannel, type VoiceLogEntry, type VoiceMiss } from './voice';
 
 /** What sound effects need: the context, where to plug in, and the extras the engine offers. */
 export interface SfxOutput {
@@ -62,9 +62,18 @@ export interface AudioDebug {
   assets: AssetStats | null;
   /** Decoded recorded audio held in memory, bytes. */
   assetBytes: number;
-  voice: { said: number; overlaps: number; onAir: VoiceLine | null; waiting: number; log: VoiceLogEntry[] } | null;
+  voice: { said: number; overlaps: number; onAir: VoiceLine | null; waiting: number; log: VoiceLogEntry[]; missedTotal: number; missed: VoiceMiss[] } | null;
   /** One-off clips (the intro): id, audio-clock start and end (end = when it really stopped). */
   clips: { id: string; start: number; end: number }[];
+  /** One-off clips (the intro) that couldn't play because their file wasn't loaded. */
+  clipsMissed: string[];
+  /**
+   * Level meters (browser automation only): the loudest sample and the loudest 50 ms RMS seen on the
+   * radio bus and at the master output since the last reset (linear, 1 = 0 dBFS).
+   */
+  meters: { radioPeak: number; radioRms: number; masterPeak: number } | null;
+  /** The audio clock (s), for checks that wait on what has really been played. */
+  time: number;
 }
 
 export class AudioEngine {
@@ -80,12 +89,15 @@ export class AudioEngine {
   private voice: VoiceChannel | null = null;
   private fadingOut: { tick(now: number): void; done: boolean }[] = [];
   private clipLog: { id: string; start: number; end: number }[] = [];
+  /** One-off clips asked for but not loaded (each warned once). */
+  private clipsMissed: string[] = [];
   private scene: ScoreMode = 'menu';
   private intensity = 0;
   private releaseTimer: ReturnType<typeof setTimeout> | undefined;
   private last = 0;
   private seq = 1;
   private failed = false;
+  private meters: { radio: AnalyserNode; master: AnalyserNode; buf: Float32Array<ArrayBuffer>; radioPeak: number; radioRms: number; masterPeak: number } | null = null;
   /** AudioContexts made on this page (must stay at most 1). */
   contexts = 0;
   /** Live sources across score, ambience and sound effects. */
@@ -121,6 +133,7 @@ export class AudioEngine {
       document.addEventListener('visibilitychange', this.onVisibility);
       if (ctx.state === 'suspended') ctx.resume().catch(() => undefined);
       this.startScene();
+      this.exposeHook(); // again, now there is a mixer to meter
       return true;
     } catch {
       this.failed = true; // no Web Audio here: play on in silence
@@ -138,10 +151,12 @@ export class AudioEngine {
     const bank = (this.bank = new AssetBank(ctx));
     this.samples = new SamplePlayer(ctx, this.count);
     this.voice = new VoiceChannel(ctx, mixer.radio, bank, (d, h) => mixer.duck(d, h), this.count);
+    // Voice first: the score, the bed and the guns have generated stand-ins until their files
+    // arrive, but a radio line has none (only its caption), and the 22 lines are small (~1 MB).
     void bank.request([SFX.squelch, voiceAsset('cleared-hot')]);
+    void bank.request(VOICE_LINES.map(voiceAsset));
     void bank.request(trackIds(this.scene));
     void bank.request([SFX.fire25, SFX.fire40, SFX.fire105, SFX.explosion, SFX.alarm, ...BED_IDS]);
-    void bank.request(VOICE_LINES.map(voiceAsset));
     void bank.request([MUSIC.stingWin, MUSIC.stingLose]);
   }
 
@@ -223,7 +238,14 @@ export class AudioEngine {
   clip(id: string, voice: ClipVoice): ClipHandle | null {
     const { ctx, mixer, bank, sfxKit } = this;
     const buf = bank?.get(id);
-    if (!ctx || !mixer || !sfxKit || !buf) return null;
+    if (!ctx || !mixer || !sfxKit) return null;
+    if (!buf) {
+      if (!this.clipsMissed.includes(id)) {
+        this.clipsMissed.push(id);
+        console.warn(`Spooky: recorded line "${id}" can't play (${bank?.status(id) === 'failed' ? 'its file failed to load' : 'its file is not loaded yet'}); showing the caption only.`);
+      }
+      return null;
+    }
     const chain: AudioNode[] = [];
     const band = (hp: number, lp: number) => {
       const h = ctx.createBiquadFilter();
@@ -302,6 +324,8 @@ export class AudioEngine {
     if (this.bank) {
       const other: ScoreMode = this.scene === 'menu' ? 'mission' : 'menu';
       void this.bank.request(trackIds(this.scene), true);
+      // ...but never ahead of radio voice still waiting (no stand-in for a voice line).
+      void this.bank.request(VOICE_LINES.map(voiceAsset), true);
       this.bank.release(trackIds(other));
     }
     if (!this.score || this.score.mode !== this.scene) {
@@ -376,8 +400,29 @@ export class AudioEngine {
     this.ambience?.tick(now);
     this.bed?.tick(now);
     this.voice?.tick();
+    this.meter();
     for (const f of this.fadingOut) f.tick(now);
     this.fadingOut = this.fadingOut.filter((f) => !f.done);
+  }
+
+  /** Read the level meters (only made under browser automation; see exposeHook). */
+  private meter(): void {
+    const m = this.meters;
+    if (!m) return;
+    const level = (a: AnalyserNode) => {
+      a.getFloatTimeDomainData(m.buf);
+      let peak = 0;
+      let sum = 0;
+      for (const v of m.buf) {
+        peak = Math.max(peak, Math.abs(v));
+        sum += v * v;
+      }
+      return { peak, rms: Math.sqrt(sum / m.buf.length) };
+    };
+    const r = level(m.radio);
+    m.radioPeak = Math.max(m.radioPeak, r.peak);
+    m.radioRms = Math.max(m.radioRms, r.rms);
+    m.masterPeak = Math.max(m.masterPeak, level(m.master).peak);
   }
 
   debug(): AudioDebug {
@@ -395,9 +440,12 @@ export class AudioEngine {
       assets: this.bank?.stats() ?? null,
       assetBytes: this.bank?.decodedBytes() ?? 0,
       voice: this.voice
-        ? { said: this.voice.said, overlaps: this.voice.overlaps(), onAir: this.voice.queue.current?.line ?? null, waiting: this.voice.queue.waiting, log: this.voice.log.slice(-12) }
+        ? { said: this.voice.said, overlaps: this.voice.overlaps(), onAir: this.voice.queue.current?.line ?? null, waiting: this.voice.queue.waiting, log: this.voice.log.slice(-12), missedTotal: this.voice.missedTotal, missed: this.voice.missed.slice() }
         : null,
       clips: this.clipLog.slice(-12),
+      clipsMissed: this.clipsMissed.slice(),
+      time: this.ctx?.currentTime ?? 0,
+      meters: this.meters ? { radioPeak: this.meters.radioPeak, radioRms: this.meters.radioRms, masterPeak: this.meters.masterPeak } : null,
     };
   }
 
@@ -407,6 +455,27 @@ export class AudioEngine {
     const hooks = window.__spooky as unknown as Record<string, unknown> | undefined;
     if (hooks && !hooks.audio) hooks.audio = () => this.debug();
     if (hooks && !hooks.audioSay) hooks.audioSay = (line: VoiceLine) => this.say(line);
+    // Play one recorded file now on the radio band (true if it started): every voice line can be checked.
+    if (hooks && !hooks.audioClip) hooks.audioClip = (id: string, ms = 200) => {
+      const c = this.clip(id, 'radio');
+      if (c) setTimeout(() => c.stop(0.03), ms);
+      return !!c;
+    };
+    if (hooks && !hooks.audioMeters) {
+      hooks.audioMeters = () => {
+        const m = this.meters;
+        if (m) {
+          m.radioPeak = 0;
+          m.radioRms = 0;
+          m.masterPeak = 0;
+        }
+      };
+    }
+    if (this.ctx && this.mixer && !this.meters) {
+      const radio = this.mixer.tap('radio');
+      const master = this.mixer.tap('master');
+      this.meters = { radio, master, buf: new Float32Array(radio.fftSize), radioPeak: 0, radioRms: 0, masterPeak: 0 };
+    }
   }
 }
 

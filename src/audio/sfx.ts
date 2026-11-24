@@ -2,7 +2,7 @@ import { audio, type SfxOutput } from './engine';
 import { DUCK } from './mix';
 import { SFX } from './assets';
 import type { PlayOpts } from './samples';
-import { FIRE_WEIGHT, Gate, IMPACT_WEIGHT, MIN_GAP, PUNCH, RETRIGGER_25, type Gun, type NoiseLayer, type SubLayer, type Weight } from './weight';
+import { CLACK_40, clackTimes, FIRE_WEIGHT, Gate, IMPACT_WEIGHT, MIN_GAP, PUNCH, RETRIGGER_25, type Gun, type NoiseLayer, type SubLayer, type Weight } from './weight';
 
 export { RETRIGGER_25 };
 
@@ -13,9 +13,10 @@ export const SAMPLE_PLAY: Record<string, Omit<PlayOpts, 'group'>> = {
   [SFX.fire25]: { max: 2, gain: 1, duration: RETRIGGER_25 + 0.08, fade: 0.08, jitter: 0.08, cents: 60, db: 1.5 },
   [SFX.fire40]: { max: 4, gain: 0.5, duration: 1.2, fade: 0.3, cents: 50, db: 1.5 },
   [SFX.fire105]: { max: 2, gain: 0.75, offset: 0.08, cents: 40, db: 1 },
-  [SFX.explosion]: { max: 3, gain: 0.85, offset: 0.09, cents: 60, db: 1.5 },
-  /** A 40 mm round landing: the explosion, smaller (a little faster, so less of its low end is lost than before, and quieter). */
-  'boom40': { max: 4, gain: 0.3, rate: 1.2, offset: 0.09, duration: 1.6, fade: 0.5, cents: 80, db: 2 },
+  /** A 105 landing (owner playtest 1: louder than the 0.85 it was, "a soft thud"; the master limiter keeps it under 0 dBFS). */
+  [SFX.explosion]: { max: 3, gain: 1, offset: 0.09, cents: 60, db: 1.5 },
+  /** A 40 mm round landing: the explosion, smaller (a little faster, and quieter than the 105's; owner playtest 1 raised it from 0.3). */
+  'boom40': { max: 4, gain: 0.4, rate: 1.15, offset: 0.09, duration: 1.8, fade: 0.5, cents: 80, db: 2 },
   /** Two pulses of the recorded alarm (0.4 s on, 0.35 s off: 1.3 a second), under the synthesised two-tone. */
   [SFX.alarm]: { max: 1, gain: 0.2, duration: 1.3, fade: 0.15, cents: 0, db: 0 },
 };
@@ -86,6 +87,33 @@ export class Sfx {
     this.play(src, t, t + dur + 0.05, f, g);
   }
 
+  /** One metallic clack `delay` s from now: a short band-passed noise tick on the weapon bus. */
+  private tick(delay: number, m: typeof CLACK_40.metal): void {
+    const o = this.out;
+    if (!o || !this.noise || this.muted) return;
+    const t = o.ctx.currentTime + delay;
+    const src = o.ctx.createBufferSource();
+    src.buffer = this.noise;
+    const f = o.ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = m.hz;
+    f.Q.value = m.q;
+    const g = o.ctx.createGain();
+    g.gain.setValueAtTime(m.gain, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + m.dur);
+    src.connect(f).connect(g).connect(o.sfx);
+    this.play(src, t, t + m.dur + 0.01, f, g);
+  }
+
+  /** The 40 mm's cha-chunk after a shot (weight.ts, CLACK_40): the breech cycling, then the round seating. */
+  private chaChunk(): void {
+    const c = CLACK_40;
+    const at = clackTimes(c);
+    this.tick(at.first, c.metal);
+    this.tick(at.second, { ...c.metal, hz: c.metal.hz * 0.7, gain: c.metal.gain * 1.15 }); // the heavier "chunk"
+    this.sub({ ...c.body, delay: at.second });
+  }
+
   /** A sub layer (weight.ts): a sine dropping in pitch, felt more than heard. */
   private sub(l: SubLayer): void {
     const o = this.out;
@@ -112,6 +140,7 @@ export class Sfx {
     if (!o || this.muted || !w || !this.gate.admit(key, o.ctx.currentTime, w.gap)) return false;
     this.sub(w.sub);
     this.body(w.body);
+    if (w.kick) this.sub(w.kick);
     return true;
   }
 
@@ -146,6 +175,7 @@ export class Sfx {
     } else if (weapon === '40') {
       // Generated stand-ins carry only the bang: the weight layer above is the thump, for both.
       if (!this.sample(SFX.fire40)) this.burst(900, 0.25, 0.35);
+      this.chaChunk();
     } else {
       if (!this.sample(SFX.fire105)) this.burst(300, 0.9, 0.7);
       this.punch(PUNCH.fire105);

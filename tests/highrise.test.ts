@@ -333,3 +333,24 @@ describe('the line of fire: where rounds land, DANGER CLOSE, MASKED (3.39)', () 
     expect(leanPoint([0, 0, 0], 750, 1500, 0)[0]).toBeCloseTo(0); // the feet stay put
   });
 });
+
+describe('the BLOCKED reticle tag (owner playtest 1: renamed from MASKED)', () => {
+  it('reads BLOCKED, from one constant that the HUD, the style guide and the playtest all use', async () => {
+    const { BLOCKED_TAG } = await import('../src/ui/hud');
+    expect(BLOCKED_TAG).toBe('BLOCKED');
+    const hud = readFileSync('src/ui/hud.ts', 'utf8');
+    expect(hud).toMatch(/dataset\.mask = masked \? BLOCKED_TAG : ''/);
+    expect(hud).not.toMatch(/'MASKED'/);
+    const style = readFileSync('docs/STYLE.md', 'utf8');
+    expect(style).toContain(`steady ${BLOCKED_TAG} tag above it`);
+    expect(style).not.toMatch(/steady MASKED tag/);
+    expect(readFileSync('scripts/playtest.mjs', 'utf8')).not.toMatch(/text !== 'MASKED'/);
+  });
+
+  it('keeps its look: amber, the tag drawn from data-mask above the crosshair, and the amber impact mark', () => {
+    const css = readFileSync('src/style.css', 'utf8');
+    expect(css).toMatch(/\.hud-cross\.masked \{ color: #ffb347; \}/);
+    expect(css).toMatch(/\.hud-cross\.masked::before \{ content: attr\(data-mask\);[^}]*color: #ffb347;/);
+    expect(css).toMatch(/\.hud-impact \{[^}]*border: 1\.5px solid #ffb347;/);
+  });
+});

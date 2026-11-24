@@ -57,7 +57,7 @@ button:disabled { opacity: 0.5; }
 .hud-cross svg { width: 100%; height: 100%; }
 .hud-cross.danger { color: #ff5a4e; }
 .hud-cross.danger::after { content: attr(data-label); position: absolute; top: 50%; left: 100%; transform: translate(8px, -50%); white-space: nowrap; background: #b3261e; color: #fff; padding: 2px 6px; border-radius: 4px; font-weight: 700; }
-/* 3.39 MASKED: a building on the line of fire. Amber, dashed, steady (never blinks); its tag sits above the crosshair. */
+/* 3.39 BLOCKED (the tag text is BLOCKED_TAG in hud.ts): a building on the line of fire. Amber, dashed, steady (never blinks); its tag sits above the crosshair. */
 .hud-cross.masked { color: #ffb347; }
 .hud-cross.masked svg g:last-child { stroke-dasharray: 5 4; }
 .hud-cross.masked::before { content: attr(data-mask); position: absolute; bottom: 100%; left: 50%; transform: translate(-50%, -6px); white-space: nowrap; background: #1b1408; color: #ffb347; border: 1.5px solid #ffb347; padding: 1px 6px; border-radius: 4px; font-weight: 700; letter-spacing: 0.08em; }
@@ -73,6 +73,17 @@ button:disabled { opacity: 0.5; }
 .hud-marker { position: absolute; left: 0; top: 0; font-size: 14px; margin: -48px 0 0 -50px; width: 100px; text-align: center; font-weight: 700; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
 .hud-marker::after { content: ''; display: block; width: 8px; height: 8px; border: 1px solid currentColor; transform: rotate(45deg); margin: 4px auto 0; }
 /* Endgame search help: a soft ring on screen, an edge arrow when off screen (the HUD's own text). */
+/*
+ * Owner playtest 1: the safehouse, unmistakable in every camera and sensor. A solid blue outline round its footprint,
+ * a boxed 16 px label above it, a steady edge arrow off screen. Friendly blue reads on white hot, black hot and green
+ * night vision alike. Nothing blinks.
+ */
+.hud-safe-outline { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.hud-safe-outline polygon { fill: none; stroke: #6fb8ff; stroke-width: 3; stroke-linejoin: round; paint-order: stroke; filter: drop-shadow(0 0 1.5px #000) drop-shadow(0 0 1px #000); }
+.hud-safe { position: absolute; left: 0; top: 0; transform-origin: 0 0; margin: 0; translate: -50% -100%; white-space: nowrap; font-size: 16px; font-weight: 700; letter-spacing: 0.08em; color: #fff; background: rgba(8, 20, 36, 0.88); border: 2px solid #6fb8ff; border-radius: 5px; padding: 2px 8px; pointer-events: none; }
+.hud-safe-edge { position: absolute; left: 0; top: 0; translate: -50% -50%; display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none; }
+.hud-safe-arrow { display: block; width: 0; height: 0; border-top: 11px solid transparent; border-bottom: 11px solid transparent; border-left: 20px solid #6fb8ff; filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000); transform: rotate(var(--a)); }
+.hud-safe-text { white-space: nowrap; font-size: 14px; font-weight: 700; letter-spacing: 0.06em; color: #fff; background: rgba(8, 20, 36, 0.88); border: 2px solid #6fb8ff; border-radius: 5px; padding: 1px 6px; }
 .hud-search { position: absolute; left: 0; top: 0; border: 2px dashed rgba(255, 214, 102, 0.75); border-radius: 50%; background: radial-gradient(closest-side, rgba(255, 214, 102, 0) 70%, rgba(255, 214, 102, 0.14)); pointer-events: none; }
 .hud-search-label { position: absolute; left: 50%; top: -22px; transform: translateX(-50%); white-space: nowrap; font-size: 14px; font-weight: 700; color: #ffd666; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; }
 .hud-search-edge { position: absolute; left: 0; top: 0; margin: -10px 0 0 -60px; width: 120px; text-align: center; font-size: 14px; font-weight: 700; color: #ffd666; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; pointer-events: none; }

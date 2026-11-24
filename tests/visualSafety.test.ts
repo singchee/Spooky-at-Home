@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Effects, SHAKE_MAX_PX, SHAKE_TIME, shakeOffsetPx } from '../src/game/effects';
+import { cameraShakePx, Effects, RUMBLE, rumbleFalloff, rumbleOffsetPx, SHAKE_MAX_PX, SHAKE_TIME, shakeOffsetPx } from '../src/game/effects';
 import { AgentsView } from '../src/game/agentsView';
 import { PANEL_SIZE, PANEL_Y, PART, StrobeSprites, buildFigureGeometry } from '../src/render/figureShader';
 import { SensorShader } from '../src/render/sensors';
@@ -44,6 +44,110 @@ describe('105 camera kick (photosensitivity)', () => {
     const k = fx.shakePx(2.06);
     expect(Math.hypot(k.x, k.y)).toBeGreaterThan(2);
     expect(fx.shakePx(2.5)).toEqual({ x: 0, y: 0 });
+    fx.dispose();
+  });
+});
+
+describe('105 rumble (owner playtest 1): kick and rumble together keep the 105 kick rule', () => {
+  const len = (o: { x: number; y: number }) => Math.hypot(o.x, o.y);
+  /** Kick and rumble together, `t` s after a 105 lands `d` m from the aim point. */
+  const both = (d: number, at: number[], still = false) => {
+    const fx = new Effects();
+    for (const t0 of at) fx.impact('105', 0, 0, t0, d);
+    return { fx, at: (t: number) => cameraShakePx(fx, t, still) };
+  };
+  const samples = (f: (t: number) => { x: number; y: number }, fps: number, from = 0) =>
+    Array.from({ length: Math.ceil(fps * 1.2) }, (_, i) => f(from + i / fps));
+  /** Swings along a screen axis, counted as the safety playtest counts them (a change of 1 px or more). */
+  const swings = (os: { x: number; y: number }[], dir: { x: number; y: number }) => {
+    let n = 0;
+    let sign = 0;
+    let ext = 0;
+    for (const o of os) {
+      const v = o.x * dir.x + o.y * dir.y;
+      const d = v - ext;
+      if (Math.abs(d) < 1) continue;
+      if (Math.sign(d) !== sign) n++;
+      sign = Math.sign(d);
+      ext = v;
+    }
+    return n;
+  };
+  const KICK = { x: 0.34, y: 0.94 };
+  const ACROSS = { x: 0.94, y: -0.34 };
+
+  it('has a tunable strength and never moves the picture more than SHAKE_MAX_PX (5) in all, at any frame rate', () => {
+    expect(RUMBLE.strength).toBeGreaterThan(0);
+    expect(SHAKE_MAX_PX).toBeLessThanOrEqual(5);
+    for (const fps of [30, 60, 144, 1000]) {
+      for (const at of [[0], [0, 0.03], [0, 0.1, 0.2]]) {
+        for (const o of samples(both(0, at).at, fps)) expect(len(o)).toBeLessThanOrEqual(SHAKE_MAX_PX + 1e-9);
+      }
+    }
+  });
+
+  it('is clearly felt: on the kick\'s axis, a bigger and longer jolt than the kick alone, nothing sideways', () => {
+    const along = (o: { x: number; y: number }) => o.x * KICK.x + o.y * KICK.y;
+    const kick = samples((t) => shakeOffsetPx(t), 1000).map(along);
+    const near = samples(both(0, [0]).at, 1000);
+    const jolt = near.map(along);
+    expect(Math.max(...jolt)).toBeGreaterThan(Math.max(...kick) + 0.5); // ~5 px against the kick's ~4.3
+    const over3 = (xs: number[]) => xs.filter((v) => Math.abs(v) > 3).length;
+    expect(over3(jolt)).toBeGreaterThan(over3(kick) * 1.4); // held out longer (measured 145 ms against 86)
+    for (const o of near) expect(Math.abs(o.x * ACROSS.x + o.y * ACROSS.y)).toBeLessThan(1e-9); // no sideways slide (review: flash cells)
+  });
+
+  it('is one damped swing per axis (at most two swings, as the safety playtest counts them), settled by 0.5 s', () => {
+    for (const at of [[0], [0, 0.03]]) {
+      const os = samples(both(0, at).at, 1000);
+      expect(swings(os, KICK)).toBeLessThanOrEqual(2);
+      expect(swings(os, ACROSS)).toBeLessThanOrEqual(2);
+    }
+    const { at } = both(0, [0]);
+    expect(RUMBLE.delay + RUMBLE.time).toBeLessThanOrEqual(0.5);
+    expect(len(at(RUMBLE.delay + RUMBLE.time + 0.01))).toBe(0);
+    expect(RUMBLE.hz).toBeLessThan(5);
+  });
+
+  it('scales with the distance from the aim point: full near it, only the kick far away', () => {
+    expect(rumbleFalloff(0)).toBe(1);
+    expect(rumbleFalloff(RUMBLE.near)).toBe(1);
+    expect(rumbleFalloff((RUMBLE.near + RUMBLE.range) / 2)).toBeCloseTo(0.5);
+    expect(rumbleFalloff(RUMBLE.range)).toBe(0);
+    expect(rumbleFalloff(NaN)).toBe(0);
+    const side = (d: number) => Math.max(...samples((t) => rumbleOffsetPx([{ t0: 0, amp: rumbleFalloff(d) }], t), 1000).map(len));
+    expect(side(10)).toBeGreaterThan(side(90));
+    expect(side(90)).toBeGreaterThan(0);
+    expect(side(400)).toBe(0);
+    // Far away: no rumble, and the kick is untouched.
+    const far = both(400, [0]);
+    expect(far.at(0.08)).toEqual(far.fx.shakePx(0.08));
+  });
+
+  it('is the same at any frame rate: the picture at a moment does not depend on how frames were stepped', () => {
+    const run = (dt: number) => {
+      const fx = new Effects();
+      const seen = new Map<string, number>();
+      for (let t = 0; t <= 2 + 1e-9; t += dt) {
+        fx.update(t, dt);
+        if (Math.abs(t - 0.5) < dt / 2) fx.impact('105', 0, 0, 0.5, 30);
+        for (const probe of [0.6, 0.75, 0.9]) if (Math.abs(t - probe) < 1e-6) seen.set(String(probe), len(cameraShakePx(fx, probe, false)));
+      }
+      fx.dispose();
+      return seen;
+    };
+    const a = run(1 / 20);
+    const b = run(1 / 100);
+    for (const k of ['0.6', '0.75', '0.9']) expect(b.get(k)).toBeCloseTo(a.get(k)!, 9);
+  });
+
+  it('only a 105 rumbles; reduced motion (or Reduce flicker) turns the whole shake off', () => {
+    const fx = new Effects();
+    fx.impact('40', 0, 0, 1, 0);
+    expect(len(fx.rumblePx(1.2))).toBe(0);
+    fx.impact('105', 0, 0, 2, 0);
+    expect(len(fx.rumblePx(2.15))).toBeGreaterThan(1);
+    expect(len(cameraShakePx(fx, 2.15, true))).toBe(0);
     fx.dispose();
   });
 });

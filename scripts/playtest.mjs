@@ -1027,6 +1027,36 @@ async function audioChecks(browser) {
       if (!urgent && log[i].start - log[i - 1].end < 2.9) errors.push(`only ${(log[i].start - log[i - 1].end).toFixed(2)} s between voice lines ${log[i - 1].line} and ${log[i].line}`);
     }
 
+    // Owner playtest 1 ("captions but no voiceover"): the radio voice must be heard, not only logged.
+    // A meter on the radio bus (an AnalyserNode, test-only) must show the line's level while it plays,
+    // no recorded line may have been noted as unplayable, and every voice line must load and play.
+    if (talked?.voice?.missedTotal) errors.push(`recorded voice lines couldn't play: ${JSON.stringify(talked.voice.missed)}`);
+    await page.waitForFunction(() => !window.__spooky.audio().voice.onAir, null, { timeout: 10000, polling: 100 }).catch(() => undefined);
+    await page.evaluate(() => window.__spooky.audioMeters());
+    await page.evaluate(() => window.__spooky.audioSay('mission-complete'));
+    await page.waitForFunction(() => window.__spooky.audio().voice.log.some((e) => e.line === 'mission-complete'), null, { timeout: 8000, polling: 100 }).catch(() => undefined);
+    await page.waitForFunction(() => { const a = window.__spooky.audio(); const e = a.voice.log.find((x) => x.line === 'mission-complete'); return !e || a.time > e.end + 0.1; }, null, { timeout: 20000, polling: 100 }).catch(() => undefined);
+    await page.waitForTimeout(150);
+    const metered = await read();
+    out.radioMeter = metered?.meters;
+    // A line peaks near 0.9 x the radio slider (~0.5 on the bus); the radio blip and static that come
+    // with captions stay under 0.03, so a peak over 0.05 can only be the voice.
+    if (!(metered?.meters?.radioPeak > 0.05)) errors.push(`radio bus silent while a voice line played (meters ${JSON.stringify(metered?.meters)})`);
+    const lines = [...readFileSync('src/audio/assets.ts', 'utf8').match(/export const VOICE_LINES = \[([\s\S]*?)\] as const/)[1].matchAll(/'([a-z0-9-]+)'/g)].map((m) => m[1]);
+    out.voiceLines = { total: lines.length, silent: [] };
+    if (lines.length < 20) errors.push(`only ${lines.length} voice lines found in src/audio/assets.ts`);
+    for (const l of lines) {
+      await page.evaluate(() => window.__spooky.audioMeters());
+      // 1.5 s of each line: some open quietly (a breath, a soft first word).
+      const ok = await page.evaluate((id) => window.__spooky.audioClip(`voice/${id}`, 1500), l);
+      // Wait on the audio clock (a loaded machine renders audio late), then one more meter read.
+      await page.waitForFunction((id) => { const a = window.__spooky.audio(); const c = a.clips.filter((e) => e.id === `voice/${id}`).pop(); return !c || a.time > c.end + 0.1; }, l, { timeout: 15000, polling: 100 }).catch(() => undefined);
+      await page.waitForTimeout(150);
+      const m = (await read())?.meters;
+      if (!ok || !(m?.radioPeak > 0.05)) out.voiceLines.silent.push({ line: l, started: ok, peak: m?.radioPeak });
+    }
+    if (out.voiceLines.silent.length) errors.push(`voice lines that didn't load or play: ${JSON.stringify(out.voiceLines.silent)}`);
+
     // Gunfire ducks the music (first let any duck from the radio voice above recover).
     await page.waitForFunction(() => window.__spooky.audio().gains.duck < 0.01, null, { timeout: 10000, polling: 100 }).catch(() => undefined);
     await page.evaluate(() => window.__spooky.holdFire(true));
@@ -1035,6 +1065,33 @@ async function audioChecks(browser) {
     await page.evaluate(() => window.__spooky.holdFire(false));
     out.duckUnderFire = firing?.gains?.duck;
     if (!(firing?.gains?.duck > 0.1)) errors.push(`music not ducked under fire (duck ${firing?.gains?.duck})`);
+
+    // Owner playtest 1 ("impacts sound like a soft thud"): the heavier 105 and 40 mm impacts must not
+    // clip. Three 105s and a 40 mm volley land on the zombies while the master meter runs: its peak
+    // (after the limiter and the master gain) stays under 0 dBFS.
+    await page.evaluate(() => window.__spooky.audioMeters());
+    // The 105 reloads between rounds (4.5 s): two of them, with 40 mm rounds in between.
+    const volley = (gun, k) => page.evaluate(([gun, k]) => {
+      const zs = window.__spooky.zombies();
+      let n = 0;
+      for (let i = 0; i < k; i++) if (zs.length && window.__spooky.fireAt(gun, zs[i % zs.length].x + i * 4, zs[i % zs.length].z)) n++;
+      return n;
+    }, [gun, k]);
+    let booms = await volley('105', 1);
+    for (let i = 0; i < 6; i++) {
+      booms += await volley('40', 1);
+      await page.waitForTimeout(400);
+    }
+    await page.waitForTimeout(2500);
+    booms += await volley('105', 1);
+    // The last 105 is in the air ~3.6 s; wait for the audio clock to pass its blast and boom.
+    const tBoom = (await read())?.time ?? 0;
+    await page.waitForFunction((t) => window.__spooky.audio().time > t + 6, tBoom, { timeout: 30000, polling: 200 }).catch(() => undefined);
+    const boomed = await read();
+    out.impacts = { fired: booms, meters: boomed?.meters };
+    if (booms < 3) errors.push(`only ${booms} heavy rounds fired for the impact headroom check`);
+    if (!(boomed?.meters?.masterPeak > 0.05)) errors.push(`master meter silent through the impacts: ${JSON.stringify(boomed?.meters)}`);
+    if (!(boomed?.meters?.masterPeak < 1)) errors.push(`master clipped (peak ${boomed?.meters?.masterPeak}) under 105 and 40 mm impacts`);
 
     // Mute (M) silences the master; pressing it again brings it back.
     await page.keyboard.press('m');
@@ -3304,7 +3361,7 @@ async function highriseChecks(browser) {
           r.shots[k] = `${out}/highrise-${name}${ai}-${k}.png`;
           await page.screenshot({ path: r.shots[k] });
         };
-        // MASKED example: wait (up to one orbit) for a moment a building is on the line of fire.
+        // BLOCKED example: wait (up to one orbit) for a moment a building is on the line of fire.
         if (name === 'ny' && ai === 0) {
           let masked = false;
           for (let i = 0; i < 40 && !masked; i++) {
@@ -3312,13 +3369,15 @@ async function highriseChecks(browser) {
             if (!masked) await advance(page, 3, 0.5);
           }
           await advance(page, 0.4);
-          if (!masked) r.errors.push('no MASKED moment in a whole orbit over a Midtown canyon');
+          if (!masked) r.errors.push('no BLOCKED moment in a whole orbit over a Midtown canyon');
           else {
             const tag = await page.evaluate(() => {
               const c = document.querySelector('.hud-cross');
               return { cls: c?.classList.contains('masked'), text: c?.dataset.mask };
             });
-            if (!tag.cls || tag.text !== 'MASKED') r.errors.push(`the reticle doesn't show MASKED: ${JSON.stringify(tag)}`);
+            // The tag's text lives in one constant (owner playtest 1: BLOCKED, was MASKED).
+            const want = readFileSync('src/ui/hud.ts', 'utf8').match(/export const BLOCKED_TAG = '([^']+)'/)?.[1];
+            if (!tag.cls || !want || tag.text !== want) r.errors.push(`the reticle doesn't show ${want}: ${JSON.stringify(tag)}`);
             r.cut = (await page.evaluate(([x, z]) => window.__spooky.sight(x, z), [x, z])).cut;
             await shot('masked');
             // The same moment without the cut-away, for comparison.
