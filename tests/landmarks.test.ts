@@ -129,5 +129,20 @@ describe('landmark markers (3.19)', () => {
       const centre: LandmarkIn = { id: 'c', label: 'Dead centre', priority: 99, x: W / 2 + 10, y: H / 2 - 10, visible: true, aimDist: 1 };
       expect(placeLandmarks([centre], { width: W, height: H, blocked: [], zoom: 1, viewHalf: 100 })).toEqual([]);
     });
+
+    it('a 390 x 844 portrait phone keeps room for a full-length label above and below the reticle area', () => {
+      const pw = 390;
+      const ph = 844;
+      const label = 'x'.repeat(LANDMARK_MAX_CHARS);
+      for (const y of [ph * 0.25, ph * 0.75]) {
+        const place: LandmarkIn = { id: 'p', label, priority: 1, x: pw / 2, y, visible: true, aimDist: 20 };
+        const out = placeLandmarks([place], { width: pw, height: ph, blocked: [], zoom: 1, viewHalf: 100 });
+        expect(out.map((o) => o.id), `y ${y}`).toEqual(['p']);
+      }
+      // Beside the crosshair (where the phase-3 playtest's only on-screen place sat on a phone) the
+      // reticle keep-out wins, as on a desktop: the marker is dropped rather than drawn over the sight.
+      const beside: LandmarkIn = { id: 'b', label: 'Ironbark Oval', priority: 1, x: pw / 2 + 85, y: ph / 2 - 68, visible: true, aimDist: 29 };
+      expect(placeLandmarks([beside], { width: pw, height: ph, blocked: [], zoom: 1, viewHalf: 100 })).toEqual([]);
+    });
   });
 });

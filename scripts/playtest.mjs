@@ -3114,7 +3114,11 @@ async function landmarkChecks(browser) {
         if (!(await info(page)).touch) errs.push('touch controls did not come on');
         else await page.waitForSelector('.touch-controls:not([hidden]) .tc-fire');
       }
-      // The 105's wide lens, aimed beside the densest cluster of places (so the pins sit off the reticle).
+      // The 105's wide lens, aimed so the place with most others near it sits on screen a quarter of the
+      // screen height above the middle: off the reticle and its DANGER CLOSE / MASKED tags. Aimed in screen
+      // terms (the camera's own axes, from screenOf), not by a fixed ground offset: a 390 px portrait phone
+      // shows only about 100 m of ground across, so a ground offset that suits 1280 x 720 leaves every
+      // place either under the reticle keep-out or off the side of a phone.
       await page.keyboard.press('3');
       const places = await page.evaluate(() => window.__spooky.landmarks());
       if (!places.length) errs.push('no landmarks listed for the sample town');
@@ -3123,9 +3127,22 @@ async function landmarkChecks(browser) {
       const near = (p) => places.filter((q) => Math.hypot(q.x - p.x, q.z - p.z) < 140).length;
       const best = [...places].sort((a, b) => near(b) - near(a))[0];
       if (best) {
-        const others = places.filter((q) => Math.hypot(q.x - best.x, q.z - best.z) < 140);
-        const c = { x: others.reduce((s, q) => s + q.x, 0) / others.length, z: others.reduce((s, q) => s + q.z, 0) / others.length };
-        await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [c.x + 35, c.z + 35]);
+        let aim = { x: best.x, z: best.z };
+        for (let k = 0; k < 3; k++) {
+          await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [aim.x, aim.z]);
+          await page.waitForTimeout(300);
+          // Screen px per ground metre along x and z near the place, then the ground offset that puts
+          // the place at (middle, middle - 25% of the height).
+          const [s0, sx, sz] = await page.evaluate(([x, z]) => [window.__spooky.screenOf(x, z), window.__spooky.screenOf(x + 10, z), window.__spooky.screenOf(x, z + 10)], [best.x, best.z]);
+          const a = (sx[0] - s0[0]) / 10, b = (sz[0] - s0[0]) / 10, c = (sx[1] - s0[1]) / 10, d = (sz[1] - s0[1]) / 10;
+          const ex = viewport.width / 2 - s0[0];
+          const ey = viewport.height * 0.25 - s0[1];
+          const det = a * d - b * c;
+          if (!det) break;
+          // Moving the aim by g (metres) moves the place on screen by -J g, so aim -= J^-1 (target - now).
+          aim = { x: aim.x - (d * ex - b * ey) / det, z: aim.z - (-c * ex + a * ey) / det };
+        }
+        await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [aim.x, aim.z]);
       }
       for (const [sensor, key] of [['thermal', 'whiteHot'], ['night', 'night']]) {
         await page.evaluate((s) => window.__spooky.setSensor(s), sensor);
