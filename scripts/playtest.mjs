@@ -243,12 +243,16 @@ async function scatterShots(browser) {
         return best;
       });
       await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [at.x, at.z]);
-      await untilGameTime(page, (await gameTime(page)) + 1.5);
+      // Game-time waits run by advanceTo (big fixed steps between the shots): at 1/60 s a frame the
+      // t + 15 s wait alone is 720 frames, over 240 s on software rendering at ~3 frames a second.
+      await advanceTo(page, (await gameTime(page)) + 1.5);
       const fired = await page.evaluate(([x, z]) => window.__spooky.fireAt('105', x, z), [at.x, at.z]);
-      await page.waitForFunction(() => window.__spooky.state().kills > 0, null, { timeout: 60000 }).catch(() => errs.push('the 105 never landed'));
+      // Impact: the first kill, found within 1/20 s of game time; 20 game seconds is far past any 105 flight.
+      await advanceTo(page, (await gameTime(page)) + 20, { big: 1 / 20, untilKill: true });
+      if (!(await page.evaluate(() => window.__spooky.state().kills > 0))) errs.push('the 105 never landed');
       const t0 = await gameTime(page);
       for (const dt of [1, 2, 3, 15]) {
-        await untilGameTime(page, t0 + dt);
+        await advanceTo(page, t0 + dt);
         await fixedStep(page, 0);
         await page.waitForTimeout(300);
         shots[`t${dt}`] = `${out}/scatter-${template}-${view}-t${dt}.png`;
@@ -685,6 +689,25 @@ function gameTime(page) {
 /** Wait (in real time, however long it takes) until the game clock reaches `t` seconds. */
 function untilGameTime(page, t, timeout = 240000) {
   return page.waitForFunction((tt) => window.__spooky.state().t >= tt, t, { timeout, polling: 50 });
+}
+/**
+ * Run the game clock (under fixedStep) to `t` seconds, or (`untilKill`) until the first kill, rendering
+ * as few frames as it can: `big` game seconds a frame until the last half second, then 1/60 s, so it
+ * stops within one 1/60 s frame of `t`. The sim itself always ticks in fixed STEP increments
+ * (Game.frame), so the mission is the same as at 1/60 s a frame; only fewer pictures are drawn. For
+ * waits that would otherwise take minutes on software rendering (a few frames a second). Leaves the
+ * step at 1/60 s.
+ */
+async function advanceTo(page, t, { big = 0.25, untilKill = false, timeout = 240000 } = {}) {
+  await page.waitForFunction(([tt, b, kill]) => {
+    const h = window.__spooky;
+    const s = h.state();
+    const left = tt - s.t;
+    const done = left <= 0 || (kill && s.kills > 0);
+    h.fixedStep(done || left <= 0.5 ? 1 / 60 : b);
+    return done;
+  }, [t, big, untilKill], { timeout, polling: 'raf' });
+  await fixedStep(page, 1 / 60);
 }
 /** Game seconds per rendered frame (null: real time). A test hook: only present under automation. */
 function fixedStep(page, dt) {
@@ -3114,7 +3137,11 @@ async function landmarkChecks(browser) {
         if (!(await info(page)).touch) errs.push('touch controls did not come on');
         else await page.waitForSelector('.touch-controls:not([hidden]) .tc-fire');
       }
-      // The 105's wide lens, aimed beside the densest cluster of places (so the pins sit off the reticle).
+      // The 105's wide lens, aimed so the place with most others near it sits on screen a quarter of the
+      // screen height above the middle: off the reticle and its DANGER CLOSE / MASKED tags. Aimed in screen
+      // terms (the camera's own axes, from screenOf), not by a fixed ground offset: a 390 px portrait phone
+      // shows only about 100 m of ground across, so a ground offset that suits 1280 x 720 leaves every
+      // place either under the reticle keep-out or off the side of a phone.
       await page.keyboard.press('3');
       const places = await page.evaluate(() => window.__spooky.landmarks());
       if (!places.length) errs.push('no landmarks listed for the sample town');
@@ -3123,9 +3150,22 @@ async function landmarkChecks(browser) {
       const near = (p) => places.filter((q) => Math.hypot(q.x - p.x, q.z - p.z) < 140).length;
       const best = [...places].sort((a, b) => near(b) - near(a))[0];
       if (best) {
-        const others = places.filter((q) => Math.hypot(q.x - best.x, q.z - best.z) < 140);
-        const c = { x: others.reduce((s, q) => s + q.x, 0) / others.length, z: others.reduce((s, q) => s + q.z, 0) / others.length };
-        await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [c.x + 35, c.z + 35]);
+        let aim = { x: best.x, z: best.z };
+        for (let k = 0; k < 3; k++) {
+          await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [aim.x, aim.z]);
+          await page.waitForTimeout(300);
+          // Screen px per ground metre along x and z near the place, then the ground offset that puts
+          // the place at (middle, middle - 25% of the height).
+          const [s0, sx, sz] = await page.evaluate(([x, z]) => [window.__spooky.screenOf(x, z), window.__spooky.screenOf(x + 10, z), window.__spooky.screenOf(x, z + 10)], [best.x, best.z]);
+          const a = (sx[0] - s0[0]) / 10, b = (sz[0] - s0[0]) / 10, c = (sx[1] - s0[1]) / 10, d = (sz[1] - s0[1]) / 10;
+          const ex = viewport.width / 2 - s0[0];
+          const ey = viewport.height * 0.25 - s0[1];
+          const det = a * d - b * c;
+          if (!det) break;
+          // Moving the aim by g (metres) moves the place on screen by -J g, so aim -= J^-1 (target - now).
+          aim = { x: aim.x - (d * ex - b * ey) / det, z: aim.z - (-c * ex + a * ey) / det };
+        }
+        await page.evaluate(([x, z]) => window.__spooky.aimAt(x, z), [aim.x, aim.z]);
       }
       for (const [sensor, key] of [['thermal', 'whiteHot'], ['night', 'night']]) {
         await page.evaluate((s) => window.__spooky.setSensor(s), sensor);
