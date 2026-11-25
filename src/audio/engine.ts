@@ -11,9 +11,10 @@ import { Mixer } from './mixer';
 import { GeneratedScore, playSting, type Score, type ScoreMode } from './music';
 import { Ambience, radioStatic } from './ambience';
 import { Kit } from './kit';
-import { AssetBank, MUSIC, SFX, VOICE_LINES, voiceAsset, type AssetStats, type VoiceLine } from './assets';
+import { AssetBank, type AssetStats, type VoiceLine } from './assets';
 import { BED_IDS, playRecordedSting, RecordedBed, RecordedScore, trackIds } from './recorded';
 import { SamplePlayer } from './samples';
+import { loadPlan, sceneJumps } from './loadOrder';
 import { DUCK_VOICE, SQUELCH, VoiceChannel, type VoiceLogEntry, type VoiceMiss } from './voice';
 
 /** What sound effects need: the context, where to plug in, and the extras the engine offers. */
@@ -151,13 +152,8 @@ export class AudioEngine {
     const bank = (this.bank = new AssetBank(ctx));
     this.samples = new SamplePlayer(ctx, this.count);
     this.voice = new VoiceChannel(ctx, mixer.radio, bank, (d, h) => mixer.duck(d, h), this.count);
-    // Voice first: the score, the bed and the guns have generated stand-ins until their files
-    // arrive, but a radio line has none (only its caption), and the 22 lines are small (~1 MB).
-    void bank.request([SFX.squelch, voiceAsset('cleared-hot')]);
-    void bank.request(VOICE_LINES.map(voiceAsset));
-    void bank.request(trackIds(this.scene));
-    void bank.request([SFX.fire25, SFX.fire40, SFX.fire105, SFX.explosion, SFX.alarm, ...BED_IDS]);
-    void bank.request([MUSIC.stingWin, MUSIC.stingLose]);
+    // Guns, then voice, then music (loadOrder.ts): see GUN_IDS for why the guns come so early.
+    for (const batch of loadPlan(this.scene)) void bank.request(batch);
   }
 
   /** A hidden tab goes quiet (and stops using the CPU); it picks up again when shown. */
@@ -323,9 +319,9 @@ export class AudioEngine {
     // the player goes back (the generated score covers the gap, then the recording takes over).
     if (this.bank) {
       const other: ScoreMode = this.scene === 'menu' ? 'mission' : 'menu';
-      void this.bank.request(trackIds(this.scene), true);
-      // ...but never ahead of radio voice still waiting (no stand-in for a voice line).
-      void this.bank.request(VOICE_LINES.map(voiceAsset), true);
+      // This screen's music jumps the queue, but never ahead of radio voice still waiting (no stand-in
+      // for a voice line), nor of the guns (their stand-ins are thin; loadOrder.ts).
+      for (const batch of sceneJumps(this.scene)) void this.bank.request(batch, true);
       this.bank.release(trackIds(other));
     }
     if (!this.score || this.score.mode !== this.scene) {
