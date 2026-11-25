@@ -357,3 +357,30 @@ function shortestRoad(g: RoadGraph, from: V2, to: V2): V2[] {
   const { prev } = dijkstra(g, nearestNode(g, from));
   return [...pathFromPrev(prev, nearestNode(g, to)).map((i) => g.nodes[i]), to];
 }
+
+describe('guardrail: map edge and odd relations (code review, final round)', () => {
+  const lat0 = -10, lon0 = 100;
+  const mPerDegLon = 111320 * Math.cos((lat0 * Math.PI) / 180);
+  const at = (x: number, z: number) => ({ lat: lat0 - z / 110574, lon: lon0 + x / mPerDegLon });
+  const road = { type: 'way' as const, id: 9, tags: { highway: 'residential' }, geometry: [at(-500, 0), at(500, 0)] };
+
+  it('a school whose grounds cross the map edge (middle outside) still protects the part inside', () => {
+    const grounds = [at(400, -100), at(900, -100), at(900, 100), at(400, 100), at(400, -100)];
+    for (const el of [
+      { type: 'way' as const, id: 11, tags: { amenity: 'school', name: 'Edge School' }, geometry: grounds },
+      { type: 'relation' as const, id: 12, tags: { type: 'multipolygon', amenity: 'school', name: 'Edge Campus' }, members: [{ type: 'way' as const, ref: 1, role: 'outer', geometry: grounds }] },
+    ]) {
+      const map = parseOverpass({ elements: [el, road] } as OverpassJson, { lat: lat0, lon: lon0 }, 600, 'edge');
+      expect(nearChildPlace(map, { x: 480, z: 0 }), `${el.type}`).toBe(true);
+    }
+  });
+
+  it('a site relation with a perimeter role, or only nodes, is still protected', () => {
+    const ring = [at(-100, -100), at(100, -100), at(100, 100), at(-100, 100), at(-100, -100)];
+    const perim = parseOverpass({ elements: [{ type: 'relation', id: 21, tags: { type: 'site', amenity: 'school' }, members: [{ type: 'way', ref: 1, role: 'perimeter', geometry: ring }] }, road] } as OverpassJson, { lat: lat0, lon: lon0 }, 600, 'p');
+    expect(nearChildPlace(perim, { x: 80, z: 80 })).toBe(true);
+    const b1 = at(-100, 100), b2 = at(100, -100);
+    const nodesOnly = parseOverpass({ elements: [{ type: 'relation', id: 22, tags: { type: 'site', amenity: 'kindergarten' }, bounds: { minlat: b1.lat, minlon: b1.lon, maxlat: b2.lat, maxlon: b2.lon }, members: [{ type: 'node', ref: 5, role: 'entrance', lat: lat0, lon: lon0 }] }, road] } as OverpassJson, { lat: lat0, lon: lon0 }, 600, 'n');
+    expect(nearChildPlace(nodesOnly, { x: 80, z: 80 })).toBe(true);
+  });
+});
