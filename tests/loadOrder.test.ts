@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AssetBank, VOICE_LINES, voiceAsset, type Fetcher } from '../src/audio/assets';
+import { AssetBank, SFX, VOICE_LINES, voiceAsset, type Fetcher } from '../src/audio/assets';
 import { GUN_IDS, loadPlan, sceneJumps } from '../src/audio/loadOrder';
 import { trackIds } from '../src/audio/recorded';
 
@@ -7,6 +7,7 @@ import { trackIds } from '../src/audio/recorded';
 // files loaded last, behind every voice line and the music (about a minute on the cloud machine), so
 // the 40 mm played its generated stand-in. The guns must load right after the first radio line, and
 // stay ahead of voice and music when the screen changes.
+// These tests check loadPlan and sceneJumps; src/audio/engine.ts (loadRecorded, startScene) only loops over them.
 
 /** A bank whose fetches are recorded in the order they start (2 at a time, as in the game). */
 function recordingBank() {
@@ -26,6 +27,7 @@ describe('recorded files load in an order that keeps the guns sounding right', (
   it('at start-up every gun file is fetched before the rest of the voice and before any music', async () => {
     const { bank, order } = recordingBank();
     await Promise.all(loadPlan('menu').map((b) => bank.request(b)));
+    expect(order.slice(0, 2)).toEqual([SFX.squelch, voiceAsset('cleared-hot')]);
     const lastGun = Math.max(...GUN_IDS.map((id) => order.indexOf(id)));
     expect(Math.min(...GUN_IDS.map((id) => order.indexOf(id)))).toBeGreaterThanOrEqual(0);
     for (const id of [...voice, ...trackIds('menu')]) expect(order.indexOf(id), id).toBeGreaterThan(lastGun);
@@ -33,9 +35,9 @@ describe('recorded files load in an order that keeps the guns sounding right', (
 
   it('a screen change puts guns still waiting ahead of voice and this screen music', async () => {
     const { bank, order } = recordingBank();
-    // Start-up queues everything; only the first two fetches are in flight when the mission starts.
-    const all = loadPlan('menu').map((b) => bank.request(b));
-    // Simulate the old order too: if anything had pushed the guns back, the jump must still win.
+    // The worst case: the guns queued behind all the voice and music (the old start-up order), with
+    // only the first two fetches in flight when the mission starts. The screen change must still put them first.
+    const all = [[SFX.squelch, voiceAsset('cleared-hot')], VOICE_LINES.map(voiceAsset), trackIds('menu'), [...GUN_IDS]].map((b) => bank.request(b));
     const jumps = sceneJumps('mission').map((b) => bank.request(b, true));
     await Promise.all([...all, ...jumps]);
     const inFlight = 2;
