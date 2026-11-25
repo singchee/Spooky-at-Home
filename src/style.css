@@ -57,10 +57,77 @@ button:disabled { opacity: 0.5; }
 .hud-cross svg { width: 100%; height: 100%; }
 .hud-cross.danger { color: #ff5a4e; }
 .hud-cross.danger::after { content: attr(data-label); position: absolute; top: 50%; left: 100%; transform: translate(8px, -50%); white-space: nowrap; background: #b3261e; color: #fff; padding: 2px 6px; border-radius: 4px; font-weight: 700; }
+/* 3.39 BLOCKED (the tag text is BLOCKED_TAG in hud.ts): a building on the line of fire. Amber, dashed, steady (never blinks); its tag sits above the crosshair. */
+.hud-cross.masked { color: #ffb347; }
+.hud-cross.masked svg g:last-child { stroke-dasharray: 5 4; }
+.hud-cross.masked::before { content: attr(data-mask); position: absolute; bottom: 100%; left: 50%; transform: translate(-50%, -6px); white-space: nowrap; background: #1b1408; color: #ffb347; border: 1.5px solid #ffb347; padding: 1px 6px; border-radius: 4px; font-weight: 700; letter-spacing: 0.08em; }
+/* 3.39: where a masked round would hit. A small amber ring and cross, steady (never blinks). */
+.hud-impact { position: absolute; left: 0; top: 0; width: 14px; height: 14px; margin: -8px 0 0 -8px; border: 1.5px solid #ffb347; border-radius: 50%; box-shadow: 0 0 0 1px #000, inset 0 0 0 1px #000; pointer-events: none; }
+.hud-impact::before, .hud-impact::after { content: ''; position: absolute; left: 50%; top: 50%; width: 20px; height: 1.5px; margin: -0.75px 0 0 -10px; background: #ffb347; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6); transform: rotate(45deg); }
+.hud-impact::after { transform: rotate(-45deg); }
+.hud-impact[hidden] { display: none; }
+/* Off screen: a steady amber arrowhead at the edge, pointing at the spot (rotated in hud.ts). */
+.hud-impact.edge { border: none; border-radius: 0; box-shadow: none; width: 0; height: 0; margin: -9px 0 0 -8px; border-top: 9px solid transparent; border-bottom: 9px solid transparent; border-left: 16px solid #ffb347; filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000); transform-origin: 8px 9px; }
+.hud-impact.edge::before, .hud-impact.edge::after { display: none; }
 .hud-switching { position: absolute; left: 50%; top: 32%; transform: translateX(-50%); letter-spacing: 0.2em; display: none; }
 .hud-marker { position: absolute; left: 0; top: 0; font-size: 14px; margin: -48px 0 0 -50px; width: 100px; text-align: center; font-weight: 700; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
 .hud-marker::after { content: ''; display: block; width: 8px; height: 8px; border: 1px solid currentColor; transform: rotate(45deg); margin: 4px auto 0; }
+/* Endgame search help: a soft ring on screen, an edge arrow when off screen (the HUD's own text). */
+/*
+ * Owner playtest 1: the safehouse, unmistakable in every camera and sensor. A solid blue outline round its footprint,
+ * a boxed 16 px label above it, a steady edge arrow off screen. Friendly blue reads on white hot, black hot and green
+ * night vision alike. Nothing blinks.
+ */
+.hud-safe-outline { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.hud-safe-outline polygon { fill: none; stroke: #6fb8ff; stroke-width: 3; stroke-linejoin: round; paint-order: stroke; filter: drop-shadow(0 0 1.5px #000) drop-shadow(0 0 1px #000); }
+.hud-safe { position: absolute; left: 0; top: 0; transform-origin: 0 0; margin: 0; translate: -50% -100%; white-space: nowrap; font-size: 16px; font-weight: 700; letter-spacing: 0.08em; color: #fff; background: rgba(8, 20, 36, 0.88); border: 2px solid #6fb8ff; border-radius: 5px; padding: 2px 8px; pointer-events: none; }
+.hud-safe-edge { position: absolute; left: 0; top: 0; translate: -50% -50%; display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none; }
+.hud-safe-arrow { display: block; width: 0; height: 0; border-top: 11px solid transparent; border-bottom: 11px solid transparent; border-left: 20px solid #6fb8ff; filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000); transform: rotate(var(--a)); }
+.hud-safe-text { white-space: nowrap; font-size: 14px; font-weight: 700; letter-spacing: 0.06em; color: #fff; background: rgba(8, 20, 36, 0.88); border: 2px solid #6fb8ff; border-radius: 5px; padding: 1px 6px; }
+.hud-search { position: absolute; left: 0; top: 0; border: 2px dashed rgba(255, 214, 102, 0.75); border-radius: 50%; background: radial-gradient(closest-side, rgba(255, 214, 102, 0) 70%, rgba(255, 214, 102, 0.14)); pointer-events: none; }
+.hud-search-label { position: absolute; left: 50%; top: -22px; transform: translateX(-50%); white-space: nowrap; font-size: 14px; font-weight: 700; color: #ffd666; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; }
+.hud-search-edge { position: absolute; left: 0; top: 0; margin: -10px 0 0 -60px; width: 120px; text-align: center; font-size: 14px; font-weight: 700; color: #ffd666; text-shadow: 0 0 2px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; pointer-events: none; }
+.hud-search-edge::before { content: ''; display: block; width: 0; height: 0; margin: 0 auto 4px; border-left: 9px solid transparent; border-right: 9px solid transparent; border-bottom: 14px solid #ffd666; transform: rotate(calc(var(--a) + 90deg)); }
+.hud-cold-only { color: #ffd666; font-weight: 800; font-size: 1.15em; animation: hud-cold-pulse 1.6s ease-in-out 3; }
+@keyframes hud-cold-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .hud-cold-only { animation: none; } }
+:root.motion-reduced .hud-cold-only, :root.flicker-reduced .hud-cold-only { animation: none; }
 .hud-attrib { position: absolute; right: 16px; bottom: 16px; font-size: 14px; }
+/* Crowd nights (spec 003, Feel M1/S2): numbers on a solid dark plate with an outline, top centre, clear of the guns, stick and buttons. */
+.recon-crowd { margin-top: 16px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.15); }
+.recon-crowd-size { display: flex; gap: 16px; flex-wrap: wrap; }
+.recon-crowd-opt { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; }
+.recon-crowd-opt input { flex: 0 0 auto; width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; accent-color: var(--accent); }
+.crowd-top { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; gap: 16px; align-items: baseline; white-space: nowrap; background: rgba(0, 0, 0, 0.7); border-radius: 4px; padding: 4px 12px; }
+.crowd-top, .crowd-tally, .crowd-alarm { text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
+.crowd-kills { font-size: 22px; font-weight: 700; letter-spacing: 0.04em; }
+.crowd-mult { font-size: 22px; font-weight: 800; min-width: 2.2em; text-align: center; }
+.crowd-mult.down { color: #ffb4a9; }
+.crowd-score { font-size: 18px; }
+.crowd-alarm { position: absolute; left: 50%; top: 58px; transform: translateX(-50%); background: #6b4300; color: #fff; padding: 2px 10px; border-radius: 4px; font-weight: 700; font-size: 16px; white-space: nowrap; }
+.crowd-alarm.hit { background: #b3261e; }
+.crowd-tallies { position: absolute; inset: 0; overflow: hidden; }
+.crowd-tally { position: absolute; left: 0; top: 0; font-size: 22px; font-weight: 800; color: #fff; background: rgba(0, 0, 0, 0.62); border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 4px; padding: 0 6px; will-change: transform, opacity; }
+.crowd-fps { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); font-size: 14px; background: rgba(0, 0, 0, 0.7); padding: 2px 8px; border-radius: 4px; pointer-events: none; z-index: 6; }
+@media (max-width: 640px) {
+  .crowd-top { top: 176px; gap: 10px; }
+  .crowd-alarm { top: 220px; }
+}
+/* Short landscape phones (same 560 px break as the minimap): the minimap sits at left 264-376 px, so the crowd bar and alarm start right of it.
+   The bar stops short of the mission panel (about 168 px at the right) and wraps SCORE onto a second line, so five-digit counts still fit. */
+@media (max-height: 560px) and (min-width: 641px) {
+  .touch-mode .crowd-top { left: calc(392px + env(safe-area-inset-left, 0px)); transform: none; top: 12px; gap: 2px 12px; flex-wrap: wrap; box-sizing: border-box; max-width: calc(100% - 392px - 168px - env(safe-area-inset-left, 0px)); }
+  .touch-mode .crowd-top .crowd-score { flex-basis: 100%; }
+  .touch-mode .crowd-alarm { left: calc(392px + env(safe-area-inset-left, 0px)); transform: none; top: 84px; max-width: calc(100% - 392px - 168px - env(safe-area-inset-left, 0px)); box-sizing: border-box; white-space: normal; }
+}
+/* Landmark markers (3.19): outlined text, smaller and quieter than the mission's own markers; under every HUD panel. */
+.hud-landmarks { position: absolute; inset: 0; overflow: hidden; }
+.hud-landmark[hidden] { display: none; }
+.hud-landmark .lm-pin, .hud-landmark .lm-label { position: absolute; left: 0; top: 0; }
+.hud-landmark .lm-pin { width: 6px; height: 6px; margin: -4px 0 0 -4px; border: 1px solid currentColor; border-radius: 50%; box-shadow: 0 0 0 1px #000; }
+.hud-landmark .lm-label { box-sizing: border-box; height: 20px; padding: 0 6px; font-size: 14px; line-height: 20px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink);
+  -webkit-text-stroke: 3px #000; paint-order: stroke fill; text-shadow: 0 0 3px #000, 0 0 2px #000; }
+.hud[data-sensor=night] .hud-landmark .lm-label { color: #c8ffd0; }
 .hud-keys { position: absolute; left: 16px; bottom: 16px; font-size: 14px; max-width: calc(100% - 420px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 900px) {
   .hud-keys { display: none; }
@@ -147,6 +214,7 @@ button:disabled { opacity: 0.5; }
 .tm-route-casing { fill: none; stroke: #0b0d0c; stroke-linecap: round; stroke-linejoin: round; opacity: 0.9; }
 .tm-ambush { fill: none; stroke: rgba(255, 107, 94, 0.09); stroke-linecap: round; stroke-linejoin: round; }
 .tm-horde { fill: rgba(255, 107, 94, 0.2); stroke: var(--danger); }
+.tm-search { fill: rgba(255, 214, 102, 0.12); stroke: #ffd666; stroke-dasharray: 6 4; }
 .tm-coldring { fill: none; stroke: var(--tm-cold); }
 .tm-hostile { fill: var(--danger); stroke: #0b0d0c; }
 .tm-friendly { fill: var(--tm-friendly); stroke: #0b0d0c; }
@@ -166,6 +234,12 @@ button:disabled { opacity: 0.5; }
 
 .card.wide.recon { max-width: 1120px; }
 .recon h2 { margin-bottom: 4px; }
+/* A place kept on this device (BACKLOG 3.12): "Loaded from this device · downloaded 3 days ago · Refresh". */
+.recon-saved { margin: 2px 0 6px; }
+.recon-saved p { margin: 0 0 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.recon-saved button { min-height: 32px; padding: 4px 10px; font-size: 14px; }
+@media (pointer: coarse) { .recon-saved button { min-height: 48px; } }
+.recon-saved-text:focus { outline: none; }
 .recon-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 20px; align-items: start; margin-top: 8px; }
 .recon-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .recon-list li { display: flex; gap: 10px; align-items: flex-start; }
@@ -191,8 +265,48 @@ button:disabled { opacity: 0.5; }
 
 .card.briefing { max-width: 1040px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); column-gap: 24px; align-items: start; }
 .card.briefing > * { grid-column: 1; }
-.card.briefing > .briefing-map { grid-column: 2; grid-row: 1 / span 30; }
+.card.briefing > .briefing-map, .card.briefing > .briefing-visuals { grid-column: 2; grid-row: 1 / span 30; }
 .card.briefing > button { justify-self: start; }
+/* Briefing diorama (3.5): the blocky 3D model beside the tactical map on wide screens; a Map / 3D toggle when narrow. */
+.card.briefing:has(> .briefing-visuals:not(.no-3d)) { max-width: 1260px; grid-template-columns: minmax(0, 1fr) minmax(0, 780px); }
+/* A briefing taller than the screen scrolls from its top instead of being cut off. */
+.overlay > .card.briefing { margin: auto; }
+.bv-panels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.briefing-visuals.no-3d .bv-panels { display: block; }
+.bv-toggle { display: none; gap: 6px; margin-bottom: 8px; }
+.bv-tab { flex: 1 1 0; min-height: 40px; }
+.bv-tab[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); background: rgba(184, 255, 138, 0.08); }
+.dio { position: relative; outline: none; }
+.dio:focus-visible .dio-stage { box-shadow: 0 0 0 2px var(--accent); }
+.dio-stage { position: relative; aspect-ratio: 1 / 1; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: radial-gradient(ellipse at 50% 38%, #1c2a24 0%, #0d1310 62%, #070908 100%); }
+.dio-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: pan-y; }
+.dio.dragging .dio-canvas { cursor: grabbing; }
+.dio-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.dio-label { position: absolute; left: 0; top: 0; visibility: hidden; white-space: nowrap; font-size: 14px; line-height: 18px; padding: 2px 6px; border-radius: 3px; border: 1px solid rgba(231, 239, 233, 0.35); background: rgba(9, 12, 11, 0.86); color: #dfe8e2; }
+.dio-label.on { visibility: visible; }
+.dio-pin.on { display: block; }
+.dio-label.north { padding: 2px 5px; font-weight: 700; color: var(--ink); border-color: var(--ink); }
+.dio-pin.north { background: var(--ink); }
+.dio-label::after { content: ''; position: absolute; background: currentColor; opacity: 0.75; }
+.dio-label[data-side='above']::after { left: 50%; top: 100%; width: 1px; height: var(--gap, 9px); }
+.dio-label[data-side='below']::after { left: 50%; bottom: 100%; width: 1px; height: var(--gap, 9px); }
+.dio-label[data-side='right']::after { right: 100%; top: 50%; width: var(--gap, 9px); height: 1px; }
+.dio-label[data-side='left']::after { left: 100%; top: 50%; width: var(--gap, 9px); height: 1px; }
+.dio-label.safe, .dio-label.home { color: var(--accent); border-color: var(--accent); font-weight: 700; letter-spacing: 0.06em; }
+.dio-label.hostile, .dio-label.wave { color: #ff8a7f; border-color: var(--danger); font-weight: 700; letter-spacing: 0.04em; }
+.dio-label.friendly { color: #8cc4ff; border-color: var(--tm-friendly); font-weight: 700; letter-spacing: 0.06em; }
+.dio-label.anchor { color: var(--ink); border-color: var(--accent); }
+.dio-pin { position: absolute; left: -4px; top: -4px; display: none; width: 8px; height: 8px; border-radius: 50%; background: #dfe8e2; border: 1.5px solid #0b0d0c; }
+.dio-pin.safe, .dio-pin.home, .dio-pin.anchor { background: var(--accent); }
+.dio-pin.hostile, .dio-pin.wave { background: var(--danger); }
+.dio-pin.friendly { background: var(--tm-friendly); }
+.dio-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; margin-top: 6px; color: var(--muted); font-size: 14px; }
+@media (max-width: 1179px) {
+  .card.briefing:has(> .briefing-visuals:not(.no-3d)) { max-width: 1040px; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); }
+  .bv-panels { display: block; }
+  .bv-toggle { display: flex; }
+  .briefing-visuals.show-3d .briefing-map, .briefing-visuals.show-map .dio { display: none; }
+}
 .tmap-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--muted); font-size: 14px; }
 .tl-item { display: inline-flex; align-items: center; gap: 6px; }
 .tl-key { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
@@ -213,7 +327,7 @@ button:disabled { opacity: 0.5; }
 @media (max-width: 900px) {
   .recon-grid, .recon-cards { grid-template-columns: minmax(0, 1fr); }
   .card.briefing { display: block; }
-  .card.briefing > .briefing-map { margin-bottom: 12px; }
+  .card.briefing > .briefing-map, .card.briefing > .briefing-visuals { margin-bottom: 12px; }
 }
 @media (max-width: 640px) {
   .hud-minimap { width: 120px; top: 108px; }
@@ -258,12 +372,14 @@ button:disabled { opacity: 0.5; }
 .landing-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; max-width: 560px; }
 .landing-actions button { min-height: 48px; font-size: 16px; padding: 10px 14px; border-radius: 8px; text-align: center; }
 .landing-actions .la-scout { grid-column: 1 / -1; font-size: 18px; min-height: 56px; letter-spacing: 0.02em; box-shadow: 0 0 24px rgba(184, 255, 138, 0.25); }
-.landing-actions .la-sample, .landing-actions .la-training { background: rgba(14, 20, 16, 0.85); }
+.landing-actions .la-sample, .landing-actions .la-training, .landing-actions .la-famous { background: rgba(14, 20, 16, 0.85); }
+.landing-actions .la-famous { grid-column: 1 / -1; }
+.la-famous { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
 .la-training { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
 .la-sub { font-size: 14px; color: var(--muted); }
 .landing-actions button:focus-visible, .coach button:focus-visible, .menu-back:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .landing-privacy, .landing-credit { color: var(--muted); font-size: 14px; margin: 4px 0; line-height: 1.45; max-width: 560px; }
-/* Only on touch screens: the gunship wants a mouse and keyboard. */
+/* Only on touch screens: says the missions have touch controls. */
 .landing-touch { display: none; color: var(--ink); font-size: 14px; margin: 0 0 12px; }
 @media (pointer: coarse) { .landing-touch { display: block; } }
 @media (min-width: 900px) {
@@ -298,10 +414,80 @@ button:disabled { opacity: 0.5; }
   .lh-cross { display: none; } /* no room for it above the title */
 }
 @media (prefers-reduced-motion: reduce) {
-  .lh-rec::before { animation: none; }
+  :root:not(.motion-full) .lh-rec::before { animation: none; }
 }
-.menu-back { position: absolute; left: 16px; top: 16px; z-index: 11; background: rgba(12, 16, 14, 0.92); }
-@media (max-width: 640px) { .menu { padding-top: 68px; } }
+:root.motion-reduced .lh-rec::before { animation: none; }
+/* ---------- Scout, recon and custom screens (menu.ts) ---------- */
+/* A column: the "← Front page" bar sits in the flow above the card, so it can't cover a heading. */
+.menu { flex-direction: column; justify-content: flex-start; align-items: center; }
+.menu [hidden] { display: none !important; }
+.menu-top { align-self: stretch; display: flex; flex: 0 0 auto; margin-bottom: 12px; }
+.menu-back { background: rgba(12, 16, 14, 0.92); }
+.card.scout { max-width: 680px; }
+.card h1.scout-title { letter-spacing: 0.04em; font-size: clamp(26px, 5vw, 36px); }
+.scout-lede { color: var(--muted); }
+.scout-form { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 6px; }
+.scout-input { flex: 1 1 260px; min-width: 0; font-size: 19px; min-height: 56px; padding: 10px 14px; border-color: rgba(231, 239, 233, 0.45); }
+.scout-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.scout-go { flex: 0 0 auto; min-height: 56px; padding: 10px 22px; font-size: 17px; }
+.scout-form.busy .scout-input { opacity: 0.7; }
+.scout-progress { margin: 12px 0 4px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255, 255, 255, 0.03); }
+/* Calm "working" sweep: a dim bar gliding back and forth. Constant brightness, so nothing flashes. */
+.scout-sweep { position: relative; height: 4px; border-radius: 2px; background: rgba(184, 255, 138, 0.12); overflow: hidden; margin-bottom: 12px; }
+.scout-sweep span { position: absolute; top: 0; bottom: 0; left: 0; width: 30%; border-radius: 2px; background: rgba(184, 255, 138, 0.55); animation: scout-sweep 2.4s ease-in-out infinite alternate; }
+@keyframes scout-sweep { from { transform: translateX(0); } to { transform: translateX(233%); } }
+.scout-stages { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.scout-stages li { position: relative; padding-left: 26px; color: var(--muted); }
+.scout-stages li::before { content: '·'; position: absolute; left: 6px; }
+.scout-stages li[data-state='done'] { color: var(--ink); }
+.scout-stages li[data-state='done']::before { content: '✓'; left: 4px; color: var(--accent); }
+.scout-stages li[data-state='active'] { color: var(--ink); font-weight: 700; }
+.scout-stages li[data-state='active']::before { content: '▸'; left: 5px; color: var(--accent); }
+/* Downloading with a known size: a still bar that fills. Bytes but no size: the sweep, slower. */
+.scout-sweep[data-mode='determinate'] span { animation: none; transform: none; transition: width 0.3s linear; }
+/* Waiting, with an estimate (3.26): a still fill creeping toward the estimate, never past 90%. */
+.scout-sweep[data-mode='estimate'] span { animation: none; transform: none; transition: width 1s linear; background: rgba(184, 255, 138, 0.45); }
+.scout-estimate { margin: 0 0 4px; overflow-wrap: anywhere; }
+.scout-sweep[data-mode='bytes'] span { animation-duration: 4s; background: rgba(184, 255, 138, 0.7); }
+.scout-progress.still .scout-sweep:not([data-mode='determinate']):not([data-mode='estimate']) span { animation: none; width: 100%; opacity: 0.6; }
+.scout-progress.still .scout-sweep span { transition: none; }
+.scout-place { overflow-wrap: anywhere; }
+.scout-load { margin-top: 8px; }
+.scout-load-text { margin: 0 0 4px; overflow-wrap: anywhere; }
+.scout-load-meta { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+.scout-estimate { font-variant-numeric: tabular-nums; }
+.scout-cancel { margin-top: 6px; min-height: 48px; min-width: 96px; }
+.scout-ask { margin-top: 10px; }
+.scout-ask-text { margin: 0 0 8px; font-weight: 700; }
+.scout-ask-row { gap: 8px; flex-wrap: wrap; }
+.scout-ask-row button { min-height: 48px; }
+.recon-extras, .recon-timing { color: var(--muted); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.scout-msg { margin: 12px 0 4px; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line); }
+.scout-msg.error { border-color: var(--danger); background: rgba(255, 107, 94, 0.08); }
+.scout-msg p { margin: 0; }
+.scout-alt { margin-top: 14px; }
+.famous { margin: 22px 0 6px; padding-top: 14px; border-top: 1px solid var(--line); }
+.famous h2.famous-title { margin: 0 0 4px; font-size: 20px; letter-spacing: 0.04em; }
+.famous-lede { margin: 0 0 10px; color: var(--muted); }
+.famous-group { margin: 12px 0 0; display: grid; gap: 8px; }
+.famous-country { margin: 0; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.famous-flag { font-size: 22px; line-height: 1; }
+.famous-place { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 56px; padding: 8px 14px; text-align: left; border-radius: 8px; }
+.famous-place:disabled { opacity: 0.6; }
+.famous-city { font-weight: 700; }
+.famous-area { font-size: 14px; color: var(--muted); }
+.famous-place:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not(.motion-full) .scout-sweep:not([data-mode='determinate']):not([data-mode='estimate']) span { animation: none; width: 100%; opacity: 0.6; }
+  :root:not(.motion-full) .scout-sweep span { transition: none; }
+}
+:root.motion-reduced .scout-sweep:not([data-mode='determinate']):not([data-mode='estimate']) span { animation: none; width: 100%; opacity: 0.6; }
+:root.motion-reduced .scout-sweep span { transition: none; }
+@media (max-width: 640px) {
+  .scout-go { width: 100%; }
+  .scout-alt > * { flex: 1 1 100%; }
+}
 
 /* ---------- Training night coach ---------- */
 .coach { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); width: min(460px, calc(100% - 32px)); z-index: 12;
@@ -328,7 +514,8 @@ button:disabled { opacity: 0.5; }
 /* Crosshair inside the ring (or on the target): the ring fades so it can't hide a figure a few pixels wide. */
 .coach-marker::after { transition: opacity 0.2s; }
 .coach-marker.inside::after { opacity: 0; }
-@media (prefers-reduced-motion: reduce) { .coach-bar span, .coach-marker::after { transition: none; } }
+@media (prefers-reduced-motion: reduce) { :root:not(.motion-full) .coach-bar span, :root:not(.motion-full) .coach-marker::after { transition: none; } }
+:root.motion-reduced .coach-bar span, :root.motion-reduced .coach-marker::after { transition: none; }
 .coach-stay { display: none; }
 /* Paused: the coach shrinks to its title so it doesn't cover the pause card... */
 .coach.paused .coach-body, .coach.paused .coach-hint, .coach.paused .coach-bar { display: none; }
@@ -349,3 +536,196 @@ button:disabled { opacity: 0.5; }
 @media (max-width: 900px) {
   .coach.aside { top: 16px; bottom: auto; left: 50%; right: auto; transform: translateX(-50%); width: min(460px, calc(100% - 32px)); }
 }
+
+/* ---------- Stakes: grades, personal bests, settings panel (3.2) ---------- */
+.card.result { max-width: 640px; }
+.result-head { display: flex; gap: 20px; align-items: center; margin: 10px 0 12px; }
+.grade { flex: 0 0 auto; width: 96px; height: 96px; display: grid; place-items: center; font-size: 64px; font-weight: 800; line-height: 1; border: 3px solid currentColor; border-radius: 12px; }
+.grade-S { color: #ffe27a; text-shadow: 0 0 18px rgba(255, 226, 122, 0.45); }
+.grade-A { color: var(--accent); }
+.grade-B { color: #8fd0ff; }
+.grade-C { color: #e8c15a; }
+.grade-D { color: var(--danger); }
+.result-words { min-width: 0; }
+.card .result-words h2 { margin: 0 0 6px; }
+.card .grade-reason { font-size: 16px; color: var(--ink); margin: 0 0 6px; }
+.card .best { color: var(--muted); font-size: 14px; letter-spacing: 0.08em; margin: 0; }
+.card .best.new-best { color: #ffe27a; font-weight: 700; }
+.result-stats { list-style: none; padding: 0; margin: 8px 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 16px; color: var(--muted); font-size: 14px; }
+.card.result .row button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@media (max-width: 480px) {
+  .result-head { gap: 14px; }
+  .grade { width: 72px; height: 72px; font-size: 46px; }
+  .result-stats { grid-template-columns: minmax(0, 1fr); }
+}
+.mission-card .mc-best { flex: 0 0 auto; color: #ffe27a; letter-spacing: 0.06em; }
+.mission-card .mc-best.none { color: var(--muted); }
+
+.screen-settings { position: absolute; z-index: 11; background: rgba(12, 16, 14, 0.92); }
+.screen-settings.on-menu { right: 16px; top: 16px; }
+/* Front page: inside the camera frame, above the map credit on wide screens; top left on phones (the content starts lower). */
+.screen-settings.on-landing { right: 36px; bottom: 64px; z-index: 3; }
+@media (max-width: 899px) { .screen-settings.on-landing { right: auto; bottom: auto; left: 26px; top: 26px; } }
+.screen-settings:focus-visible, .settings-panel button:focus-visible, .settings-panel input:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.settings-backdrop { position: absolute; inset: 0; z-index: 30; display: flex; padding: 16px; background: rgba(0, 0, 0, 0.55); overflow: auto; }
+.settings-panel { max-width: 540px; margin: auto; padding: 18px 24px; }
+.card.settings-panel h2 { margin: 0 0 10px; }
+.settings-panel:focus { outline: none; }
+.settings-group { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 10px; padding: 4px 14px 8px; min-width: 0; }
+.settings-group legend { color: var(--accent); padding: 0 6px; font-size: 15px; letter-spacing: 0.08em; }
+.settings-row { display: grid; grid-template-columns: minmax(0, 11em) minmax(0, 1fr) 4.5em; gap: 4px 12px; align-items: center; min-height: 36px; }
+.settings-row input[type=range] { width: 100%; padding: 0; min-height: 32px; margin: 0; accent-color: var(--accent); background: transparent; border: 0; }
+.settings-value { text-align: right; font-variant-numeric: tabular-nums; }
+.settings-toggle { grid-template-columns: auto minmax(0, 1fr); padding: 4px 0; }
+.settings-toggle input { width: 22px; height: 22px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); }
+.settings-toggle label { cursor: pointer; }
+.settings-hint { grid-column: 2; color: var(--muted); font-size: 14px; line-height: 1.35; }
+.settings-actions { justify-content: flex-end; }
+.settings-places p { margin: 6px 0; }
+.settings-places button { margin: 2px 0 6px; }
+@media (max-width: 480px) {
+  .settings-row:not(.settings-toggle) { grid-template-columns: minmax(0, 1fr) 4.5em; }
+  .settings-row > label:first-child { grid-column: 1 / -1; }
+}
+
+/* Briefing walk-through (3.7): caption and Skip / Replay under the pictures; a stepped list (Back / Next) under reduced motion. */
+.tour { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: rgba(9, 12, 11, 0.6); }
+.tour-bar { display: flex; gap: 10px; align-items: baseline; min-height: 3em; }
+.tour-step { flex: 0 0 auto; min-width: 3.4em; color: var(--muted); font-size: 14px; }
+.tour-step:empty { display: none; }
+.tour-cap { flex: 1 1 auto; margin: 0; font-size: 15px; line-height: 1.45; color: var(--ink); }
+.tour-ctrl { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.tour-btn { min-height: 48px; min-width: 48px; padding: 10px 16px; }
+.tour-list { display: none; margin: 8px 0 0; padding-left: 1.8em; color: var(--muted); font-size: 14px; line-height: 1.45; }
+.tour.steps .tour-list { display: block; }
+.tour.steps .tour-cap { display: none; }
+.tour.steps .tour-bar { min-height: 0; }
+.tour-item { padding: 3px 6px; border-radius: 4px; }
+.tour-item + .tour-item { margin-top: 2px; }
+.tour-item.cur { color: var(--ink); background: rgba(184, 255, 138, 0.1); outline: 1px solid rgba(184, 255, 138, 0.45); }
+.dio-label.cur { box-shadow: 0 0 0 2px currentColor; background: rgba(9, 12, 11, 0.96); }
+.dio-pin.cur { width: 12px; height: 12px; left: -6px; top: -6px; }
+/* The tactical map's highlight: an overlay with the map's own viewBox, so the map is never redrawn. */
+.briefing-map { position: relative; }
+.tmap-tour { position: absolute; left: 0; top: 0; width: 100%; height: 100%; border: 1px solid transparent; pointer-events: none; overflow: hidden; }
+.tmap-tour * { vector-effect: non-scaling-stroke; fill: none; }
+.tt-ring { stroke: var(--accent); stroke-width: 3; }
+.tt-ring.hostile { stroke: var(--danger); }
+.tt-ring.friendly { stroke: var(--tm-friendly); }
+.tt-area { stroke: var(--ink); stroke-width: 2; stroke-dasharray: 7 5; }
+.tt-path { stroke: var(--accent); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; opacity: 0.5; }
+.tmap-tour .tt-dot { fill: var(--accent); stroke: #0b0d0c; stroke-width: 2; }
+.tt-orbit { stroke: var(--ink); stroke-width: 3; }
+/* A slow swell (0.4 a second), never a flash; none under reduced motion or Reduce flicker. */
+.tt-pulse { animation: tt-pulse 1.25s ease-in-out infinite alternate; }
+@keyframes tt-pulse { from { opacity: 0.5; } to { opacity: 1; } }
+.tmap-tour.still .tt-pulse { animation: none; }
+@media (prefers-reduced-motion: reduce) { :root:not(.motion-full) .tt-pulse { animation: none; } }
+:root.motion-reduced .tt-pulse { animation: none; }
+/* ---------- Controls (3.11): key-hints strip, touch controls, touch-sized menus ---------- */
+.hud-keys kbd { font: inherit; font-weight: 700; color: #fff; }
+.hud-keys .hk-sep { color: var(--muted); }
+.hud-keys[hidden] { display: none !important; }
+/* Touch controls replace the keys strip and the sensor label (the VIEW and ZOOM buttons show both). */
+.touch-mode .hud-keys, .touch-mode .hud-sensor { display: none; }
+.touch-controls { position: absolute; inset: 0; z-index: 7; pointer-events: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  --tc-edge: 16px; --tc-bottom: 48px; --tc-stick: 136px; --tc-fire: 104px; --tc-btn: 64px; --tc-gap: 10px; }
+.touch-controls[hidden] { display: none; }
+.touch-mode .game-canvas, .touch-controls, .touch-controls * { touch-action: none; }
+.tc-stick, .tc-btn { pointer-events: auto; }
+.tc-stick { position: absolute; left: calc(var(--tc-edge) + env(safe-area-inset-left, 0px)); bottom: calc(var(--tc-bottom) + env(safe-area-inset-bottom, 0px));
+  width: var(--tc-stick); height: var(--tc-stick); border-radius: 50%; border: 2px solid rgba(231, 239, 233, 0.55); background: rgba(0, 0, 0, 0.45); }
+.tc-knob { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%; background: rgba(231, 239, 233, 0.8); border: 2px solid #000; }
+.tc-stick.down { border-color: var(--accent); }
+.tc-pad { position: absolute; right: calc(var(--tc-edge) + env(safe-area-inset-right, 0px)); bottom: calc(var(--tc-bottom) + env(safe-area-inset-bottom, 0px));
+  display: grid; grid-template-columns: var(--tc-btn) var(--tc-fire); grid-template-rows: var(--tc-btn) var(--tc-fire); gap: var(--tc-gap); align-items: end; justify-items: end; }
+.tc-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; padding: 0; min-height: 0; width: var(--tc-btn); height: var(--tc-btn);
+  border-radius: 12px; border: 2px solid rgba(231, 239, 233, 0.6); background: rgba(0, 0, 0, 0.6); color: var(--ink); font-size: 14px; font-weight: 700; line-height: 1.15; }
+/* Pressed: a steady highlight while held (never a flash: reduce flicker). */
+.tc-btn.down, .tc-btn:active { background: rgba(184, 255, 138, 0.3); border-color: var(--accent); }
+.tc-sub { font-weight: 400; font-size: 14px; color: var(--accent); }
+.tc-fire { grid-column: 2; grid-row: 2; width: var(--tc-fire); height: var(--tc-fire); border-radius: 50%; font-size: 18px; border-color: #ff8a7f; background: rgba(120, 20, 14, 0.62); }
+.tc-fire.down { background: rgba(255, 107, 94, 0.55); border-color: #fff; }
+.tc-gun { grid-column: 1; grid-row: 2; }
+.tc-view { grid-column: 2; grid-row: 1; justify-self: center; }
+.tc-zoom { grid-column: 1; grid-row: 1; }
+.tc-pause { position: absolute; left: calc(var(--tc-edge) + env(safe-area-inset-left, 0px)); top: calc(var(--tc-edge) + env(safe-area-inset-top, 0px)); width: 48px; height: 48px; font-size: 16px; letter-spacing: 0.05em; }
+/* HUD rearranged around the touch controls. */
+.touch-mode .hud-weapons { left: calc(72px + env(safe-area-inset-left, 0px)); }
+.touch-mode .hud-attrib { left: 50%; right: auto; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); max-width: calc(100% - 32px); text-align: center; }
+/* Radio captions sit between the stick and the buttons... */
+.touch-mode .hud-radio { left: calc(var(--tc-edge, 16px) + 152px + env(safe-area-inset-left, 0px)); right: calc(226px + env(safe-area-inset-right, 0px)); bottom: calc(48px + env(safe-area-inset-bottom, 0px)); max-width: none; }
+@media (max-width: 640px) {
+  /* ...or above them on a narrow (portrait) phone. */
+  .touch-mode .hud-radio { left: 16px; right: 16px; bottom: calc(244px + env(safe-area-inset-bottom, 0px)); }
+}
+@media (max-height: 560px) {
+  /* Short landscape phones: smaller controls, and the minimap moves up beside the guns, clear of the stick. */
+  .touch-controls { --tc-stick: 120px; --tc-fire: 88px; --tc-btn: 56px; --tc-gap: 8px; }
+  .touch-mode .hud-minimap { left: calc(264px + env(safe-area-inset-left, 0px)); top: 16px; width: 112px; }
+  .touch-mode .hud-radio { left: calc(152px + env(safe-area-inset-left, 0px)); right: calc(186px + env(safe-area-inset-right, 0px)); }
+}
+/* Menus, landing, recon and briefing on touch screens: 48 px tap targets. */
+@media (pointer: coarse) {
+  button, .bv-tab, select, input:not([type=range]):not([type=checkbox]):not([type=radio]) { min-height: 48px; }
+  .settings-row { min-height: 48px; }
+  .settings-toggle input { width: 28px; height: 28px; }
+}
+.coach.paused .coach-touch { display: none; }
+
+/* ---------- Intro: "The Late Bulletin" (src/ui/intro.ts) ---------- */
+.intro { position: fixed; inset: 0; z-index: 30; background: #000; overflow: hidden; color: var(--ink); cursor: default; }
+.intro-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+/* The TV's graphics: laid out at the TV's starting size, then mapped onto the TV screen (matrix3d). */
+.intro-tv { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; visibility: hidden; overflow: hidden;
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif; --u: 6px; }
+.itv-bug { position: absolute; right: 3%; top: 3.5%; font-weight: 900; letter-spacing: 0.08em; color: #fff; font-size: max(14px, calc(var(--u) * 3)); line-height: 1;
+  padding: 0.18em 0.35em; border: 2px solid rgba(255, 255, 255, 0.85); border-radius: 3px; background: rgba(155, 47, 42, 0.85); }
+.itv-live { position: absolute; font-weight: 800; font-size: max(14px, calc(var(--u) * 1.9)); line-height: 1; padding: 0.2em 0.4em; background: #9b2f2a; color: #fff; letter-spacing: 0.1em; }
+.itv-lower { position: absolute; left: 3%; bottom: 14%; max-width: 94%; display: flex; flex-direction: column; }
+.itv-name { align-self: flex-start; background: #e7eaee; color: #10151c; font-weight: 900; letter-spacing: 0.04em; font-size: max(15px, calc(var(--u) * 3)); padding: 0.12em 0.45em; line-height: 1.15; }
+.itv-place { align-self: flex-start; background: #9b2f2a; color: #fff; font-weight: 700; letter-spacing: 0.04em; font-size: max(14px, calc(var(--u) * 2.1)); padding: 0.15em 0.55em; line-height: 1.15; }
+.itv-ticker { position: absolute; left: 0; right: 0; bottom: 0; height: 11.5%; min-height: 20px; background: rgba(8, 12, 18, 0.92); border-top: 2px solid #9b2f2a; overflow: hidden; display: flex; align-items: center; }
+.itv-tick { white-space: nowrap; font-weight: 700; color: #f2f2ee; letter-spacing: 0.05em; font-size: max(14px, calc(var(--u) * 2)); padding-left: 3%; will-change: transform; }
+/* Captions: always on, with the speaker's name. */
+.intro-cap { position: absolute; left: 50%; bottom: max(28px, 6vh); transform: translateX(-50%); width: min(880px, calc(100% - 32px)); text-align: center; pointer-events: none;
+  opacity: 0; transition: opacity 0.25s linear; }
+.intro-cap.on { opacity: 1; }
+.intro-cap > span { display: inline; font-size: clamp(17px, 2.2vw, 22px); line-height: 1.5; background: rgba(0, 0, 0, 0.78); padding: 0.1em 0.4em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.intro-cap > .ic-who { color: var(--accent); font-weight: 700; letter-spacing: 0.06em; font-size: clamp(14px, 1.6vw, 16px); margin-right: 0.2em; }
+.intro-cap > .ic-who:empty { display: none; }
+.intro-cap.cue .ic-text { color: var(--muted); font-style: italic; }
+.intro-skip { position: absolute; top: 16px; right: 16px; min-height: 48px; min-width: 48px; padding: 10px 18px; font-size: 16px; z-index: 2;
+  background: rgba(12, 16, 14, 0.75); border: 1px solid rgba(231, 239, 233, 0.5); border-radius: 8px; color: var(--ink); }
+.intro-skip:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.intro-hud { position: absolute; inset: 0; pointer-events: none; color: rgba(231, 239, 233, 0.75); visibility: hidden; }
+.ih-read { position: absolute; left: 60px; top: 24px; font-family: var(--mono); font-size: 14px; letter-spacing: 0.12em; }
+@media (max-width: 600px) { .ih-read { left: 24px; top: 80px; } }
+.intro-radio { position: absolute; left: 20px; bottom: max(110px, 18vh); display: flex; flex-direction: column; gap: 6px; pointer-events: none; visibility: hidden;
+  background: rgba(0, 0, 0, 0.55); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(184, 255, 138, 0.35); }
+.ir-label { font-family: var(--mono); font-size: 14px; color: var(--accent); letter-spacing: 0.12em; }
+.ir-wave { display: flex; gap: 4px; align-items: center; height: 30px; }
+.ir-bar { width: 5px; height: 30px; background: var(--accent); border-radius: 2px; transform: scaleY(0.08); }
+.intro-title { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; visibility: hidden;
+  font-weight: 800; line-height: 0.92; letter-spacing: 0.04em; text-align: center; }
+.intro-title .lt-1 { font-size: clamp(48px, min(10vw, 15vh), 128px); color: #fff; text-shadow: 0 0 28px rgba(255, 255, 255, 0.35), 0 0 2px rgba(255, 255, 255, 0.6); }
+.intro-title .lt-2 { font-size: clamp(26px, min(5vw, 7.5vh), 64px); letter-spacing: 0.3em; margin-top: 8px; padding-left: 0.3em; opacity: 0.9; }
+/* Front page: the intro offer (first visit) and the "Watch intro" link afterwards. */
+.landing-intro-offer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 18px; padding: 10px 12px; border: 1px solid rgba(184, 255, 138, 0.5); border-radius: 8px;
+  background: rgba(12, 22, 12, 0.72); align-self: flex-start; max-width: 560px; }
+.lio-text { font-size: 15px; }
+.la-intro { min-height: 48px; font-size: 16px; padding: 10px 16px; border-radius: 8px; }
+.la-intro-link { align-self: flex-start; background: transparent; border-color: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; padding-left: 0; margin: -6px 0 6px; }
+.la-intro:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.landing-enter { animation: landing-enter 0.8s ease-out both; }
+@keyframes landing-enter { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---------- Motion note (still frames because the device asks) and Settings motion choice ---------- */
+.motion-note { margin: 0; padding: 6px 10px; font-size: 14px; line-height: 1.4; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; }
+.intro-motion-note { position: absolute; left: 16px; top: 16px; z-index: 2; max-width: calc(100% - 200px); background: rgba(0, 0, 0, 0.6); border-radius: 8px; }
+.motion-link { min-height: 48px; min-width: 48px; padding: 4px 12px; background: transparent; border: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font-size: 14px; }
+.motion-link:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.settings-motion { border: 0; margin: 4px 0; padding: 0; min-width: 0; }
+.settings-motion legend { color: var(--ink); padding: 0; }
+.settings-motion label { display: flex; align-items: center; gap: 10px; min-height: 48px; cursor: pointer; }
+.settings-motion input[type=radio] { width: 22px; height: 22px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); }

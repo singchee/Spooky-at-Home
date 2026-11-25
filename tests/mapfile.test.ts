@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { loadMapFile } from '../src/ui/menu';
+import { parseOverpass } from '../src/map/overpass';
 import { makeSampleTown } from '../src/map/sample';
 
 describe('loadMapFile', () => {
@@ -52,5 +54,21 @@ describe('loadMapFile', () => {
   it('rejects files that are not maps', () => {
     expect(() => loadMapFile({ hello: 'world' }, 'x.json')).toThrow();
     expect(() => loadMapFile({ elements: [] }, 'x.json')).toThrow();
+  });
+
+  // BACKLOG 3.21: the old guess used every node, so far-flung relation members shrank the town.
+  it('loads a raw Overpass file of a whole town without losing it (Gundagai: stored centre or building box)', () => {
+    const raw = JSON.parse(readFileSync(new URL('../maps/fixtures/gundagai.json', import.meta.url), 'utf8'));
+    const f = raw.spooky_fixture;
+    const want = parseOverpass({ elements: raw.elements }, f.origin, f.half, 'g');
+    expect(want.buildings.length).toBeGreaterThan(300);
+    const within = (a: number, b: number) => Math.abs(a - b) <= b * 0.05;
+    const withMeta = loadMapFile(raw, 'g.json');
+    expect(within(withMeta.buildings.length, want.buildings.length)).toBe(true);
+    expect(within(withMeta.roads.length, want.roads.length)).toBe(true);
+    const { spooky_fixture: _drop, ...bare } = raw;
+    const guessed = loadMapFile(bare, 'g.json');
+    expect(within(guessed.buildings.length, want.buildings.length)).toBe(true);
+    expect(within(guessed.roads.length, want.roads.length)).toBe(true);
   });
 });

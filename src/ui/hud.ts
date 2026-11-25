@@ -5,6 +5,15 @@ import { fmtTime } from '../sim/missions';
 import type { MapData, V2 } from '../map/types';
 import { el } from './dom';
 import { TacticalMap } from './tacticalMap';
+import { HotkeyStrip } from './hotkeys';
+import { coldHint } from '../game/controls';
+import { clearOfRects, touchBlockers } from '../game/lineOfFire';
+
+/**
+ * The reticle's tag while a building stands on the line of fire (3.39; owner playtest 1 renamed it
+ * from MASKED). The one place the word lives: docs/STYLE.md and the playtest read it from here.
+ */
+export const BLOCKED_TAG = 'BLOCKED';
 
 /** Static crosshair artwork per gun (constants we wrote, not map data). */
 const SHAPES: Record<string, string> = {
@@ -20,7 +29,32 @@ const CROSSHAIRS: Record<string, string> = Object.fromEntries(
   ]),
 );
 
-export interface HudMarker { label: string; x: number; y: number; visible: boolean }
+export interface HudMarker {
+  label: string;
+  x: number;
+  y: number;
+  visible: boolean;
+  /** Search circles: pinned to the screen edge with an arrow when off screen; rpx is the circle's radius on screen. */
+  edge?: boolean;
+  rpx?: number;
+  /** Screen angle (radians, y down) from the centre towards the point, for pinning. */
+  dir?: number;
+  /**
+   * The safehouse (owner playtest 1: "it just says dots"): a solid outline round its footprint
+   * (`outline`, screen px), a bigger boxed label above it, and a steady edge arrow when off screen.
+   */
+  kind?: 'safehouse';
+  outline?: [number, number][];
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * Training night's mission (tutorialSteps.ts) carries this: the HUD hides the clock and the
+ * friendly-fire count, and leaves out the placeholders parked off the map to keep the mission open.
+ */
+export interface TrainingHud { reserveHostiles: number; reserveFriendlies: number }
+export type TrainingMission = Mission & { training?: TrainingHud };
 
 export class Hud {
   readonly root: HTMLDivElement;
@@ -34,6 +68,7 @@ export class Hud {
   private markers: HTMLDivElement;
   private lines: { text: string; t: number; alarm: boolean }[] = [];
   private lastWeapon = '';
+  private keys: HotkeyStrip;
 
   constructor(parent: HTMLElement, attribution: string) {
     this.root = el('div', 'hud', undefined, parent);
@@ -46,8 +81,10 @@ export class Hud {
     this.cross = el('div', 'hud-cross', undefined, this.root);
     this.switching = el('div', 'hud-switching', 'SENSOR SWITCH', this.root);
     this.markers = el('div', 'hud-markers', undefined, this.root);
+    this.impact = el('div', 'hud-impact', undefined, this.root);
+    this.impact.hidden = true;
     el('div', 'hud-attrib', attribution, this.root);
-    el('div', 'hud-keys', 'Mouse aim · hold click fire · Q/1-3 gun · V camera · H white/black hot · Z zoom · M mute · Esc pause', this.root);
+    this.keys = new HotkeyStrip(this.root);
   }
 
   say(text: string, now: number, alarm = false): void {
@@ -55,7 +92,7 @@ export class Hud {
     if (this.lines.length > 5) this.lines.shift();
   }
 
-  update(s: SimState, m: Mission, weapon: string, sensor: string, polarity: number, zoom: boolean, switching: boolean, now: number, danger = false): void {
+  update(s: SimState, m: Mission, weapon: string, sensor: string, polarity: number, zoom: number, switching: boolean, now: number, danger = false, touch = false, masked = false): void {
     // Weapons
     this.weapons.replaceChildren();
     for (const w of WEAPONS) {
@@ -65,21 +102,37 @@ export class Hud {
       el('span', 'hud-wammo', st.reloading > 0 ? `RELOAD ${st.reloading.toFixed(1)}` : `${st.ammo}/${w.magazine}`, row);
     }
     // Mission
-    this.timer.textContent = m.type === 'defend' ? `HOLD ${fmtTime(s.timeLeft)}` : `TIME ${fmtTime(s.timeLeft)}`;
+    const training = (m as TrainingMission).training;
+    // Training night has no clock and no friendly-fire limit: "99:57" and "0/99" read like bugs.
+    this.timer.hidden = !!training;
+    this.timer.textContent = m.crowd ? `DAWN ${fmtTime(s.timeLeft)}` : m.type === 'defend' ? `HOLD ${fmtTime(s.timeLeft)}` : `TIME ${fmtTime(s.timeLeft)}`;
     const obj: string[] = [];
-    if (m.type === 'clear') obj.push(`HOSTILES ${s.zombiesAlive}/${s.zombiesTotal}`);
+    if (m.crowd) {
+      // Crowd nights (Feel S2): only the words this mode needs. KILLS, the multiplier and the score are top centre.
+      obj.push(`DOORS ${Math.round(s.integrity * 100)}%`);
+    } else if (training) {
+      // The far-off placeholders that keep the training mission open aren't counted.
+      obj.push(`CONTACTS ${Math.max(0, s.zombiesAlive - training.reserveHostiles)}`);
+      const friends = Math.max(0, s.survivorsAlive - training.reserveFriendlies);
+      if (friends) obj.push(`FRIENDLIES ${friends}`);
+    } else if (m.type === 'clear') obj.push(`HOSTILES ${s.zombiesAlive}/${s.zombiesTotal}`);
     else obj.push(`CONTACTS ${s.zombiesAlive}`);
-    if (m.type === 'escort') obj.push(`HOME ${s.survivorsHome}/${s.survivorsTotal} (NEED ${s.needHome})`, `MOVING ${s.survivorsAlive}`);
-    if (m.type === 'defend') obj.push(`SAFEHOUSE ${Math.round(s.integrity * 100)}%`);
-    if (m.type === 'clear' && s.survivorsTotal) obj.push(`FRIENDLIES ${s.survivorsAlive}`);
-    if (s.coldAlive > 0) obj.push(`COLD-BLOODED ${s.coldAlive}${sensor === 'night' ? '' : ' (V: NIGHT VISION)'}`);
-    obj.push(`FRIENDLY FIRE ${s.friendlyHits}/${m.friendlyFireLimit}`);
-    this.objective.replaceChildren(...obj.map((o) => el('div', undefined, o)));
+    if (!training && !m.crowd) {
+      if (m.type === 'escort') obj.push(`HOME ${s.survivorsHome}/${s.survivorsTotal} (NEED ${s.needHome})`, `MOVING ${s.survivorsAlive}`);
+      if (m.type === 'defend') obj.push(`SAFEHOUSE ${Math.round(s.integrity * 100)}%`);
+      if (m.type === 'clear' && s.survivorsTotal) obj.push(`FRIENDLIES ${s.survivorsAlive}`);
+    }
+    const cold = s.coldAlive > 0 ? coldHint(s.coldAlive, sensor, touch) : '';
+    if (cold) obj.push(cold);
+    if (!training && !m.crowd) obj.push(`FRIENDLY FIRE ${s.friendlyHits}/${m.friendlyFireLimit}`);
+    // When the cold-blooded ones are all that's left (Clear), their line stands out: that's the moment to switch view.
+    const coldOnly = !training && m.type === 'clear' && s.coldAlive > 0 && s.coldAlive === s.zombiesAlive;
+    this.objective.replaceChildren(...obj.map((o) => el('div', o === cold && coldOnly ? 'hud-cold-only' : undefined, o)));
     // Radio
     this.lines = this.lines.filter((l) => now - l.t < 12);
     this.radio.replaceChildren(...this.lines.map((l) => el('div', l.alarm ? 'alarm' : undefined, l.text)));
     // Sensor and crosshair
-    this.sensor.textContent = `${sensor === 'thermal' ? (polarity ? 'IR  BLACK HOT' : 'IR  WHITE HOT') : 'NIGHT VISION'}${zoom ? '  ×2' : ''}`;
+    this.sensor.textContent = `${sensor === 'thermal' ? (polarity ? 'IR  BLACK HOT' : 'IR  WHITE HOT') : 'NIGHT VISION'}${Math.abs(zoom - 1) > 0.01 ? `  ×${zoom.toFixed(1)}` : ''}`;
     this.root.dataset.sensor = sensor;
     if (weapon !== this.lastWeapon) {
       this.cross.innerHTML = CROSSHAIRS[weapon] ?? ''; // static artwork constant, safe
@@ -88,16 +141,109 @@ export class Hud {
     this.switching.style.display = switching ? 'block' : 'none';
     this.cross.classList.toggle('danger', danger);
     this.cross.dataset.label = danger ? 'DANGER CLOSE' : '';
+    // 3.39: a building stands between the gunship and the aim point (shown over the cut-away: the HUD is
+    // never see-through, so a player never takes a masked shot for a clear one).
+    this.cross.classList.toggle('masked', masked);
+    this.cross.dataset.mask = masked ? BLOCKED_TAG : '';
+  }
+
+  private impact: HTMLDivElement;
+  /**
+   * 3.39: while BLOCKED, a small steady mark where the round would actually land (null hides it); with
+   * `angle`, the spot is off screen and this is an edge pointer toward it (radians, 0 = right).
+   */
+  setImpactMark(p: { x: number; y: number; angle?: number } | null): void {
+    this.impact.hidden = !p;
+    if (!p) return;
+    const edge = p.angle !== undefined;
+    this.impact.classList.toggle('edge', edge);
+    this.impact.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)${edge ? ` rotate(${p.angle!.toFixed(3)}rad)` : ''}`;
   }
 
   setMarkers(ms: HudMarker[]): void {
+    const w = this.root.clientWidth || innerWidth;
+    const h = this.root.clientHeight || innerHeight;
+    const blockers = touchBlockers(this.root.getBoundingClientRect());
     this.markers.replaceChildren(
-      ...ms.filter((m) => m.visible).map((m) => {
-        const d = el('div', 'hud-marker', m.label);
-        d.style.transform = `translate(${Math.round(m.x)}px, ${Math.round(m.y)}px)`;
+      ...ms.filter((m) => m.visible || m.edge || m.outline).flatMap((m): (HudMarker | Element)[] => (m.kind === 'safehouse' ? this.safehouse(m, w, h, blockers) : [m])).map((m) => {
+        if (m instanceof Element) return m;
+        if (!m.edge) {
+          const d = el('div', 'hud-marker', m.label);
+          // The label box is 100 px wide (centred) and sits 48 px above its point: keep all of it on screen.
+          const mx = Math.max(52, Math.min(w - 52, m.x));
+          const my = Math.max(52, Math.min(h - 8, m.y));
+          // Touch showing: nudge the whole label box (100 px wide, 48 px above its point) out from under the stick and buttons.
+          let p = { x: mx, y: my };
+          if (blockers.length) p = clearOfRects(p, blockers.map((r) => ({ x0: r.x0 - 50, x1: r.x1 + 50, y0: r.y0 - 16, y1: r.y1 + 48 })), w, h, 52, 4);
+          d.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
+          return d;
+        }
+        // Endgame search circle (label is our own text). On screen: a soft ring of the circle's real size.
+        if (m.visible) {
+          const d = el('div', 'hud-search', undefined);
+          const r = Math.max(18, Math.min(Math.max(w, h), m.rpx ?? 40));
+          d.style.width = d.style.height = `${Math.round(r * 2)}px`;
+          d.style.transform = `translate(${Math.round(m.x - r)}px, ${Math.round(m.y - r)}px)`;
+          // A ring bigger than the screen (zoomed in) keeps its label on screen, just inside the top edge.
+          const label = el('span', 'hud-search-label', m.label, d);
+          if (m.y - r < 40) label.style.top = `${Math.round(40 - (m.y - r))}px`;
+          return d;
+        }
+        // Off screen: pinned to the edge, an arrow pointing the way.
+        const a = m.dir ?? 0;
+        const cx = w / 2;
+        const cy = h / 2;
+        const k = Math.min((cx - 70) / Math.max(1e-6, Math.abs(Math.cos(a))), (cy - 60) / Math.max(1e-6, Math.abs(Math.sin(a))));
+        const d = el('div', 'hud-search-edge', m.label);
+        let p = { x: cx + Math.cos(a) * k, y: cy + Math.sin(a) * k };
+        if (blockers.length) p = clearOfRects(p, blockers, w, h, 60, 20);
+        d.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
+        d.style.setProperty('--a', `${a.toFixed(2)}rad`);
         return d;
       }),
     );
+  }
+
+  /**
+   * The safehouse's marks: on screen, a solid outline round its footprint and a boxed label just above
+   * it (clear of the reticle in the middle); off screen, a steady arrow at the edge with its label.
+   * All our own text (textContent); nothing blinks.
+   */
+  private safehouse(m: HudMarker, w: number, h: number, blockers: ReturnType<typeof touchBlockers>): Element[] {
+    const out: Element[] = [];
+    if (m.outline && m.outline.length > 2) {
+      const svgEl = document.createElementNS(SVG_NS, 'svg');
+      svgEl.setAttribute('class', 'hud-safe-outline');
+      svgEl.setAttribute('width', String(w));
+      svgEl.setAttribute('height', String(h));
+      const poly = document.createElementNS(SVG_NS, 'polygon');
+      poly.setAttribute('points', m.outline.map(([x, y]) => `${Math.round(x)},${Math.round(y)}`).join(' '));
+      svgEl.appendChild(poly);
+      out.push(svgEl);
+    }
+    if (m.edge) {
+      const a = m.dir ?? 0;
+      const cx = w / 2;
+      const cy = h / 2;
+      const k = Math.min((cx - 80) / Math.max(1e-6, Math.abs(Math.cos(a))), (cy - 60) / Math.max(1e-6, Math.abs(Math.sin(a))));
+      const d = el('div', 'hud-safe-edge');
+      el('span', 'hud-safe-arrow', undefined, d);
+      el('span', 'hud-safe-text', m.label, d);
+      let p = { x: cx + Math.cos(a) * k, y: cy + Math.sin(a) * k };
+      if (blockers.length) p = clearOfRects(p, blockers, w, h, 70, 20);
+      d.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
+      d.style.setProperty('--a', `${a.toFixed(2)}rad`);
+      out.push(d);
+      return out;
+    }
+    // The label sits above the building's outline (or its centre), kept on screen and off the touch controls.
+    const top = m.outline ? Math.min(...m.outline.map(([, y]) => y)) : m.y;
+    const d = el('div', 'hud-safe', m.label);
+    let p = { x: Math.max(70, Math.min(w - 70, m.x)), y: Math.max(40, Math.min(h - 20, Math.min(top, m.y) - 8)) };
+    if (blockers.length) p = clearOfRects(p, blockers.map((r) => ({ x0: r.x0 - 70, x1: r.x1 + 70, y0: r.y0 - 8, y1: r.y1 + 32 })), w, h, 70, 4);
+    d.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
+    out.push(d);
+    return out;
   }
 
   private minimap: TacticalMap | null = null;
@@ -110,11 +256,12 @@ export class Hud {
     if (this.minimap.live) box.appendChild(this.minimap.live);
   }
 
-  updateMinimap(aircraft: V2, aim: V2, survivors: V2[]): void {
-    this.minimap?.update({ aircraft, aim, survivors });
+  updateMinimap(aircraft: V2, aim: V2, survivors: V2[], regroup: V2[] = [], search: { p: V2; r: number }[] = []): void {
+    this.minimap?.update({ aircraft, aim, survivors, regroup, search });
   }
 
   dispose(): void {
+    this.keys.dispose();
     this.root.remove();
   }
 }

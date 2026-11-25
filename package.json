@@ -1,7 +1,7 @@
 {
   "name": "spooky-at-home",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Gunship orbit game that builds missions from real OpenStreetMap neighbourhoods",
   "scripts": {

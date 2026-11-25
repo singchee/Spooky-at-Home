@@ -22,6 +22,7 @@
 | Budget | Limit | Why |
 |---|---|---|
 | Simulation step, 1,000 zombies, headless | < 4 ms | Leaves room for rendering within a 16 ms frame |
+| Simulation step, 2,000 living crowd zombies + 6,000 dead entries, headless (spec 003) | < 4 ms | Headroom over the 1,200-figure cap; the dead must cost the sim nothing (`tests/crowd.test.ts`) |
 | Draw calls, sample town | < 150 | Merged buildings, instanced zombies |
 | JavaScript download (gzipped) | < 400 KB | Loads fast on home broadband |
 | Map download + build, 1.2 km square | < 15 s | Player patience |
@@ -68,3 +69,6 @@ sim.state(): { phase, time, result, zombiesAlive, survivorsAlive, survivorsHome,
 ## 6. Map fixtures
 
 `maps/fixtures/` holds saved OpenStreetMap downloads of **public places chosen for variety**: inner city, outer suburb, rural town, hilly area, coastal. Never the user's own street. They're used by `/map-check` and G5. Overpass is blocked from the cloud dev container, so fixtures are added either by downloading them on your machine (overpass-turbo.eu → Export → raw JSON) or by allowing the Overpass host in the environment.
+
+### Bundled famous places (BACKLOG 3.27)
+`public/maps/presets/` holds public landmark areas (six planned: Sydney, London, New York, Paris, Tokyo, Rome; New York and Paris are bundled so far), each one OpenStreetMap download made once with the game's own core and extras queries and stored compactly (`scripts/build-presets.mjs`: only the tags the game reads, coordinates to about 1 m). They are served from the game's own origin, so picking one makes **no** OpenStreetMap request. They are derived databases under the ODbL: `public/maps/presets/CREDITS.md` carries the notice and the OSM attribution stays on screen (hard rule 7). Tone: religious sites, memorials and the like are stripped of name and amenity in the build step so none can be a mission anchor or label (`maps/preset-exclusions.json` lists them). `tests/presets.test.ts` is the map-check for them; `node scripts/playtest.mjs --only presets` checks the screens.

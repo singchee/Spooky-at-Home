@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { makeSampleTown } from '../src/map/sample';
 import { buildRoadGraph, dijkstra, nearestNode, pathFromPrev } from '../src/map/roadGraph';
 import { WalkGrid } from '../src/map/grid';
-import { generateMission, MISSION_TYPES, type MissionType } from '../src/sim/missions';
+import { generateMission, MISSION_TYPES, SCATTER_BRIEF, waveIntel, type MissionType } from '../src/sim/missions';
 import { createSim } from '../src/sim/setup';
 import { Bot, SKILL } from '../src/sim/bot';
 import type { Sim } from '../src/sim/sim';
@@ -55,7 +55,8 @@ describe('mission generator (gate G4/G5 on the sample town)', () => {
           if (!r.ok) continue;
           const m = r.mission;
           expect(m.briefing.length).toBeGreaterThan(2);
-          expect(m.intel.length).toBe(1);
+          // One line about cold-blooded contacts, plus one about how the waves vary whenever they do.
+          expect(m.intel).toEqual([m.intel[0], ...(m.waves ? waveIntel(m.waves) : [])]);
           if (type === 'escort') expect(m.route!.length).toBeGreaterThan(2);
           if (type === 'clear') expect(m.hordes.length).toBeGreaterThanOrEqual(2);
           if (type !== 'clear') expect(m.safehouse).toBeDefined();
@@ -149,6 +150,37 @@ describe('simulation (gate G6: win and loss both reachable)', () => {
     const ms = (performance.now() - t0) / 60;
     expect(ms).toBeLessThan(4);
   });
+
+  it('Sim.living follows a swapped zombies array, even one of the same length (review nit)', () => {
+    const sim = make('clear', 2, 5);
+    const n = sim.zombies.length;
+    expect(n).toBeGreaterThan(0);
+    expect(sim.syncLiving().length).toBe(n);
+    const other = sim.zombies.map((z, i) => ({ ...z, id: z.id, alive: i % 2 === 0 }));
+    sim.zombies = other;
+    expect(sim.syncLiving().every((z) => other.includes(z))).toBe(true);
+    expect(sim.living.length).toBe(other.filter((z) => z.alive).length);
+  });
+
+  it('budget (spec 003): 1,000 living + 6,000 dead entries under 4 ms a step; the dead cost (almost) nothing', () => {
+    const run = (dead: number) => {
+      const sim = make('defend', 5, 1);
+      for (let i = 0; i < dead; i++) sim.zombies.push({ id: 20000 + i, x: 0, z: 0, vx: 0, vz: 0, speed: 1.5, cold: false, alive: false, diedAt: 0, home: null, goal: null });
+      for (let i = 0; i < 1000; i++) {
+        const p = grid.nearestFree({ x: ((i * 37) % 900) - 450, z: ((i * 53) % 900) - 450 });
+        sim.zombies.push({ id: 10000 + i, x: p.x, z: p.z, vx: 0, vz: 0, speed: 1.5, cold: false, alive: true, diedAt: -1, home: null, goal: null });
+      }
+      for (let i = 0; i < 5; i++) sim.step(1 / 60); // warm up
+      const t0 = performance.now();
+      for (let i = 0; i < 60; i++) sim.step(1 / 60);
+      expect(sim.living.length).toBeGreaterThanOrEqual(1000); // the pushed zombies really are simulated
+      return (performance.now() - t0) / 60;
+    };
+    const withDead = run(6000);
+    expect(withDead).toBeLessThan(4);
+    const none = run(0);
+    expect(withDead).toBeLessThan(none * 1.2 + 0.2);
+  });
 });
 
 describe('committed fingerprint (gate G4 across machines and versions)', () => {
@@ -161,7 +193,93 @@ describe('committed fingerprint (gate G4 across machines and versions)', () => {
     expect((h >>> 0).toString(16)).toBe(EXPECTED_FINGERPRINT);
   });
 });
-const EXPECTED_FINGERPRINT = '7de5904e';
+
+describe('committed fingerprint: single-mission defend (locked before spec 001 touches missions.ts or sim.ts)', () => {
+  const fnv = (s: string) => {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+    return (h >>> 0).toString(16);
+  };
+  it('committed fingerprint: sample-town defend d3 seed 42 has not changed', () => {
+    const r = generateMission(map, graph, grid, { type: 'defend', difficulty: 3, seed: 42 });
+    // If this fails, single-mission Hold changed for everyone: the campaign finale must never do that (spec 001 §4).
+    expect(fnv(JSON.stringify(r))).toBe(EXPECTED_DEFEND_FINGERPRINT);
+  });
+  it('a single-mission defend plays identically (trace hash)', () => {
+    const sim = make('defend', 3, 42);
+    for (let i = 0; i < 1800; i++) sim.step(1 / 60);
+    const q = (v: number) => Math.round(v * 1000);
+    const trace = {
+      state: sim.state(),
+      zombies: sim.zombies.map((z) => [z.id, q(z.x), q(z.z), z.alive ? 1 : 0, z.cold ? 1 : 0]),
+      survivors: sim.survivors.map((s) => [s.id, q(s.x), q(s.z), s.alive ? 1 : 0, s.home ? 1 : 0]),
+    };
+    expect(trace.zombies.length).toBeGreaterThan(0);
+    expect(fnv(JSON.stringify(trace))).toBe(EXPECTED_DEFEND_TRACE);
+  });
+});
+describe('committed hashes: escort and classic clear (spec 002 commit 1, locked before scatter touches sim.ts)', () => {
+  const fnv = (s: string) => {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+    return (h >>> 0).toString(16);
+  };
+  const trace = (type: MissionType) => {
+    const sim = make(type, 3, 42);
+    for (let i = 0; i < 1800; i++) sim.step(1 / 60);
+    const q = (v: number) => Math.round(v * 1000);
+    return {
+      state: sim.state(),
+      zombies: sim.zombies.map((z) => [z.id, q(z.x), q(z.z), z.alive ? 1 : 0, z.cold ? 1 : 0]),
+      survivors: sim.survivors.map((s) => [s.id, q(s.x), q(s.z), s.alive ? 1 : 0, s.home ? 1 : 0]),
+    };
+  };
+  it('an escort plays identically (trace hash, d3 seed 42, 30 s, no input)', () => {
+    const t = trace('escort');
+    expect(t.zombies.length).toBeGreaterThan(0);
+    // If this fails, Escort changed for everyone. Spec 002 (scatter) must never move it.
+    expect(fnv(JSON.stringify(t))).toBe(EXPECTED_ESCORT_TRACE);
+  });
+  it('committed fingerprint: sample-town classic clear d3 seed 42 has not changed', () => {
+    const r = generateMission(map, graph, grid, { type: 'clear', difficulty: 3, seed: 42 });
+    expect(fnv(JSON.stringify(r))).toBe(EXPECTED_CLEAR_FINGERPRINT);
+    // The scatter briefing sentence is text only: without it, the mission is exactly the one locked in commit 1.
+    if (r.ok) r.mission.briefing = r.mission.briefing.filter((b) => b !== SCATTER_BRIEF);
+    expect(fnv(JSON.stringify(r))).toBe(CLEAR_FINGERPRINT_WITHOUT_SCATTER_TEXT);
+  });
+  it('a classic clear with nobody firing plays identically (trace hash, d3 seed 42, 30 s)', () => {
+    const t = trace('clear');
+    expect(t.zombies.length).toBeGreaterThan(0);
+    // Scatter only starts when a 105 lands, so this must not move in the scatter commit.
+    expect(fnv(JSON.stringify(t))).toBe(EXPECTED_CLEAR_TRACE);
+  });
+});
+// Spec 002 commit 1 ("Leash before scatter"): Escort had no trace hash; this locks today's.
+const EXPECTED_ESCORT_TRACE = 'dc9b389b';
+// Spec 002 commit 1: locked with the 99 m HORDE_CHILD_GAP (SCATTER_LEASH 45). They differ from the pre-gap
+// values on purpose: the wider gap moves hordes, the shelter spot or the drift line in ~25% of Clear missions.
+// 45b4ee67: the Clear briefing gains the scatter sentence (SCATTER_BRIEF, text only). Without it: 8af85e6 (commit 1).
+const EXPECTED_CLEAR_FINGERPRINT = '45b4ee67';
+const CLEAR_FINGERPRINT_WITHOUT_SCATTER_TEXT = '8af85e6';
+// Before the gap (80 m) they were b2ab636a and 486e254c.
+// 24511373 (fix/cold-endgame, a sim bug): milling zombies whose goal lay behind a wall crept into it for ever and stood
+// still (cold ones then vanished on thermal for good). They now pick goals they can walk to, slide off walls they meet
+// head-on, and walk round buildings back to a horde that drifted off. Was a8aa6fd6. The mission itself is unchanged.
+const EXPECTED_CLEAR_TRACE = '24511373';
+
+// Spec 001 step 1: locks today's single-mission Hold (mission and 30 s of play with no input) before the finale work.
+// c7cefb39 (3.16): defend waves are bigger from difficulty 2 (d3: 30 per wave, was 18; maxAlive 191, was 155).
+const EXPECTED_DEFEND_FINGERPRINT = 'c7cefb39';
+// a5be7ad0 (3.15): buildings are solid. Zombies can no longer stand in the outer band of a footprint, so their
+// spawn spots and paths to the safehouse wall differ slightly; the mission itself (bdca4d43) is unchanged.
+// 3be0b14 (3.16): the bigger defend waves above put more zombies on the ground in the first 30 s.
+const EXPECTED_DEFEND_TRACE = '3be0b14';
+
+// 3dd039a3 (phase 3.2): waves vary within a mission (WavePlan.kinds) and the intel says how. Stripped of those two, it is still 7de5904e.
+// be9b7fe7 (phase 3.8): escort routes may not pass within 50 m of a school, kindergarten or playground, so homes whose
+// shortest road passed one now have a longer, clear road (or drop out), and the seeded pick lands on a different home.
+// 4c4d8d66 (3.16): escort waves are bigger from difficulty 2 (d3: 28 per wave, was 12; maxAlive 276, was 120).
+const EXPECTED_FINGERPRINT = '4c4d8d66';
 
 describe('regressions from the phase 1 playtest', () => {
   it('escort ambushes never spawn on top of survivors (was: 3.5% of missions lost by second 5)', () => {

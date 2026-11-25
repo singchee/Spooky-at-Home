@@ -152,19 +152,29 @@ describe('parseOverpass: recon categories (phase 2)', () => {
     expect(m.pois.map((p) => p.kind).sort()).toEqual(['fire_station', 'police', 'school']);
   });
 
-  it('asks Overpass for the new categories in one modest query', () => {
-    const q = buildQuery(origin, 600);
+  // Was "asks Overpass for the new categories in one modest query": since 3.23 the same clauses are
+  // asked for in two queries (core, then extras), so the test checks both together and the split.
+  it('asks Overpass for the new categories in two modest queries: core, then extras', () => {
+    const core = buildQuery(origin, 600, 'core');
+    const extras = buildQuery(origin, 600, 'extras');
+    expect(buildQuery(origin, 600)).toBe(core); // the default is the part missions need
+    const q = core + extras;
     expect(q).toContain('relation["route"="bus"]');
     expect(q).toMatch(/out geom\(-?\d/); // bus routes clipped to the map square
     expect(q).toContain('out center tags;');
     expect(q).toContain('"highway"="street_lamp"');
     expect(q).toContain('"natural"="tree"');
     expect(q).toContain('"club"="tennis"');
-    // 4 output blocks: ways and nodes; protected campuses (school, kindergarten, childcare) with full
-    // geometry so their whole grounds are protected; other relations as centres; clipped bus routes.
-    expect(q.match(/^out /gm)).toHaveLength(4);
-    expect(q).toContain('relation["amenity"~"^(school|kindergarten|childcare)$"]');
-    expect(q).toMatch(/childcare/);
+    // Core, 3 output blocks: ways and nodes; protected campuses (school, kindergarten, childcare) with
+    // full geometry so their whole grounds are protected; other relations as centres.
+    expect(core.match(/^out /gm)).toHaveLength(3);
+    expect(core).toContain('relation["amenity"~"^(school|kindergarten|childcare)$"]');
+    expect(core).toMatch(/childcare/);
+    // Extras, 2 output blocks: trees and lamps; clipped bus routes. Nothing else.
+    expect(extras.match(/^out/gm)).toHaveLength(2);
+    expect(extras).toContain('relation["route"="bus"]');
+    expect(extras).not.toMatch(/building|amenity|leisure|landuse|school/);
+    expect(core).not.toMatch(/street_lamp|"natural"="tree"|route"="bus/);
   });
 });
 
@@ -218,8 +228,12 @@ describe('fetchOverpass: a failed query is a failure, even with HTTP 200', () =>
   const good: OverpassJson = { elements: [{ type: 'node', id: 6, lat: -10.0005, lon: 100.0005, tags: { amenity: 'hospital', name: 'Test Hospital' } }] };
   const answer = (json: unknown) => ({ ok: true, status: 200, json: async () => json }) as unknown as Response;
 
-  it('asks for a 60 s server timeout', () => {
-    expect(buildQuery(origin, 500)).toMatch(/^\[out:json\]\[timeout:60\];/);
+  // Was "asks for a 60 s server timeout": since 3.20/3.23 the server's own limit matches how long the
+  // game waits for that server (45 s for the first), so a server never works on a query nobody awaits.
+  it('asks for a server timeout matched to how long the game waits', () => {
+    expect(buildQuery(origin, 500)).toMatch(/^\[out:json\]\[timeout:45\];/);
+    expect(buildQuery(origin, 500, 'core', 75)).toMatch(/^\[out:json\]\[timeout:75\];/);
+    expect(buildQuery(origin, 500, 'extras', 3)).toMatch(/^\[out:json\]\[timeout:10\];/); // never silly-short
   });
 
   it('treats a "runtime error" or "timed out" remark as a failure', () => {

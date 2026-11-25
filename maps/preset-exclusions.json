@@ -1,0 +1,111 @@
+{
+ "nyc": [
+  {
+   "id": "n4325329993",
+   "why": "dropped",
+   "name": "sathya sai"
+  },
+  {
+   "id": "n4450559940",
+   "why": "dropped",
+   "name": "Inner Enlightenment Spiritist Society"
+  },
+  {
+   "id": "n5520770925",
+   "why": "dropped",
+   "name": "Chabad of Midtown Manhattan"
+  },
+  {
+   "id": "n12295907402",
+   "why": "dropped",
+   "name": "River NYC Church"
+  },
+  {
+   "id": "w265301753",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Church of The Holy Innocents"
+  },
+  {
+   "id": "w265320987",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Saint Clement's Church"
+  },
+  {
+   "id": "w265322610",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Congregation Ezrath Israel"
+  },
+  {
+   "id": "w265322617",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "The Salvation Army"
+  },
+  {
+   "id": "w266010326",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Church of Sweden"
+  },
+  {
+   "id": "w266024854",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "St. Luke's Church"
+  },
+  {
+   "id": "w266033992",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Holy Cross Catholic Church"
+  },
+  {
+   "id": "w266149309",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Church of Scientology of New York"
+  },
+  {
+   "id": "w266151919",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Saint Malachy Church"
+  },
+  {
+   "id": "w266170537",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Church of Saint Mary the Virgin"
+  }
+ ],
+ "paris": [
+  {
+   "id": "n1861790175",
+   "why": "dropped",
+   "name": "Adath Shalom"
+  },
+  {
+   "id": "n3032793634",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Chapelle Saint-Louis"
+  },
+  {
+   "id": "w15912913",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Église Saint-Léon"
+  },
+  {
+   "id": "w69072238",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Église Saint-Pierre du Gros Caillou"
+  },
+  {
+   "id": "w69072349",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Lycée général privé La Rochefoucauld"
+  },
+  {
+   "id": "w69073401",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Immeuble de la Société théosophique"
+  },
+  {
+   "id": "w449077939",
+   "why": "building neutralised (no name, no amenity)",
+   "name": "Cathédrale de la Sainte-Trinité"
+  }
+ ]
+}

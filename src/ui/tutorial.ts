@@ -6,8 +6,8 @@ import { dist } from '../map/geom';
 import { Sim } from '../sim/sim';
 import { weaponById } from '../sim/weapons';
 import { mulberry32 } from '../util/rng';
-import { Game, type GameAction } from '../game/game';
-import { STEP_TEXT, TutorialSteps, planLayout, trainingMission, type StepId, type TrainingLayout } from './tutorialSteps';
+import { Game, LENS_RANGE, type GameAction } from '../game/game';
+import { STEP_TEXT, TOUCH_GLOSSARY, TRAINING_SIM, TutorialSteps, nightHelp, planLayout, trainingMission, type StepId, type TrainingLayout } from './tutorialSteps';
 import { el } from './dom';
 
 /**
@@ -80,7 +80,10 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
   const grid = new WalkGrid(map);
   const layout = planLayout(map, graph, grid);
   if (!layout) throw new Error('no room for the training ground');
-  const sim = new Sim(trainingMission(map, layout), map, graph, grid);
+  // Training keeps today's hordes: shelled hordes don't scatter here yet (spec 002, open question 3). No horde drifts
+  // onto the friendlies either (a slow trainee must still have them for the last step), and the search help is
+  // started by the night step below rather than by the Clear endgame rules.
+  const sim = new Sim(trainingMission(map, layout), map, graph, grid, TRAINING_SIM);
   const steps = new TutorialSteps();
   const rng = mulberry32(0x7a11);
   let exited = false;
@@ -129,6 +132,8 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
   const hint = el('p', 'coach-hint', undefined, coach);
   const bar = el('div', 'coach-bar', undefined, coach);
   const fill = el('span', undefined, undefined, bar);
+  // Touch screens: which button stands for the keys the steps name.
+  const glossary = el('p', 'coach-small coach-touch', TOUCH_GLOSSARY, coach);
   const row = el('div', 'coach-row', undefined, coach);
   const marker = el('div', 'coach-marker', undefined, parent);
   marker.setAttribute('aria-hidden', 'true');
@@ -170,6 +175,7 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
     hint.textContent = h ?? '';
     hint.classList.toggle('alarm', !!h && h.startsWith('CHECK FIRE'));
     bar.style.display = steps.step === 'intro' || steps.step === 'done' ? 'none' : '';
+    glossary.hidden = !game.info().touch || steps.step === 'done';
     fill.style.width = `${Math.round(steps.progress * 100)}%`;
   };
   const skip = () => {
@@ -215,6 +221,7 @@ export function startTutorial(parent: HTMLElement, onExit: (to: TutorialExit) =>
     steps.send({ type: 'danger', on: dangerOn });
     steps.send({ type: 'lens', fov: lensFov(game, sim, aim) });
     steps.send({ type: 'tick', dt });
+    nightHelp(sim, steps, layout, dt);
 
     // Friendlies hit in training get patched up after a moment.
     for (let i = revive.length - 1; i >= 0; i--) {
@@ -323,8 +330,9 @@ const markerBox = (x: number, y: number): Rect => ({ l: x - 60, t: y - MARKER_AB
 const overlaps = (a: Rect, b: Rect, pad: number): boolean => a.l < b.r + pad && a.r > b.l - pad && a.t < b.b + pad && a.b > b.t - pad;
 
 /**
- * The camera's field of view in degrees, measured from the picture itself: how many pixels a 10 m stretch
- * of ground across the line of sight covers at the aim point. (The game keeps its zoom state private.)
+ * The camera's lens in degrees (at LENS_RANGE, as guns quote it), measured from the picture itself: how many
+ * pixels a 10 m stretch of ground across the line of sight covers at the aim point. (The game keeps its zoom
+ * state private.)
  */
 function lensFov(game: Game, sim: Sim, aim: V2): number {
   const ac = sim.aircraft();
@@ -339,6 +347,7 @@ function lensFov(game: Game, sim: Sim, aim: V2): number {
   const px = Math.hypot(b.x - a.x, b.y - a.y);
   const h = game.renderer.domElement.clientHeight;
   if (!px || !h) return 99;
-  const range = Math.hypot(dx, ac.y, dz);
-  return (2 * Math.atan((10 * h) / (2 * range * px)) * 180) / Math.PI;
+  // Lenses are quoted at LENS_RANGE: the game widens or narrows the angle with range so the view covers
+  // the same ground, so measure the ground covered and convert at that range.
+  return (2 * Math.atan((10 * h) / (2 * LENS_RANGE * px)) * 180) / Math.PI;
 }

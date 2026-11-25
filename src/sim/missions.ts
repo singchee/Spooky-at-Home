@@ -1,8 +1,12 @@
 import type { Feature, FeatureCategory, MapData, V2 } from '../map/types';
 import { bounds, centroid, dist, pointInPolygon, polygonArea, polylineLength, distToSegment } from '../map/geom';
-import { dijkstra, nearestNode, pathFromPrev, roadNamesAlong, type RoadGraph } from '../map/roadGraph';
+import { avoidingEdges, dijkstra, nearestNode, pathFromPrev, roadNamesAlong, type EdgeCost, type RoadGraph } from '../map/roadGraph';
 import type { WalkGrid } from '../map/grid';
-import { CATEGORY_INFO, CHILD_KINDS, MISSION_TEMPLATES, featureName, findAnchor, nearChildPlace, type TemplateId } from '../map/recon';
+import {
+  CATEGORY_INFO, CHILD_KINDS, MISSION_TEMPLATES, featureName, findAnchor, nearChildPlace, routeNearChildPlace, segmentNearChildPlace, type TemplateId,
+} from '../map/recon';
+import { MAX_KILL_REACH } from './weapons';
+import type { CrowdPlan } from './crowd';
 import { hashString, mulberry32, pick, shuffle, type Rng } from '../util/rng';
 
 /**
@@ -26,6 +30,34 @@ export interface SurvivorPlan {
   delay: number;
 }
 
+/**
+ * Waves vary within a mission. Each kind scales the plan's base wave:
+ * - standard: the plan as it is;
+ * - rush: fewer zombies, all warm, lunging fast, and sooner after the last wave;
+ * - cold: mostly cold-blooded (hard to see on thermal), only offered when the area has cold-blooded contacts;
+ * - big: a larger wave after a longer lull, never in the opening waves.
+ * Averaged over a mission the kinds bring roughly as many zombies per minute as standard waves alone.
+ */
+export type WaveKind = 'standard' | 'rush' | 'cold' | 'big';
+export interface WaveKindDef {
+  /** Multiplies the plan's wave size. */
+  size: number;
+  /** Multiplies the zombies' walking speed. */
+  speed: number;
+  /** Multiplies the plan's `every`: the lull before this wave arrives. */
+  gap: number;
+  /** Share of cold-blooded zombies; null = the plan's coldShare. */
+  cold: number | null;
+}
+export const WAVE_KINDS: Record<WaveKind, WaveKindDef> = {
+  standard: { size: 1, speed: 1, gap: 1, cold: null },
+  rush: { size: 0.6, speed: 1.4, gap: 0.8, cold: 0 },
+  cold: { size: 1, speed: 1, gap: 1, cold: 0.75 },
+  big: { size: 1.7, speed: 1, gap: 1.5, cold: null },
+};
+/** Seconds before the first wave (it arrives quickly). */
+export const FIRST_WAVE = 3;
+
 export interface WavePlan {
   every: number;
   size: number;
@@ -33,6 +65,8 @@ export interface WavePlan {
   minDist: number;
   maxDist: number;
   maxAlive: number;
+  /** The kind of each wave in order (seeded). Missing = every wave is standard. */
+  kinds?: WaveKind[];
 }
 
 export interface Mission {
@@ -57,6 +91,8 @@ export interface Mission {
   /** Set when the mission was built from a recon template around a real place. */
   template?: TemplateId;
   anchor?: { id: string; name: string; category: FeatureCategory; p: V2; pts?: V2[] };
+  /** Spec 003: a crowd night (Horde Night). The type stays 'defend'; absent on every other mission. */
+  crowd?: CrowdPlan;
 }
 
 export interface MissionOptions {
@@ -78,8 +114,67 @@ const KIND_LABEL: Record<string, string> = {
   fire_station: 'the fire station', library: 'the library', place_of_worship: 'the church', clinic: 'the clinic',
 };
 
-/** Guardrail (PLAN §9): no horde is placed within this many metres of a school, kindergarten or playground. */
-const HORDE_CHILD_GAP = 60;
+/**
+ * How much bigger hordes and waves get with difficulty (owner playtest 3.16: "even at level 2 the waves are
+ * quite small and easily taken out"). Difficulty 1 stays gentle (x1); each level above adds the type's step.
+ * Tuned with the balance runner so the human-skill bot stays in QUALITY §3's bands.
+ */
+export const PRESSURE_STEP = { clear: 0.45, escort: 0.65 } as const;
+export const pressure = (type: keyof typeof PRESSURE_STEP, d: number): number => 1 + PRESSURE_STEP[type] * (d - 1);
+/**
+ * Hold the safehouse: zombies per wave by difficulty 1-5 (was 6 + 4d: 10-26). Defend is the steepest mission:
+ * at difficulty 5 waves come every 7 s and a few more zombies at the wall decide it (bot win rate 67% at 30,
+ * 50% at 34, 33% at 38, 17% at 45 in a sweep), so it rises fast through the middle and difficulty 5 differs from 4 mostly
+ * only in how often the waves come.
+ */
+export const DEFEND_WAVE_SIZE = [10, 20, 30, 36, 37] as const;
+/** Clear missions: how many hordes (difficulty 2 and up bring one more than before 3.16). */
+export const hordeCount = (d: number): number => Math.min(6, 2 + Math.floor(d * 0.8) + (d >= 2 ? 1 : 0));
+/** Clear missions: zombies in each horde. */
+export const hordeSize = (d: number): number => Math.round((6 + 3 * d) * pressure('clear', d));
+
+/** A horde's zombies start within this many metres of its gathering point (see Sim). */
+export const HORDE_SPREAD = 22;
+/** ...and mill around it, each heading for a spot up to this many metres away (see Sim.updateZombies). */
+export const HORDE_WANDER = 26;
+/** Metres of clear ground kept between the farthest a shell can kill and a school, kindergarten or playground. */
+export const CHILD_FIRE_CLEARANCE = 30;
+/**
+ * Clear missions (spec 002): a horde zombie scattered by a 105 round never ends a move farther than this from its
+ * horde's path (its gathering point, or the drifting horde's line to the shelter). A hard move rule in Sim.
+ */
+export const SCATTER_LEASH = 45;
+/** The Clear briefing's one true sentence about scatter (spec 002 rule 7; draft for the Story Writer). Always true: a rule. */
+export const SCATTER_BRIEF = "Shell a horde and whatever's left of it scatters, then drifts back to where it gathered.";
+/**
+ * Guardrail (PLAN §9): no horde gathers within this many metres of a school, kindergarten or playground.
+ * The farthest a horde zombie can ever be from its gathering point (the scatter leash, which is wider than the
+ * start spread and the wander), hit by a 105 round there, still leaves CHILD_FIRE_CLEARANCE of clear ground
+ * before the grounds: 45 + 24 + 30 = 99 m (was 80 m before spec 002).
+ */
+/**
+ * Every horde zombie stays inside this share of the half-width: past it the edge fade (src/world/shading.ts) washes
+ * the picture out, and past the edge itself the camera can't aim. A horde gathers far enough in that its spread and
+ * milling stay inside; scattered runners are held inside by the sim (owner's report: a park horde on Gundagai sat
+ * 20-45 m past the map edge, where nobody could see or aim at it).
+ */
+export const HORDE_EDGE = 0.9;
+/** May a horde gather here? Its spread and milling stay inside HORDE_EDGE of the half-width. */
+export function hordeInPlay(map: MapData, p: V2): boolean {
+  const lim = map.half * HORDE_EDGE - Math.max(HORDE_SPREAD, HORDE_WANDER);
+  return Math.abs(p.x) <= lim && Math.abs(p.z) <= lim;
+}
+export const HORDE_CHILD_GAP = Math.max(HORDE_SPREAD, HORDE_WANDER, SCATTER_LEASH) + MAX_KILL_REACH + CHILD_FIRE_CLEARANCE;
+
+/** Road edges a survivor's route may not use: any that passes within CHILD_BUFFER of a child place (PLAN §9). */
+const routeCostCache = new WeakMap<RoadGraph, { map: MapData; cost: EdgeCost }>();
+function childSafeCost(map: MapData, g: RoadGraph): EdgeCost {
+  const hit = routeCostCache.get(g);
+  if (hit && hit.map === map) return hit.cost;
+  const cost = avoidingEdges(g, (a, b) => segmentNearChildPlace(map, a, b));
+  routeCostCache.set(g, { map, cost });
+  return cost;
+}
 
 const fmtTime = (secs: number) => {
   const s = Math.max(0, Math.ceil(secs));
@@ -125,7 +220,7 @@ function safeBuilding(map: MapData, b: { pts: V2[]; kind?: string }): boolean {
   return !CHILD_KINDS.includes(b.kind ?? '') && !nearChildPlace(map, centroid(b.pts));
 }
 
-function findSafehouse(map: MapData, g: RoadGraph, rng: Rng): Mission['safehouse'] | null {
+export function findSafehouse(map: MapData, g: RoadGraph, rng: Rng): Mission['safehouse'] | null {
   const lim = map.half * 0.65;
   const pois = map.pois.filter((p) => SAFE_KINDS.includes(p.kind) && Math.abs(p.p.x) < lim && Math.abs(p.p.z) < lim && !nearChildPlace(map, p.p));
   shuffle(rng, pois);
@@ -180,7 +275,7 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
   const { base, coldShare, coldIntel, roe } = c;
 
   if (type === 'clear') {
-    const nHordes = Math.min(6, 2 + Math.floor(d * 0.8));
+    const nHordes = hordeCount(d);
     const candidates: V2[] = [];
     for (const a of map.areas) {
       const c = centroid(a.pts);
@@ -193,14 +288,16 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
       if (centres.length >= nHordes) break;
       const free = grid.nearestFree(c);
       if (grid.isBlocked(free.x, free.z)) continue; // never put a horde inside a building
+      if (!hordeInPlay(map, free)) continue; // never past the edge, where the picture fades out
       if (nearChildPlace(map, free, HORDE_CHILD_GAP)) continue; // guardrail (PLAN §9)
       if (centres.every((o) => dist(o, free) > 130)) centres.push(free);
     }
     if (centres.length < 2) return { ok: false, reason: 'Could not find room for the hordes on this map.' };
-    const per = 6 + 3 * d;
+    const per = hordeSize(d);
     const hordes: Horde[] = centres.map((c) => ({ centre: c, count: per, cold: Math.round(per * coldShare), label: placeLabel(map, c) }));
     const shelterAt = hordes[Math.floor(rng() * hordes.length)];
     const shelterSpot = shelterSpotFor(grid, map, hordes, shelterAt, rng);
+    if (!shelterSpot) return { ok: false, reason: noShelterReason };
     const survivors: SurvivorPlan[] = [0, 1].map((k) => ({ start: { x: shelterSpot.x + k * 2, z: shelterSpot.z }, route: null, delay: 0 }));
     const orbit = centroid(centres);
     const coldPlaces = hordes.filter((h) => h.cold > 0).map((h) => h.label);
@@ -212,7 +309,7 @@ export function generateMission(map: MapData, g: RoadGraph, grid: WalkGrid, opts
         title: `Clear the horde — ${placeLabel(map, orbit)}`,
         briefing: [
           `Spooky, this is Ground. ${hordes.length} hordes are shambling around ${listJoin(unique(hordes.map((h) => h.label)))}.`,
-          `Clear every one of them within ${fmtTime(timeLimit)}.`,
+          `Clear every one of them within ${fmtTime(timeLimit)}.`, SCATTER_BRIEF,
           `Two friendlies are sheltering near ${shelterAt.label}. Mind your aim.`,
           roe,
         ],
@@ -273,7 +370,9 @@ function buildEscort(c: Ctx, safehouse: Safehouse, fl: EscortFlavour = CLASSIC_E
   const { map, g, grid, rng, d, base, coldShare, coldIntel, roe } = c;
   const safeNode = nearestNode(g, safehouse.centre, 200);
   if (safeNode < 0) return { ok: false, reason: 'The safehouse is not reachable by road.' };
-  const { d: roadDist, prev } = dijkstra(g, safeNode);
+  // Guardrail (PLAN §9): the walk home never passes within CHILD_BUFFER of a school, kindergarten or
+  // playground. Roads that do are closed to the route finder; a home only reachable past one isn't offered.
+  const { d: roadDist, prev } = dijkstra(g, safeNode, childSafeCost(map, g));
   const minL = 280 + 40 * d;
   const maxL = 480 + 70 * d;
   const homes = map.buildings
@@ -288,18 +387,36 @@ function buildEscort(c: Ctx, safehouse: Safehouse, fl: EscortFlavour = CLASSIC_E
     scored.push({ c: h.c, node, L: roadDist[node] });
     if (scored.length > 4000) break;
   }
-  let pool = scored.filter((s) => s.L >= minL && s.L <= maxL);
-  if (!pool.length) pool = scored.filter((s) => s.L >= 150).sort((a, b) => b.L - a.L).slice(0, 10);
-  if (!pool.length) return { ok: false, reason: 'No homes are far enough away by road for an escort mission.' };
+  const routeTo = (s: { c: V2; node: number }) => {
+    const pathNodes = pathFromPrev(prev, s.node);
+    return { pathNodes, route: [grid.nearestFree(g.nodes[pathNodes[0]]), ...pathNodes.slice(1).map((i) => g.nodes[i]), s.c] };
+  };
+  // The roads are clear; also the first step off the safehouse's corner and the last one up to the door.
+  const clearWalk = (s: { c: V2; node: number }) => !routeNearChildPlace(map, routeTo(s).route);
+  let pool = scored.filter((s) => s.L >= minL && s.L <= maxL).filter(clearWalk);
+  if (!pool.length) pool = scored.filter((s) => s.L >= 150).sort((a, b) => b.L - a.L).filter(clearWalk).slice(0, 10);
+  if (!pool.length) {
+    // Say why: is it the distance, or is every way home past a school?
+    const { d: anyDist } = dijkstra(g, safeNode);
+    const farEnough = homes.some((h) => {
+      const node = nearestNode(g, h.c, 60);
+      return node >= 0 && anyDist[node] >= 150 && Number.isFinite(anyDist[node]);
+    });
+    return farEnough
+      ? { ok: false, reason: `Every way home from ${safehouse.name} passes a school, kindergarten or playground, so there's no escort mission from here. Try another mission.` }
+      : { ok: false, reason: 'No homes are far enough away by road for an escort mission.' };
+  }
   const home = pick(rng, pool);
-  const pathNodes = pathFromPrev(prev, home.node);
-  const route = [grid.nearestFree(g.nodes[pathNodes[0]]), ...pathNodes.slice(1).map((i) => g.nodes[i]), home.c];
+  const { pathNodes, route } = routeTo(home);
   const streets = roadNamesAlong(g, map, pathNodes);
   const homeStreet = nearestStreet(map, home.c);
   const n = 4 + Math.floor(d / 2);
   const need = Math.ceil(n / 2);
   const survivors: SurvivorPlan[] = Array.from({ length: n }, (_, k) => ({ start: route[0], route, delay: 6 + k * 1.4 }));
   const length = Math.round(polylineLength(route) / 10) * 10;
+  const timeLimit = 420 + 30 * d;
+  const every = Math.max(9, 22 - 2.6 * d);
+  const waves: WavePlan = { every, size: Math.round((3 + 3 * d) * pressure('escort', d)), coldShare, minDist: 140, maxDist: 300, maxAlive: Math.round((60 + 20 * d) * pressure('escort', d)), kinds: waveSequence(c, every, Math.min(timeLimit, escortMinTime(route, survivors))) };
   const xs = route.map((p) => p.x);
   const zs = route.map((p) => p.z);
   return {
@@ -313,8 +430,8 @@ function buildEscort(c: Ctx, safehouse: Safehouse, fl: EscortFlavour = CLASSIC_E
         `Keep the road clear. If fewer than ${need} make it home, the mission fails.`,
         roe,
       ],
-      intel: [coldIntel('with the waves')],
-      timeLimit: 420 + 30 * d,
+      intel: [coldIntel('with the waves'), ...waveIntel(waves)],
+      timeLimit,
       orbitCentre: { x: (Math.min(...xs) + Math.max(...xs)) / 2, z: (Math.min(...zs) + Math.max(...zs)) / 2 },
       safehouse,
       home: { centre: home.c, street: homeStreet },
@@ -322,9 +439,72 @@ function buildEscort(c: Ctx, safehouse: Safehouse, fl: EscortFlavour = CLASSIC_E
       survivors,
       needHome: need,
       hordes: [],
-      waves: { every: Math.max(9, 22 - 2.6 * d), size: 3 + 3 * d, coldShare, minDist: 140, maxDist: 300, maxAlive: 60 + 20 * d },
+      waves,
     },
   };
+}
+
+/**
+ * The soonest an escort can possibly end: everyone walking at their top speed, never stopping.
+ * Wave kinds are only planned inside this window, so every kind the intel promises really arrives.
+ */
+function escortMinTime(route: V2[], survivors: SurvivorPlan[]): number {
+  return polylineLength(route) / SURVIVOR_TOP_SPEED + Math.max(0, ...survivors.map((s) => s.delay));
+}
+/** Survivors' fastest walking pace (m/s), when zombies are close (see Sim.updateSurvivors). */
+export const SURVIVOR_TOP_SPEED = 3.2;
+
+/** The seeded order of wave kinds for one mission. Its own random stream, so the rest of the mission is unchanged. */
+function waveSequence(c: Ctx, every: number, horizon: number): WaveKind[] {
+  const b = c.base;
+  const rng = mulberry32(hashString(`waves|${b.mapName}|${b.seed}|${b.template ?? b.type}|${b.anchor?.id ?? ''}|${c.d}`));
+  return planWaveKinds(rng, every, horizon, c.coldShare > 0);
+}
+
+/**
+ * Wave kinds in order, for every wave that arrives within `horizon` seconds (the first at FIRST_WAVE,
+ * each later one after `every` x its kind's gap). The opener is standard, a big wave never comes in the
+ * first two, the same special kind never comes twice running, and cold waves only where cold-blooded
+ * zombies live. A mission with four or more waves always has at least one special.
+ */
+export function planWaveKinds(rng: Rng, every: number, horizon: number, coldAllowed: boolean): WaveKind[] {
+  const kinds: WaveKind[] = ['standard'];
+  let t = FIRST_WAVE;
+  for (;;) {
+    const prev = kinds[kinds.length - 1];
+    const options: [WaveKind, number][] = [
+      ['standard', 45],
+      ['rush', 20],
+      ['cold', coldAllowed ? 20 : 0],
+      ['big', kinds.length >= 2 ? 15 : 0],
+    ];
+    const allowed = options.filter(([k, w]) => w > 0 && (k === 'standard' || k !== prev));
+    let r = rng() * allowed.reduce((a, [, w]) => a + w, 0);
+    let k: WaveKind = 'standard';
+    for (const [kind, w] of allowed) {
+      r -= w;
+      if (r < 0) {
+        k = kind;
+        break;
+      }
+    }
+    t += every * WAVE_KINDS[k].gap;
+    if (t > horizon) break;
+    kinds.push(k);
+  }
+  if (kinds.length >= 4 && !kinds.some((k) => k !== 'standard')) kinds[2] = 'rush';
+  return kinds;
+}
+
+/** One line of intel about how the waves vary, built from the real plan (intel is always true, PLAN §5a). */
+export function waveIntel(w: WavePlan): string[] {
+  const n = (k: WaveKind) => (w.kinds ?? []).filter((x) => x === k).length;
+  const parts: string[] = [];
+  if (n('rush')) parts.push(n('rush') === 1 ? 'a small rush of fast lungers' : 'small rushes of fast lungers');
+  if (n('cold')) parts.push(n('cold') === 1 ? 'a mostly cold-blooded wave' : 'mostly cold-blooded waves');
+  if (n('big')) parts.push(n('big') === 1 ? 'one big wave after a lull' : 'big waves after a lull');
+  if (!parts.length) return [];
+  return [`Intel: the waves won't all look alike. Expect a mix: ${listJoin(parts)}.`];
 }
 
 interface DefendFlavour {
@@ -336,7 +516,9 @@ function buildDefend(c: Ctx, safehouse: Safehouse, fl?: DefendFlavour): MissionR
   const { map, g, grid, rng, d, base, coldShare, coldIntel, roe } = c;
   const safeNode = nearestNode(g, safehouse.centre, 200);
   if (safeNode < 0) return { ok: false, reason: 'The safehouse is not reachable by road.' };
-  const { d: roadDist, prev } = dijkstra(g, safeNode);
+  // Guardrail (PLAN §9): stragglers start, and walk in, clear of schools, kindergartens and playgrounds
+  // (the same rule as escort routes): roads past one are closed to them.
+  const { d: roadDist, prev } = dijkstra(g, safeNode, childSafeCost(map, g));
   const hold = 150 + 15 * d;
   // The waves must be able to reach the building, or the mission can't be lost.
   const perimeter = grid.perimeterCells(safehouse.poly);
@@ -348,15 +530,16 @@ function buildDefend(c: Ctx, safehouse: Safehouse, fl?: DefendFlavour): MissionR
   if (!perimeter.length || reachableSpawns.length < 5) {
     return { ok: false, reason: `Zombies can't reach ${safehouse.name} on foot, so it can't be defended. Try another mission type or seed.` };
   }
-  const stragglerStarts = roadNodesWithin(g, map, 0.9).filter((i) => roadDist[i] > 110 && roadDist[i] < 220);
+  const stragglerRoute = (s: number) => [...pathFromPrev(prev, s).reverse().map((i) => g.nodes[i]), safehouse.centre];
+  const stragglerStarts = roadNodesWithin(g, map, 0.9).filter((i) => roadDist[i] > 110 && roadDist[i] < 220 && !routeNearChildPlace(map, stragglerRoute(i)));
   const survivors: SurvivorPlan[] = [];
   if (stragglerStarts.length) {
-    const s = pick(rng, stragglerStarts);
-    const path = pathFromPrev(prev, s).reverse();
-    const route = [...path.map((i) => g.nodes[i]), safehouse.centre];
+    const route = stragglerRoute(pick(rng, stragglerStarts));
     survivors.push({ start: route[0], route, delay: 4 }, { start: route[0], route, delay: 5.5 });
   }
   const from = survivors.length ? nearestStreet(map, survivors[0].start) : '';
+  const every = Math.max(7, 20 - 2.6 * d);
+  const waves: WavePlan = { every, size: DEFEND_WAVE_SIZE[d - 1], coldShare, minDist: 180, maxDist: 340, maxAlive: 80 + 25 * d + 3 * (DEFEND_WAVE_SIZE[d - 1] - (6 + 4 * d)), kinds: waveSequence(c, every, hold) };
   return {
     ok: true,
     mission: {
@@ -368,14 +551,14 @@ function buildDefend(c: Ctx, safehouse: Safehouse, fl?: DefendFlavour): MissionR
         survivors.length ? `Two stragglers are on their way in along ${from}. Don't hit them.` : 'Everyone is already inside.',
         roe,
       ],
-      intel: [coldIntel('with the waves')],
+      intel: [coldIntel('with the waves'), ...waveIntel(waves)],
       timeLimit: hold,
       orbitCentre: safehouse.centre,
       safehouse,
       survivors,
       needHome: 0,
       hordes: [],
-      waves: { every: Math.max(7, 20 - 2.6 * d), size: 6 + 4 * d, coldShare, minDist: 180, maxDist: 340, maxAlive: 80 + 25 * d },
+      waves,
     },
   };
 }
@@ -385,7 +568,7 @@ function buildDefend(c: Ctx, safehouse: Safehouse, fl?: DefendFlavour): MissionR
 // ---------------------------------------------------------------------------------------
 
 /** The building that stands for a place: the one it's in, one with its name, or the biggest on its grounds. */
-function safehouseFromFeature(map: MapData, f: Feature, name: string): Safehouse {
+export function safehouseFromFeature(map: MapData, f: Feature, name: string): Safehouse {
   // Guardrail (PLAN §9): never a school building, nor one beside a school, kindergarten or playground.
   const solid = (b: { pts: V2[]; kind?: string }) => polygonArea(b.pts) >= 60 && safeBuilding(map, b);
   let b = map.buildings.find((x) => solid(x) && pointInPolygon(f.p, x.pts));
@@ -460,7 +643,7 @@ function generateFromTemplate(map: MapData, g: RoadGraph, grid: WalkGrid, opts: 
 /** Clear missions around a place: hordes on the tennis courts, in the park, or among the trees. */
 function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'clear-park' | 'forest-sweep'): MissionResult {
   const { map, g, grid, rng, d, base, coldShare, coldIntel, roe } = c;
-  const nHordes = Math.min(6, 2 + Math.floor(d * 0.8));
+  const nHordes = hordeCount(d);
   const forest = id === 'forest-sweep';
   // Forests hide more cold-blooded zombies: they match the cool ground under the trees.
   const coldHere = forest ? Math.min(0.6, coldShare + 0.25) : coldShare;
@@ -472,6 +655,7 @@ function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'c
   const add = (p: V2, gap: number) => {
     const free = grid.nearestFree(p, 40);
     if (grid.isBlocked(free.x, free.z)) return false; // never put a horde inside a building
+    if (!hordeInPlay(map, free)) return false; // never past the edge, where the picture fades out (owner's report)
     if (nearChildPlace(map, free, HORDE_CHILD_GAP)) return false; // guardrail (PLAN §9)
     if (!centres.every((o) => dist(o, free) > gap)) return false;
     centres.push(free);
@@ -496,13 +680,20 @@ function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'c
     add(p, 110);
   }
   if (centres.length < 2) return { ok: false, reason: `Could not find room for the hordes around ${name}.` };
-  const per = 6 + 3 * d;
+  const per = hordeSize(d);
   const hordes: Horde[] = centres.map((p) => {
     const here = isHere(p);
     return { centre: p, count: per, cold: Math.round(per * (here ? coldHere : coldShare)), label: here ? name : placeLabel(map, p) };
   });
+  // The briefing names the place, so a horde must really be there (the campaign's placeIsTrue rule, BACKLOG 3.24).
+  // The place itself can be refused a horde (a building, a playground within the child-place gap).
+  const atPlace = hordes.filter((h) => h.label === name);
+  if (!atPlace.length || (forest && !atPlace.some((h) => h.cold > 0))) {
+    return { ok: false, reason: `The hordes can't gather at ${name} here, so this mission wouldn't be true. Pick another mission.` };
+  }
   const shelterAt = hordes[Math.floor(rng() * hordes.length)];
   const shelterSpot = shelterSpotFor(grid, map, hordes, shelterAt, rng);
+  if (!shelterSpot) return { ok: false, reason: noShelterReason };
   const survivors: SurvivorPlan[] = [0, 1].map((k) => ({ start: { x: shelterSpot.x + k * 2, z: shelterSpot.z }, route: null, delay: 0 }));
   const timeLimit = 240 + 30 * d + (forest ? 30 : 0);
   const hereCount = hordes.filter((h) => h.label === name).length;
@@ -539,7 +730,7 @@ function templateClear(c: Ctx, f: Feature, name: string, id: 'clear-tennis' | 'c
     mission: {
       ...base,
       title,
-      briefing: [opener, `Clear every one of them within ${fmtTime(timeLimit)}.`, `Two friendlies are sheltering near ${shelterAt.label}. Mind your aim.`, roe],
+      briefing: [opener, `Clear every one of them within ${fmtTime(timeLimit)}.`, SCATTER_BRIEF, `Two friendlies are sheltering near ${shelterAt.label}. Mind your aim.`, roe],
       intel: [intel],
       timeLimit,
       orbitCentre: centroid(centres),
@@ -560,6 +751,11 @@ export interface WaveDirection {
 }
 
 export function likelyWaveDirections(m: Mission, map: MapData, g: RoadGraph): WaveDirection[] {
+  // A crowd night's streams are known exactly: they are the intel (hard rule 9).
+  if (m.crowd && m.safehouse) {
+    const to = m.safehouse.centre;
+    return m.crowd.streams.map((s) => ({ from: { ...s.at }, to, compass: s.compass, share: 1 / m.crowd!.streams.length }));
+  }
   if (!m.waves || m.type !== 'defend' || !m.safehouse) return [];
   const ref = m.safehouse.centre;
   const lim = map.half * 0.95;
@@ -593,25 +789,49 @@ export function likelyWaveDirections(m: Mission, map: MapData, g: RoadGraph): Wa
 /** Sheltering friendlies sit at least this far from every horde's gathering point (hordes mill within ~30 m). */
 export const SHELTER_GAP = 70;
 
+/** The two sheltering friendlies stand up to this far from their spot (Sim spreads them out a little). */
+const SHELTER_SPREAD = 4;
+
 /**
  * Where the two sheltering friendlies wait in a Clear mission: near their named horde (that's the story),
  * but at least SHELTER_GAP from every horde, so a player who hasn't found them yet can't lose in seconds.
+ * Guardrail (PLAN §9): the nearest horde drifts toward them (Sim), so their spot, and the drifting horde's
+ * whole way there, keep the same HORDE_CHILD_GAP from schools, kindergartens and playgrounds as a horde does.
+ * Null when there is no such spot.
  */
-function shelterSpotFor(grid: WalkGrid, map: MapData, hordes: Horde[], near: Horde, rng: Rng): V2 {
+function shelterSpotFor(grid: WalkGrid, map: MapData, hordes: Horde[], near: Horde, rng: Rng): V2 | null {
   const a0 = rng() * Math.PI * 2;
-  const ok = (p: V2) =>
-    !grid.isBlocked(p.x, p.z) && hordes.every((h) => dist(h.centre, p) >= SHELTER_GAP) && !nearChildPlace(map, p) && Math.abs(p.x) < map.half * 0.9 && Math.abs(p.z) < map.half * 0.9;
+  const childSafe = (p: V2) => {
+    if (grid.isBlocked(p.x, p.z) || Math.abs(p.x) >= map.half * 0.9 || Math.abs(p.z) >= map.half * 0.9) return false;
+    if (nearChildPlace(map, p, HORDE_CHILD_GAP + SHELTER_SPREAD)) return false;
+    // The horde that will drift here: the nearest one (first on a tie), as Sim picks it.
+    const drifter = hordes.reduce((a, h) => (dist(h.centre, p) < dist(a.centre, p) ? h : a), hordes[0]);
+    return !segmentNearChildPlace(map, drifter.centre, p, HORDE_CHILD_GAP);
+  };
+  const ok = (p: V2) => hordes.every((h) => dist(h.centre, p) >= SHELTER_GAP) && childSafe(p);
+  const ring = (r: number, k: number) => {
+    const a = a0 + (k / 16) * Math.PI * 2;
+    return grid.nearestFree({ x: near.centre.x + Math.cos(a) * r, z: near.centre.z + Math.sin(a) * r }, 9);
+  };
   for (let r = SHELTER_GAP + 5; r <= 200; r += 15) {
     for (let k = 0; k < 16; k++) {
-      const a = a0 + (k / 16) * Math.PI * 2;
-      const p = grid.nearestFree({ x: near.centre.x + Math.cos(a) * r, z: near.centre.z + Math.sin(a) * r }, 9);
+      const p = ring(r, k);
       if (ok(p)) return p;
     }
   }
-  // Fallback: the farthest free spot from all hordes along the search ring.
-  return grid.nearestFree({ x: near.centre.x + Math.cos(a0) * 120, z: near.centre.z + Math.sin(a0) * 120 });
+  // Fallback: a spot 120 m out, or failing that any child-safe spot on the search rings.
+  const far = grid.nearestFree({ x: near.centre.x + Math.cos(a0) * 120, z: near.centre.z + Math.sin(a0) * 120 });
+  if (childSafe(far)) return far;
+  for (let r = SHELTER_GAP + 5; r <= 200; r += 15) {
+    for (let k = 0; k < 16; k++) {
+      const p = ring(r, k);
+      if (childSafe(p)) return p;
+    }
+  }
+  return null;
 }
 
+const noShelterReason = 'Could not find a safe spot for the sheltering friendlies on this map. Try another mission.';
 const unique = <T>(a: T[]) => [...new Set(a)];
 const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 function listJoin(a: string[]): string {

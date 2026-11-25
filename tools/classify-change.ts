@@ -6,7 +6,8 @@
  *   B = crew merges, highlighted in the digest; you can veto and it gets reverted
  *   C = crew opens a draft PR and escalates; waits for you
  *
- * CLI:  node tools/classify-change.ts [base-ref]   (default origin/main)
+ * CLI:  npm run -s classify -- [--base <ref> | --base=<ref> | <ref>]
+ *       base defaults to origin/main. Head is always HEAD (what would be merged).
  */
 
 export type ChangeClass = 'A' | 'B' | 'C';
@@ -88,35 +89,72 @@ export function classify(f: ChangeFacts): { cls: ChangeClass; reasons: string[] 
 }
 
 // ---------- CLI: gather facts from git ----------
+export interface CliArgs { base: string }
+
+/** Pure parser for the CLI arguments (argv without node and script). Throws Error with a clear message. */
+export function parseArgs(argv: string[]): CliArgs {
+  let base: string | undefined;
+  const positional: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    const m = /^--(base|head)(?:=(.*))?$/.exec(a);
+    if (m && m[1] === 'head') throw new Error('--head is not supported: head is always HEAD, so the class describes what would be merged');
+    if (m) {
+      let val = m[2];
+      if (val === undefined) {
+        val = argv[++i];
+        if (val === undefined || val.startsWith('-')) throw new Error(`--${m[1]} needs a ref, e.g. --${m[1]} origin/main`);
+      }
+      if (val === '') throw new Error(`--${m[1]} needs a non-empty ref`);
+      base = val;
+    } else if (a.startsWith('-')) {
+      throw new Error(`unknown option ${a}. Usage: classify [--base <ref> | <ref>]`);
+    } else positional.push(a);
+  }
+  if (positional.length > 1) throw new Error(`too many arguments: ${positional.join(' ')}`);
+  if (positional.length === 1) {
+    if (base !== undefined) throw new Error('give the base ref once: either --base <ref> or a bare ref, not both');
+    base = positional[0];
+  }
+  return { base: base ?? 'origin/main' };
+}
+
 async function main() {
-  const { execSync } = await import('node:child_process');
-  const sh = (c: string) => execSync(c, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  const base = process.argv[2] ?? 'origin/main';
-  const mergeBase = sh(`git merge-base ${base} HEAD`).trim();
-  const files = sh(`git diff --name-status ${mergeBase} HEAD`).trim().split('\n').filter(Boolean)
+  const { execFileSync } = await import('node:child_process');
+  const git = (...args: string[]) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  let args: CliArgs;
+  try { args = parseArgs(process.argv.slice(2)); } catch (e) { console.error(`classify: ${(e as Error).message}`); process.exit(2); }
+  const resolve = (label: string, ref: string) => {
+    try { return git('rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`).trim(); }
+    catch { console.error(`classify: ${label} ref '${ref}' does not exist (try 'git fetch origin')`); process.exit(2); }
+  };
+  const baseSha = resolve('base', args.base);
+  const headSha = resolve('head', 'HEAD');
+  const mergeBase = git('merge-base', baseSha, headSha).trim();
+  const files = git('diff', '--name-status', mergeBase, headSha).trim().split('\n').filter(Boolean)
     .map((l) => { const [status, ...rest] = l.split('\t'); return { status, path: rest[rest.length - 1] }; });
   const deps = (ref: string) => {
     try {
-      const p = JSON.parse(sh(`git show ${ref}:package.json`));
+      const p = JSON.parse(git('show', `${ref}:package.json`));
       return { ...p.dependencies, ...p.devDependencies } as Record<string, string>;
     } catch { return {}; }
   };
   const countTests = (ref: string) => {
-    const list = sh(`git ls-tree -r --name-only ${ref} -- tests`).trim().split('\n').filter((p) => /\.test\.ts$/.test(p));
-    return list.reduce((n, p) => n + (sh(`git show ${ref}:${p}`).match(/\b(it|test)\s*\(/g)?.length ?? 0), 0);
+    const list = git('ls-tree', '-r', '--name-only', ref, '--', 'tests').trim().split('\n').filter((p) => /\.test\.ts$/.test(p));
+    return list.reduce((n, p) => n + (git('show', `${ref}:${p}`).match(/\b(it|test)\s*\(/g)?.length ?? 0), 0);
   };
   const addedLines: { path: string; text: string }[] = [];
   let current = '';
-  for (const l of sh(`git diff -U0 ${mergeBase} HEAD`).split('\n')) {
+  for (const l of git('diff', '-U0', mergeBase, headSha).split('\n')) {
     if (l.startsWith('+++ ')) current = l.replace(/^\+\+\+ (b\/)?/, '');
     else if (l.startsWith('+')) addedLines.push({ path: current, text: l.slice(1) });
   }
-  const branch = sh('git rev-parse --abbrev-ref HEAD').trim();
+  const branch = git('rev-parse', '--abbrev-ref', 'HEAD').trim();
   const result = classify({
-    branch, files, depsBase: deps(mergeBase), depsHead: deps('HEAD'),
-    testCountBase: countTests(mergeBase), testCountHead: countTests('HEAD'), addedLines,
+    branch, files, depsBase: deps(mergeBase), depsHead: deps(headSha),
+    testCountBase: countTests(mergeBase), testCountHead: countTests(headSha), addedLines,
   });
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify({ ...result, base: args.base, baseSha, mergeBase, headSha }, null, 2));
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/').split('/').pop()!)) {
